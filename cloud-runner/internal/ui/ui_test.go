@@ -11,6 +11,7 @@ import (
 
 func TestLocalUIKeepsBearerTokenServerSide(t *testing.T) {
 	const token = "management-token-never-in-browser"
+	upstreamHost := ""
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+token {
 			t.Fatalf("missing proxy authorization: %q", r.Header.Get("Authorization"))
@@ -18,10 +19,14 @@ func TestLocalUIKeepsBearerTokenServerSide(t *testing.T) {
 		if r.URL.Path != "/v1/runs" {
 			t.Fatalf("unexpected proxy path: %s", r.URL.Path)
 		}
+		if r.Host != upstreamHost {
+			t.Fatalf("unexpected proxy host: %s", r.Host)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"runs":[]}`))
 	}))
 	defer upstream.Close()
+	upstreamHost = strings.TrimPrefix(upstream.URL, "http://")
 	server, err := New("127.0.0.1:0", upstream.URL, token, slog.Default())
 	if err != nil {
 		t.Fatal(err)

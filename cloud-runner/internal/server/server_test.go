@@ -140,4 +140,8 @@ func TestEventStreamFlushesHeadersImmediately(t *testing.T) {
 	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("unexpected stream response: %d %q", response.StatusCode, response.Header.Get("Content-Type"))
 	}
+	initial := make([]byte, len(": connected\n\n"))
+	if _, err := io.ReadFull(response.Body, initial); err != nil || string(initial) != ": connected\n\n" {
+		t.Fatalf("event stream did not send initial connection frame: %q %v", initial, err)
+	}
 }

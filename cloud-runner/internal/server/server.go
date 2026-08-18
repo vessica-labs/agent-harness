@@ -427,6 +427,7 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
+	fmt.Fprint(w, ": connected\n\n")
 	flusher.Flush()
 	updates, unsubscribe := s.broker.Subscribe()
 	defer unsubscribe()

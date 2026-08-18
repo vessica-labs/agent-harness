@@ -44,6 +44,7 @@ func New(address, cloudURL, token string, logger *slog.Logger) (*Server, error) 
 		if incomingPath == "/events" {
 			request.URL.Path = "/v1/events"
 		}
+		request.Host = target.Host
 		request.Header.Set("Authorization", "Bearer "+token)
 		request.Header.Del("Cookie")
 	}
