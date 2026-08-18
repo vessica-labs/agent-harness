@@ -46,6 +46,10 @@ class YamlAndPipelineTests(unittest.TestCase):
         self.assertEqual(3, coder["parallelism"])
         self.assertEqual("ticket_parallel", coder["mode"])
         self.assertEqual("inputs/tickets/{ticket_key}.json", coder["inputs"][0]["file"])
+        self.assertEqual(
+            [{"from": "qa", "to": "coder", "through": "qa", "max_reentries": 2}],
+            pipeline["repair_loops"],
+        )
 
     def test_exact_stage_selection_requires_unselected_prerequisites(self) -> None:
         pipeline = self.harnessctl.load_simple_yaml(PLUGIN / "pipelines" / "default.yaml")
@@ -72,6 +76,38 @@ class YamlAndPipelineTests(unittest.TestCase):
         self.harnessctl.pipeline_stage(pipeline, "qa")["needs"] = ["coder"]
         self.assertEqual([], self.harnessctl.validate_pipeline(pipeline))
         self.assertEqual(["product", "arch", "coder", "qa", "pr"], self.harnessctl.stage_order(pipeline))
+
+    def test_repair_loop_must_reenter_an_earlier_stage(self) -> None:
+        pipeline = self.harnessctl.load_simple_yaml(PLUGIN / "pipelines" / "default.yaml")
+        pipeline["repair_loops"][0]["to"] = "pr"
+        errors = self.harnessctl.validate_pipeline(pipeline)
+        self.assertTrue(any("must re-enter an earlier stage" in error for error in errors))
+
+    def test_custom_stage_and_agent_use_base_result_contract(self) -> None:
+        pipeline = self.harnessctl.load_simple_yaml(PLUGIN / "pipelines" / "default.yaml")
+        pipeline["stages"].insert(
+            -1,
+            {
+                "id": "security-review",
+                "agent": ".agents/security-review.md",
+                "needs": ["qa"],
+                "mode": "single",
+                "parallelism": 1,
+                "inputs": [],
+                "outputs": [],
+                "result": {"file": "agent-output/security-review.json", "format": "json", "agent": "security-review"},
+                "hooks": {"before": [], "after": [], "on_failure": []},
+            },
+        )
+        self.harnessctl.pipeline_stage(pipeline, "pr")["needs"] = ["security-review"]
+        self.assertEqual([], self.harnessctl.validate_pipeline(pipeline))
+        self.assertEqual(
+            [],
+            self.harnessctl.validate_generic_agent_output(
+                "security-review",
+                {"agent": "security-review", "status": "completed", "worktree_clean": True, "blocker": None, "residual_risks": []},
+            ),
+        )
 
 
 class AgentOutputTests(unittest.TestCase):
@@ -310,6 +346,7 @@ class BootstrapAndStateTests(unittest.TestCase):
                 (target / ".harness" / "pipeline.yaml").read_bytes(),
             )
             self.assertNotIn("coder_concurrency", (target / ".harness" / "config.yaml").read_text())
+            self.assertIn("label: \"agent-harness\"", (target / ".harness" / "config.yaml").read_text())
             run_json(str(HARNESSCTL), "validate-config", str(target / ".harness" / "config.yaml"))
             run_json(str(HARNESSCTL), "validate-pipeline", str(target / ".harness" / "pipeline.yaml"), "--repo", str(target))
 

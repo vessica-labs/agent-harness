@@ -1,0 +1,169 @@
+package model
+
+import (
+	"encoding/json"
+	"time"
+)
+
+const EventProtocol = "agent-harness.events/v1"
+
+type Repository struct {
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	GitHubOwner        string    `json:"github_owner"`
+	GitHubRepo         string    `json:"github_repo"`
+	GitHubInstallation int64     `json:"github_installation_id,omitempty"`
+	BaseBranch         string    `json:"base_branch"`
+	LinearWorkspaceID  string    `json:"linear_workspace_id"`
+	LinearTeamID       string    `json:"linear_team_id"`
+	LinearProjectID    string    `json:"linear_project_id,omitempty"`
+	TriggerLabel       string    `json:"trigger_label"`
+	NotionParentID     string    `json:"notion_parent_page_id,omitempty"`
+	Enabled            bool      `json:"enabled"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+type Run struct {
+	ID               string          `json:"id"`
+	RepositoryID     string          `json:"repository_id"`
+	Provider         string          `json:"provider"`
+	SourceIssueID    string          `json:"source_issue_id"`
+	SourceIssueKey   string          `json:"source_issue_key"`
+	SourceIssueURL   string          `json:"source_issue_url,omitempty"`
+	SourceIssueTitle string          `json:"source_issue_title"`
+	FeatureRequest   string          `json:"feature_request,omitempty"`
+	State            string          `json:"state"`
+	CurrentStage     string          `json:"current_stage,omitempty"`
+	QueueReason      string          `json:"queue_reason,omitempty"`
+	Attempt          int             `json:"attempt"`
+	SandboxID        string          `json:"sandbox_id,omitempty"`
+	SandboxSession   string          `json:"sandbox_session,omitempty"`
+	AuthSlotID       string          `json:"auth_slot_id,omitempty"`
+	LeaseOwner       string          `json:"lease_owner,omitempty"`
+	LeaseExpiresAt   *time.Time      `json:"lease_expires_at,omitempty"`
+	HeartbeatAt      *time.Time      `json:"heartbeat_at,omitempty"`
+	Branch           string          `json:"branch,omitempty"`
+	PullRequestURL   string          `json:"pull_request_url,omitempty"`
+	Error            string          `json:"error,omitempty"`
+	Metadata         json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt        time.Time       `json:"created_at"`
+	UpdatedAt        time.Time       `json:"updated_at"`
+	CompletedAt      *time.Time      `json:"completed_at,omitempty"`
+}
+
+type Event struct {
+	Protocol      string          `json:"protocol"`
+	ID            int64           `json:"id"`
+	GlobalSeq     int64           `json:"global_seq"`
+	RunSeq        int64           `json:"run_seq"`
+	RunID         string          `json:"run_id"`
+	SourceIssueID string          `json:"source_issue_id,omitempty"`
+	SandboxID     string          `json:"sandbox_id,omitempty"`
+	Stage         string          `json:"stage,omitempty"`
+	Type          string          `json:"type"`
+	Level         string          `json:"level"`
+	Message       string          `json:"message"`
+	Payload       json.RawMessage `json:"payload,omitempty"`
+	CreatedAt     time.Time       `json:"created_at"`
+}
+
+type Artifact struct {
+	RunID     string    `json:"run_id"`
+	Path      string    `json:"path"`
+	MediaType string    `json:"media_type"`
+	SHA256    string    `json:"sha256"`
+	Size      int64     `json:"size"`
+	Content   []byte    `json:"-"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type StageState struct {
+	RunID       string          `json:"run_id"`
+	Stage       string          `json:"stage"`
+	State       string          `json:"state"`
+	Attempt     int             `json:"attempt"`
+	Details     json.RawMessage `json:"details,omitempty"`
+	StartedAt   *time.Time      `json:"started_at,omitempty"`
+	CompletedAt *time.Time      `json:"completed_at,omitempty"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+}
+
+type TicketState struct {
+	RunID            string          `json:"run_id"`
+	LogicalKey       string          `json:"logical_key"`
+	ProviderIssueID  string          `json:"provider_issue_id,omitempty"`
+	ProviderIssueKey string          `json:"provider_issue_key,omitempty"`
+	State            string          `json:"state"`
+	Owner            string          `json:"owner,omitempty"`
+	CommitSHA        string          `json:"commit_sha,omitempty"`
+	Dependencies     []string        `json:"dependencies"`
+	Metadata         json.RawMessage `json:"metadata,omitempty"`
+	UpdatedAt        time.Time       `json:"updated_at"`
+}
+
+type LinearDelivery struct {
+	DeliveryID     string
+	EventType      string
+	Action         string
+	IssueID        string
+	IssueKey       string
+	IssueURL       string
+	IssueTitle     string
+	FeatureRequest string
+	WorkspaceID    string
+	TeamID         string
+	ProjectID      string
+	PayloadSHA256  string
+	RawPayload     []byte
+	ReceivedAt     time.Time
+}
+
+type DeliveryResult struct {
+	Run       *Run   `json:"run,omitempty"`
+	Duplicate bool   `json:"duplicate"`
+	Ignored   bool   `json:"ignored"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+type RunFilter struct {
+	State        string
+	RepositoryID string
+	After        time.Time
+	Limit        int
+}
+
+type EventFilter struct {
+	After int64
+	RunID string
+	Limit int
+}
+
+type Credential struct {
+	Name       string
+	Ciphertext []byte
+	UpdatedAt  time.Time
+}
+
+type AuthSlot struct {
+	ID             string     `json:"id"`
+	State          string     `json:"state"`
+	Ciphertext     []byte     `json:"-"`
+	LeaseRunID     string     `json:"lease_run_id,omitempty"`
+	LeaseExpiresAt *time.Time `json:"lease_expires_at,omitempty"`
+	LastError      string     `json:"last_error,omitempty"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+type ExternalSync struct {
+	RunID       string    `json:"run_id"`
+	LogicalKey  string    `json:"logical_key"`
+	Provider    string    `json:"provider"`
+	State       string    `json:"state"`
+	Marker      string    `json:"marker"`
+	ExternalID  string    `json:"external_id,omitempty"`
+	ExternalURL string    `json:"external_url,omitempty"`
+	Error       string    `json:"error,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}

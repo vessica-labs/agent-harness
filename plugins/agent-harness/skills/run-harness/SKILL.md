@@ -1,6 +1,6 @@
 ---
 name: run-harness
-description: Execute or resume the editable Agent Harness workflow YAML from a user request or Jira/Linear issue. Use for full pipelines, exact named agent stages, product/architecture-only work, individual stages, YAML-defined parallelism, or explicit new runs.
+description: Execute, resume, or monitor the editable Agent Harness workflow locally or through the Railway cloud runner. Use for full pipelines, exact named stages, cloud Linear-ticket execution, streamed progress, YAML-defined parallelism, or recovery.
 ---
 
 # Run Harness
@@ -37,3 +37,10 @@ Read `references/orchestration.md`, `references/provider-contracts.md`, and `ref
 ## Authorization
 
 A direct full-pipeline request authorizes issue/Notion writes, scoped commits, integration, push, and PR creation. A partial-stage request authorizes only effects intrinsic to those stages. Never merge a pull request. Stop for ambiguous product intent, architectural ambiguity, secrets, destructive migrations, unavailable required connections, or a fresh conflicting lease.
+
+## Cloud runs
+
+- Treat the opt-in Linear label as the cloud trigger. For “run this ticket in the cloud,” confirm the repository is registered, add the configured label through Linear, and read the resulting canonical run comment. Repeated label updates resume the same source claim rather than creating another run.
+- Use `agent-harness cloud runs list|show|watch` for status and the ordered event stream. A watch is read-only and may remain attached until the run completes, pauses, or the user stops it.
+- Use `agent-harness cloud runs resume <run-id>` only after inspecting the pause reason. Use `cancel` only on explicit user direction.
+- Cloud execution still reads the checked-in `.harness/pipeline.yaml`; do not substitute a plugin-owned DAG.

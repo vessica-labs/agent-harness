@@ -175,4 +175,8 @@ stages:
       before: []
       after: []
       on_failure: []
-repair_loops: []
+repair_loops:
+  - from: qa
+    to: coder
+    through: qa
+    max_reentries: 2

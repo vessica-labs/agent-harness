@@ -1,0 +1,91 @@
+openapi: 3.1.0
+info:
+  title: Agent Harness Control Plane
+  version: 1.0.0
+paths:
+  /healthz:
+    get:
+      responses:
+        "200": {description: Process is alive}
+  /readyz:
+    get:
+      responses:
+        "200": {description: Postgres is reachable}
+        "503": {description: Service is not ready}
+  /webhooks/linear:
+    post:
+      description: Signed Linear webhook endpoint
+      responses:
+        "200": {description: Delivery accepted, deduplicated, or intentionally ignored}
+        "401": {description: Invalid signature or timestamp}
+  /v1/status:
+    get:
+      security: [{bearerAuth: []}]
+      responses:
+        "200": {description: Control-plane status}
+  /v1/repositories:
+    get:
+      security: [{bearerAuth: []}]
+      responses:
+        "200": {description: Registered repositories}
+    post:
+      security: [{bearerAuth: []}]
+      responses:
+        "200": {description: Repository registered or updated}
+  /v1/repositories/{repository_id}:
+    delete:
+      security: [{bearerAuth: []}]
+      parameters: [{name: repository_id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "200": {description: Repository automation disabled}
+  /v1/runs:
+    get:
+      security: [{bearerAuth: []}]
+      responses:
+        "200": {description: Filtered runs}
+  /v1/runs/{run_id}:
+    get:
+      security: [{bearerAuth: []}]
+      parameters: [{name: run_id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "200": {description: Run, stage DAG, logical tickets, and artifact metadata}
+  /v1/runs/{run_id}/artifacts:
+    get:
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: run_id, in: path, required: true, schema: {type: string}}
+        - {name: path, in: query, required: false, schema: {type: string}}
+      responses:
+        "200": {description: Artifact list or selected artifact body}
+  /v1/runs/{run_id}/resume:
+    post:
+      security: [{bearerAuth: []}]
+      parameters: [{name: run_id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "202": {description: Run queued for recovery}
+  /v1/runs/{run_id}/cancel:
+    post:
+      security: [{bearerAuth: []}]
+      parameters: [{name: run_id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "202": {description: Run cancelled}
+  /v1/events:
+    get:
+      security: [{bearerAuth: []}]
+      description: Replayable Server-Sent Events stream using `after` or `Last-Event-ID`
+      responses:
+        "200": {description: Event stream, content: {text/event-stream: {schema: {type: string}}}}
+  /v1/auth-slots:
+    get:
+      security: [{bearerAuth: []}]
+      responses:
+        "200": {description: Redacted Codex authentication slot states}
+    post:
+      security: [{bearerAuth: []}]
+      responses:
+        "201": {description: Encrypted Codex authentication slot stored}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer

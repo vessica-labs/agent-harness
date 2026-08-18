@@ -1,6 +1,6 @@
 ---
 name: inspect-harness
-description: Inspect Agent Harness runs and associated Jira or Linear child tickets without changing them. Use for status, ticket listing, artifact or PR lookup, failure diagnosis, lease inspection, reconciliation previews, or recovery guidance.
+description: Inspect local or Railway-hosted Agent Harness runs and associated Jira or Linear child tickets without changing them. Use for status, cloud event streaming, ticket listing, artifact or PR lookup, failure diagnosis, lease inspection, reconciliation previews, or recovery guidance.
 ---
 
 # Inspect Harness
@@ -17,3 +17,7 @@ Default to read-only inspection. Read `references/inspection-contract.md` before
 6. For “list associated tickets,” group by run and show logical key, provider key, dependencies, status, owner, commit, and URL.
 7. For failures, name the visible symptom, failed stage/hook/tool, last successful checkpoint, underlying cause supported by evidence, and safest resumption point.
 8. Do not reclaim leases, update comments, retry writes, edit files, or resume execution unless the user explicitly asks for recovery or execution; then hand off to `run-harness`.
+
+## Cloud inspection
+
+When a run is hosted, use `agent-harness cloud runs show <run-id>` and `agent-harness cloud runs watch --run <run-id>` before provider projections. Use `cloud runs export <run-id> --repo <path>` only when the user asks to materialize the journal locally and the target run directory does not exist. Report event sequence, sandbox/session, queue reason, current stage, last heartbeat, and required sync failures.

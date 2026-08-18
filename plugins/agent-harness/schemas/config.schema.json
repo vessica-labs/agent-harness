@@ -38,6 +38,24 @@
         "remote": {"type": "string", "minLength": 1},
         "base_branch": {"type": "string", "minLength": 1}
       }
+    },
+    "automation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "trigger"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "trigger": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "type", "label"],
+          "properties": {
+            "provider": {"const": "linear"},
+            "type": {"const": "label"},
+            "label": {"type": "string", "minLength": 1}
+          }
+        }
+      }
     }
   }
 }

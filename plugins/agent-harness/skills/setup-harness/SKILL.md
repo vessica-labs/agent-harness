@@ -1,6 +1,6 @@
 ---
 name: setup-harness
-description: Initialize or reconfigure Agent Harness in a Git repository. Use when a user asks to set up, bootstrap, install, configure, reconnect, or change the editable agent workflow YAML for a repository harness with Jira or Linear, Notion, and GitHub.
+description: Initialize or reconfigure Agent Harness in a Git repository or attach it to the Railway cloud runner. Use when a user asks to set up, bootstrap, install, configure, reconnect, enable automatic Linear-ticket execution, register a cloud repository, or change the editable agent workflow YAML.
 ---
 
 # Set Up Harness
@@ -24,6 +24,18 @@ Initialize the repository through an inspect, interview, preview, apply, and ver
 8. Obtain explicit approval for the preview. Then run bootstrap with `--apply`; use `--force` only for individually approved conflicts. Apply the approved document contents without changing `.agents/*.md` role contracts.
 9. Validate `.harness/config.yaml`, `.harness/pipeline.yaml`, agent references, Git remote/base, and `gh auth status` using the commands in the setup contract.
 10. Report configured provider identifiers, files created/preserved, connection results, and any capability that still needs a first-run write check.
+
+## Cloud attachment
+
+When the user asks to enable Railway execution, first complete the local setup and confirm `automation.trigger` is the intended Linear label. Then:
+
+1. Require the `agent-harness` Go CLI and an existing local cloud profile; never copy Codex app credentials into Railway.
+2. Run `agent-harness cloud auth status` and report missing Codex slots, GitHub App, Linear, or Notion service credentials.
+   - For a new GitHub App, use `agent-harness cloud auth github --manifest-owner <organization>` and install it only on selected repositories.
+   - For a new Linear app, use `agent-harness cloud auth linear manifest --url <control-plane>` followed by the app-actor OAuth command. Never copy returned tokens through the chat.
+3. Preview the repository registration command, including GitHub installation, Linear workspace/team/project, trigger label, Notion parent, and base branch.
+4. After approval, run `agent-harness cloud repo add` with those exact identifiers.
+5. Verify with `agent-harness cloud repo list`. Do not add the trigger label to a real issue during setup.
 
 ## Workflow Changes
 

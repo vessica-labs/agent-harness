@@ -43,6 +43,16 @@ class PluginPackageTests(unittest.TestCase):
         for schema in schemas:
             self.assertIsInstance(json.loads(schema.read_text()), dict)
 
+    def test_cloud_runner_packages_the_canonical_deterministic_helper(self) -> None:
+        runner = REPO / "cloud-runner"
+        self.assertTrue((runner / "go.mod").is_file())
+        self.assertTrue((runner / "Dockerfile").is_file())
+        self.assertTrue((runner / "railway.json").is_file())
+        self.assertEqual(
+            (PLUGIN / "scripts" / "harnessctl.py").read_bytes(),
+            (runner / "scripts" / "harnessctl.py").read_bytes(),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

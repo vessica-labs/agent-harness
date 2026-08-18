@@ -22,6 +22,14 @@ def quoted(value: str) -> str:
 
 def render_config(args: argparse.Namespace) -> bytes:
     child = "null" if args.provider == "linear" else quoted(args.child_issue_type)
+    automation = (
+        "automation:\n"
+        "  enabled: true\n"
+        "  trigger:\n"
+        "    provider: linear\n"
+        "    type: label\n"
+        f"    label: {quoted(args.trigger_label)}\n"
+    ) if args.provider == "linear" else ""
     return (
         "version: 1\n"
         "tracker:\n"
@@ -34,6 +42,7 @@ def render_config(args: argparse.Namespace) -> bytes:
         "git:\n"
         f"  remote: {quoted(args.remote)}\n"
         f"  base_branch: {quoted(args.base_branch)}\n"
+        + automation
     ).encode()
 
 
@@ -143,6 +152,7 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--notion-parent-page-id", required=True)
     install.add_argument("--remote", default="origin")
     install.add_argument("--base-branch", default="main")
+    install.add_argument("--trigger-label", default="agent-harness")
     install.add_argument("--apply", action="store_true")
     install.add_argument("--force", action="store_true")
     return parser
