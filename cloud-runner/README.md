@@ -68,6 +68,7 @@ agent-harness cloud repo add --name example --github-owner owner --github-repo r
   --trigger-label agent-harness --notion-parent page --base-branch main
 agent-harness cloud runs list
 agent-harness cloud runs watch --run <run-id>
+agent-harness cloud runs input <run-id> --file clarified-request.md
 agent-harness cloud runs export <run-id> --repo /path/to/repo
 agent-harness ui
 ```

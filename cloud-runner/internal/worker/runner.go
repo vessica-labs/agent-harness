@@ -249,8 +249,11 @@ func (r *Runner) restoreOrInitialize(ctx context.Context, pipelinePath string) e
 		return fmt.Errorf("decode harness init result: %w", err)
 	}
 	r.localLease = initialized.SessionToken
-	featurePath := filepath.Join(r.runDir, "inputs", "feature-request.md")
-	if _, err := os.Stat(featurePath); errors.Is(err, os.ErrNotExist) {
+	productComplete, err := r.stageCompleted("product")
+	if err != nil {
+		return err
+	}
+	if !productComplete {
 		temporary := filepath.Join(r.config.Workspace, "feature-request.md")
 		if err := os.WriteFile(temporary, []byte(r.config.FeatureRequest), 0o600); err != nil {
 			return err

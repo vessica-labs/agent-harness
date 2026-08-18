@@ -37,6 +37,7 @@ type Store interface {
 	SetAuthSlot(context.Context, string, string) error
 	SetDelivery(context.Context, string, string, string) error
 	Heartbeat(context.Context, string, string, time.Duration) error
+	UpdateRunInput(context.Context, string, string) error
 	ResumeRun(context.Context, string) error
 	CancelRun(context.Context, string) error
 	PutStage(context.Context, model.StageState) error

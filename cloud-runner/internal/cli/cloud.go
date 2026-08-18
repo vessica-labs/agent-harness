@@ -110,7 +110,7 @@ func cloudRepo(ctx context.Context, args []string) error {
 
 func cloudRuns(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("runs requires list, show, watch, resume, cancel, or export")
+		return errors.New("runs requires list, show, watch, input, resume, cancel, or export")
 	}
 	client, err := newAPI("")
 	if err != nil {
@@ -139,6 +139,40 @@ func cloudRuns(ctx context.Context, args []string) error {
 			return err
 		}
 		return client.watch(ctx, *runID, *after, os.Stdout)
+	case "input":
+		if len(args) < 2 {
+			return errors.New("runs input requires a run id and --file")
+		}
+		flags := flag.NewFlagSet("cloud runs input", flag.ContinueOnError)
+		file := flags.String("file", "", "clarified feature request file, or - for stdin")
+		if err := flags.Parse(args[2:]); err != nil {
+			return err
+		}
+		if *file == "" {
+			return errors.New("runs input requires --file")
+		}
+		var body []byte
+		var err error
+		if *file == "-" {
+			body, err = io.ReadAll(io.LimitReader(os.Stdin, 64<<10))
+		} else {
+			body, err = os.ReadFile(*file)
+		}
+		if err != nil {
+			return err
+		}
+		featureRequest := strings.TrimSpace(string(body))
+		if featureRequest == "" {
+			return errors.New("run input file is empty")
+		}
+		if len(featureRequest) >= 64<<10 {
+			return errors.New("run input exceeds 64 KiB")
+		}
+		var result any
+		if err := client.do(ctx, http.MethodPost, "/v1/runs/"+args[1]+"/input", map[string]string{"feature_request": featureRequest}, &result); err != nil {
+			return err
+		}
+		return printJSON(result)
 	case "resume", "cancel":
 		if len(args) != 2 {
 			return fmt.Errorf("runs %s requires a run id", args[0])

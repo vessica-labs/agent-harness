@@ -364,6 +364,29 @@ func (s *Server) runRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"artifacts": values})
+	case "input":
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+			return
+		}
+		var input struct {
+			FeatureRequest string `json:"feature_request"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&input); err != nil {
+			writeError(w, http.StatusBadRequest, errors.New("invalid run input"))
+			return
+		}
+		input.FeatureRequest = strings.TrimSpace(input.FeatureRequest)
+		if input.FeatureRequest == "" {
+			writeError(w, http.StatusBadRequest, errors.New("feature_request is required"))
+			return
+		}
+		if err := s.store.UpdateRunInput(r.Context(), runID, input.FeatureRequest); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		s.appendEvent(r.Context(), model.Event{RunID: runID, Type: "run.input_updated", Level: "info", Message: "Operator feedback updated the run input"})
+		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
 	case "resume":
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))

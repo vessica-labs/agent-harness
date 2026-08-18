@@ -457,6 +457,25 @@ updated_at=now() WHERE id=$1 AND lease_owner=$2 AND state='running'`, id, owner,
 	return err
 }
 
+func (p *Postgres) UpdateRunInput(ctx context.Context, id, featureRequest string) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE runs SET feature_request=$2, error='', updated_at=now()
+WHERE id=$1 AND state='paused'`, id, featureRequest)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 0 {
+		return nil
+	}
+	var exists bool
+	if err := p.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runs WHERE id=$1)`, id).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return ErrNotFound
+	}
+	return ErrConflict
+}
+
 func (p *Postgres) ResumeRun(ctx context.Context, id string) error {
 	tag, err := p.pool.Exec(ctx, `UPDATE runs SET state='queued', queue_reason='', error='',
 lease_owner='', lease_expires_at=NULL, updated_at=now() WHERE id=$1 AND state='paused'`, id)

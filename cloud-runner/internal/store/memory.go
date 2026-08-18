@@ -352,6 +352,21 @@ func (m *Memory) Heartbeat(_ context.Context, id, owner string, lease time.Durat
 	return nil
 }
 
+func (m *Memory) UpdateRunInput(_ context.Context, id, featureRequest string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	value, ok := m.runs[id]
+	if !ok {
+		return ErrNotFound
+	}
+	if value.State != "paused" {
+		return ErrConflict
+	}
+	value.FeatureRequest, value.Error, value.UpdatedAt = featureRequest, "", time.Now().UTC()
+	m.runs[id] = value
+	return nil
+}
+
 func (m *Memory) ResumeRun(_ context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

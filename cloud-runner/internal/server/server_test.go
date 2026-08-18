@@ -121,6 +121,46 @@ func TestEmptyRunListEncodesAsArray(t *testing.T) {
 	}
 }
 
+func TestPausedRunInputCanBeClarifiedBeforeResume(t *testing.T) {
+	ctx := context.Background()
+	memory := store.NewMemory()
+	repository, err := memory.PutRepository(ctx, model.Repository{Name: "repo", GitHubOwner: "v", GitHubRepo: "r", LinearWorkspaceID: "org", LinearTeamID: "team", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := memory.AcceptLinearDelivery(ctx, repository, model.LinearDelivery{
+		DeliveryID: "clarify-delivery", IssueID: "clarify-issue", IssueKey: "ENG-10",
+		IssueTitle: "Original", FeatureRequest: "original request", ReceivedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.SetRunState(ctx, claimed.Run.ID, "paused", "product", "needs scope"); err != nil {
+		t.Fatal(err)
+	}
+	key, _ := secure.GenerateKey()
+	box, _ := secure.NewBox(key)
+	server := New(Config{ManagementToken: "management-secret", MaxRequestBytes: 1 << 20, MaxJournalBytes: 1 << 20},
+		memory, box, events.NewBroker(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	body := bytes.NewBufferString(`{"feature_request":"public message board MVP"}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/runs/"+claimed.Run.ID+"/input", body)
+	request.Header.Set("Authorization", "Bearer management-secret")
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("input update status %d: %s", response.Code, response.Body.String())
+	}
+	updated, err := memory.GetRun(ctx, claimed.Run.ID)
+	if err != nil || updated.FeatureRequest != "public message board MVP" || updated.State != "paused" {
+		t.Fatalf("unexpected updated run: %+v %v", updated, err)
+	}
+	eventValues, err := memory.ListEvents(ctx, model.EventFilter{RunID: claimed.Run.ID})
+	if err != nil || len(eventValues) == 0 || eventValues[len(eventValues)-1].Type != "run.input_updated" {
+		t.Fatalf("missing input event: %+v %v", eventValues, err)
+	}
+}
+
 func TestEventStreamFlushesHeadersImmediately(t *testing.T) {
 	key, _ := secure.GenerateKey()
 	box, _ := secure.NewBox(key)

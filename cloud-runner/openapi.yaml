@@ -62,6 +62,23 @@ paths:
         - {name: path, in: query, required: false, schema: {type: string}}
       responses:
         "200": {description: Artifact list or selected artifact body}
+  /v1/runs/{run_id}/input:
+    post:
+      security: [{bearerAuth: []}]
+      description: Replace clarified feature input for a paused run without creating a new claim
+      parameters: [{name: run_id, in: path, required: true, schema: {type: string}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [feature_request]
+              properties:
+                feature_request: {type: string, maxLength: 65535}
+      responses:
+        "202": {description: Input updated; run remains paused until explicitly resumed}
+        "409": {description: Run is not paused}
   /v1/runs/{run_id}/resume:
     post:
       security: [{bearerAuth: []}]

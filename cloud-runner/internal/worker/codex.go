@@ -49,6 +49,9 @@ Work directly in the supplied repository. Do not edit pipeline state or provider
 	if err := os.MkdirAll(filepath.Dir(resultPath), 0o700); err != nil {
 		return err
 	}
+	if err := os.Remove(resultPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove stale agent result: %w", err)
+	}
 	lastMessage := filepath.Join(runDir, "logs", "codex-"+safeName(stage.ID+"-"+ticketKey)+"-last.txt")
 	logPath := filepath.Join(runDir, "logs", "codex-"+safeName(stage.ID+"-"+ticketKey)+".jsonl")
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {

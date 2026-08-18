@@ -122,3 +122,32 @@ func TestAuthSlotBatchLeaseIsAtomic(t *testing.T) {
 		t.Fatalf("leased credential was overwritten: %v", err)
 	}
 }
+
+func TestUpdateRunInputRequiresPausedRun(t *testing.T) {
+	ctx := context.Background()
+	memory := NewMemory()
+	repo := repository(t, memory)
+	result, err := memory.AcceptLinearDelivery(ctx, repo, model.LinearDelivery{
+		DeliveryID: "input-delivery", IssueID: "input-issue", IssueKey: "ENG-9",
+		IssueTitle: "Original", FeatureRequest: "original request", ReceivedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.UpdateRunInput(ctx, result.Run.ID, "too soon"); err != ErrConflict {
+		t.Fatalf("queued input update = %v, want conflict", err)
+	}
+	if err := memory.SetRunState(ctx, result.Run.ID, "paused", "product", "needs clarification"); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.UpdateRunInput(ctx, result.Run.ID, "clarified request"); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := memory.GetRun(ctx, result.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.FeatureRequest != "clarified request" || updated.State != "paused" || updated.Error != "" {
+		t.Fatalf("unexpected updated run: %+v", updated)
+	}
+}
