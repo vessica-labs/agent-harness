@@ -56,7 +56,7 @@ Download a release binary from [GitHub Releases](https://github.com/vessica-labs
 mkdir -p "$HOME/.local/bin"
 
 # Apple Silicon macOS
-curl -fL https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.5/agent-harness-darwin-arm64 \
+curl -fL https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.6/agent-harness-darwin-arm64 \
   -o "$HOME/.local/bin/agent-harness"
 
 # Intel macOS: use agent-harness-darwin-amd64
@@ -177,7 +177,7 @@ export RAILWAY_API_TOKEN='<enter privately>'
 agent-harness railway upgrade \
   --project <railway-project-id> \
   --environment production \
-  --version v0.1.0-rc.5
+  --version v0.1.0-rc.6
 
 agent-harness railway init \
   --project <railway-project-id> \
@@ -185,7 +185,7 @@ agent-harness railway init \
   --service control-plane \
   --postgres-service Postgres \
   --url https://<control-plane-domain> \
-  --checkpoint agent-harness-worker-0.1.0-rc.5
+  --checkpoint agent-harness-worker-0.1.0-rc.6
 
 agent-harness railway deploy \
   --project <railway-project-id> \

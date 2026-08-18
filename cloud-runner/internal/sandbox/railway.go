@@ -17,12 +17,14 @@ import (
 )
 
 type RailwayCLI struct {
-	Binary      string
-	Project     string
-	Environment string
-	APIToken    string
-	WorkerPath  string
-	Timeout     time.Duration
+	Binary            string
+	Project           string
+	Environment       string
+	APIToken          string
+	WorkerPath        string
+	Timeout           time.Duration
+	ReadyTimeout      time.Duration
+	ReadyPollInterval time.Duration
 }
 
 func (r RailwayCLI) Create(ctx context.Context, spec CreateSpec) (Instance, error) {
@@ -48,6 +50,9 @@ func (r RailwayCLI) Create(ctx context.Context, spec CreateSpec) (Instance, erro
 }
 
 func (r RailwayCLI) StartWorker(ctx context.Context, id string) (string, error) {
+	if err := r.waitForRunning(ctx, id); err != nil {
+		return "", err
+	}
 	worker := r.WorkerPath
 	if worker == "" {
 		worker = "agent-harness"
@@ -62,6 +67,46 @@ func (r RailwayCLI) StartWorker(ctx context.Context, id string) (string, error) 
 		return "", errors.New("Railway sandbox did not return a durable session")
 	}
 	return lines[len(lines)-1], nil
+}
+
+func (r RailwayCLI) waitForRunning(ctx context.Context, id string) error {
+	timeout := r.ReadyTimeout
+	if timeout <= 0 {
+		timeout = 2 * time.Minute
+	}
+	poll := r.ReadyPollInterval
+	if poll <= 0 {
+		poll = 2 * time.Second
+	}
+	readyCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	lastState := "unknown"
+	var lastErr error
+	for {
+		instance, err := r.Status(readyCtx, id)
+		if err == nil {
+			lastState = strings.ToUpper(strings.TrimSpace(instance.State))
+			if lastState == "RUNNING" {
+				return nil
+			}
+			switch lastState {
+			case "CRASHED", "DESTROYED", "FAILED", "REMOVED", "STOPPED":
+				return fmt.Errorf("Railway sandbox %s entered terminal state %s before worker start", id, lastState)
+			}
+		} else {
+			lastErr = err
+		}
+		timer := time.NewTimer(poll)
+		select {
+		case <-readyCtx.Done():
+			timer.Stop()
+			if lastErr != nil {
+				return fmt.Errorf("wait for Railway sandbox %s to run after state %s: %w (last status error: %v)", id, lastState, readyCtx.Err(), lastErr)
+			}
+			return fmt.Errorf("wait for Railway sandbox %s to run after state %s: %w", id, lastState, readyCtx.Err())
+		case <-timer.C:
+		}
+	}
 }
 
 func (r RailwayCLI) Heartbeat(ctx context.Context, id string) error {
