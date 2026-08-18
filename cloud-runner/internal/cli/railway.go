@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/secure"
 )
@@ -150,12 +151,76 @@ func railwayUpgrade(ctx context.Context, args []string) error {
 		return errors.New("Railway did not return the source sandbox id")
 	}
 	defer railwayCommand(context.WithoutCancel(ctx), nil, io.Discard, "sandbox", "destroy", "--id", id, "--project", *project, "--environment", *environment)
+	if err := waitForRailwaySandbox(ctx, *project, *environment, id); err != nil {
+		return fmt.Errorf("wait for checkpoint source sandbox: %w", err)
+	}
 	if err := railwayCommand(ctx, nil, os.Stdout, "sandbox", "checkpoint", "create", *checkpoint, "--id", id, "--json",
 		"--project", *project, "--environment", *environment); err != nil {
 		return fmt.Errorf("capture worker checkpoint: %w", err)
 	}
 	fmt.Printf("Worker checkpoint %q is ready. Set HARNESS_SANDBOX_CHECKPOINT=%s on the control plane.\n", *checkpoint, *checkpoint)
 	return nil
+}
+
+func waitForRailwaySandbox(ctx context.Context, project, environment, id string) error {
+	deadline := time.NewTimer(2 * time.Minute)
+	defer deadline.Stop()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		var listed bytes.Buffer
+		if err := railwayCommand(ctx, nil, &listed, "sandbox", "list", "--json", "--project", project, "--environment", environment); err != nil {
+			return err
+		}
+		var document any
+		if err := json.Unmarshal(listed.Bytes(), &document); err != nil {
+			return fmt.Errorf("decode sandbox status: %w", err)
+		}
+		state := strings.ToUpper(findSandboxState(document, id))
+		switch state {
+		case "RUNNING":
+			return nil
+		case "FAILED", "STOPPED", "REMOVED", "DESTROYED":
+			return fmt.Errorf("sandbox %s entered terminal state %s", id, state)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("sandbox %s did not become running within two minutes (last state %q)", id, state)
+		case <-ticker.C:
+		}
+	}
+}
+
+func findSandboxState(value any, id string) string {
+	switch current := value.(type) {
+	case map[string]any:
+		if directJSONField(current, "id", "sandboxId", "sandbox_id") == id {
+			return directJSONField(current, "state", "status")
+		}
+		for _, child := range current {
+			if found := findSandboxState(child, id); found != "" {
+				return found
+			}
+		}
+	case []any:
+		for _, child := range current {
+			if found := findSandboxState(child, id); found != "" {
+				return found
+			}
+		}
+	}
+	return ""
+}
+
+func directJSONField(value map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if found, ok := value[key]; ok && found != nil {
+			return fmt.Sprint(found)
+		}
+	}
+	return ""
 }
 
 func verifyRailwaySandboxAccess(ctx context.Context, project, environment string) error {
@@ -209,7 +274,7 @@ func railwayDeploy(ctx context.Context, args []string) error {
 		}
 	}
 	return railwayCommand(ctx, nil, os.Stdout, "up", "--detach", "--json", "--project", *project,
-		"--environment", *environment, "--service", *service, *path)
+		"--environment", *environment, "--service", *service, "--path-as-root", *path)
 }
 
 func railwayPassthrough(ctx context.Context, command string, args ...string) error {
