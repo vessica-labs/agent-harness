@@ -24,11 +24,37 @@ class PluginPackageTests(unittest.TestCase):
 
     def test_skills_have_no_placeholders(self) -> None:
         skills = sorted((PLUGIN / "skills").glob("*/SKILL.md"))
-        self.assertEqual(3, len(skills))
+        self.assertEqual(
+            {"inspect-harness", "onboard-cloud-runner", "run-harness", "setup-harness"},
+            {skill.parent.name for skill in skills},
+        )
         for skill in skills:
             content = skill.read_text()
             self.assertNotIn("TODO", content)
             self.assertTrue((skill.parent / "agents" / "openai.yaml").is_file())
+
+    def test_repo_marketplace_exposes_plugin(self) -> None:
+        marketplace = json.loads((REPO / ".agents" / "plugins" / "marketplace.json").read_text())
+        self.assertEqual("agent-harness", marketplace["name"])
+        entry = marketplace["plugins"][0]
+        self.assertEqual("agent-harness", entry["name"])
+        self.assertEqual("./plugins/agent-harness", entry["source"]["path"])
+        self.assertEqual("AVAILABLE", entry["policy"]["installation"])
+
+    def test_readme_documents_codex_driven_cloud_onboarding(self) -> None:
+        readme = (REPO / "README.md").read_text()
+        for required in (
+            "curl -fsSL agents.railway.com | sh",
+            "codex plugin marketplace add vessica-labs/agent-harness",
+            "codex plugin add agent-harness@agent-harness",
+            "Use $onboard-cloud-runner",
+            "LINEAR_WEBHOOK_SECRET",
+            "NOTION_TOKEN",
+            "agent-harness cloud auth codex add --slots 3",
+            "agent-harness cloud repo discover-linear",
+            "agent-harness cloud repo add",
+        ):
+            self.assertIn(required, readme)
 
     def test_packaged_templates_match_canonical_templates(self) -> None:
         source = REPO / "harness-templates" / "base"

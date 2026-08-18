@@ -1,0 +1,4 @@
+interface:
+  display_name: "Onboard Cloud Runner"
+  short_description: "Connect Railway, Linear, Notion, and Codex"
+  default_prompt: "Use $onboard-cloud-runner to set up the Agent Harness cloud runner for this repository."

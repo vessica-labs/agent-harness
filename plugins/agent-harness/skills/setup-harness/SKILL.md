@@ -27,7 +27,7 @@ Initialize the repository through an inspect, interview, preview, apply, and ver
 
 ## Cloud attachment
 
-When the user asks to enable Railway execution, first complete the local setup and confirm `automation.trigger` is the intended Linear label. Then:
+When the user asks to enable Railway execution, first complete the local setup and confirm `automation.trigger` is the intended Linear label. If the control plane or local cloud profile does not exist, follow `$onboard-cloud-runner`; do not assume infrastructure or credentials are already configured. For an existing cloud profile:
 
 1. Require the `agent-harness` Go CLI and an existing local cloud profile; never copy Codex app credentials into Railway.
 2. Run `agent-harness cloud auth status` and report missing Codex slots, GitHub App, Linear, or Notion service credentials.

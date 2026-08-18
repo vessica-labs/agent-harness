@@ -52,11 +52,18 @@ func cloudProfile(args []string) error {
 
 func cloudRepo(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("repo requires add, list, or remove")
+		return errors.New("repo requires add, list, remove, or discover-linear")
 	}
 	client, err := newAPI("")
 	if err != nil {
 		return err
+	}
+	if args[0] == "discover-linear" {
+		var result any
+		if err := client.do(ctx, http.MethodGet, "/v1/providers/linear/context", nil, &result); err != nil {
+			return err
+		}
+		return printJSON(result)
 	}
 	if args[0] == "list" {
 		var result any
@@ -76,7 +83,7 @@ func cloudRepo(ctx context.Context, args []string) error {
 		return printJSON(result)
 	}
 	if args[0] != "add" {
-		return errors.New("repo supports add, list, or remove")
+		return errors.New("repo supports add, list, remove, or discover-linear")
 	}
 	flags := flag.NewFlagSet("cloud repo add", flag.ContinueOnError)
 	value := model.Repository{Enabled: true, TriggerLabel: "agent-harness", BaseBranch: "main"}

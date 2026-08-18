@@ -16,6 +16,7 @@
     "capabilities": ["Interactive", "Write"],
     "defaultPrompt": [
       "Set up Agent Harness in this repository.",
+      "Onboard this repository to the Railway cloud runner.",
       "Run the full pipeline for Linear issue L-123.",
       "List the harness tickets associated with L-123."
     ]

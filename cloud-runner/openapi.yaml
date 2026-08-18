@@ -38,6 +38,11 @@ paths:
       parameters: [{name: repository_id, in: path, required: true, schema: {type: string}}]
       responses:
         "200": {description: Repository automation disabled}
+  /v1/providers/linear/context:
+    get:
+      security: [{bearerAuth: []}]
+      responses:
+        "200": {description: Connected Linear workspace, teams, and projects for repository registration}
   /v1/runs:
     get:
       security: [{bearerAuth: []}]

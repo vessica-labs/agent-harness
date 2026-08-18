@@ -37,6 +37,29 @@ type Comment struct {
 	Body string `json:"body"`
 }
 
+type RegistrationContext struct {
+	Workspace Workspace `json:"workspace"`
+	Teams     []Team    `json:"teams"`
+	Projects  []Project `json:"projects"`
+}
+
+type Workspace struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type Team struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Key  string `json:"key"`
+}
+
+type Project struct {
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	TeamIDs []string `json:"team_ids"`
+}
+
 type Ticket struct {
 	Key                string   `json:"key"`
 	Title              string   `json:"title"`
@@ -48,6 +71,39 @@ type Ticket struct {
 
 func New(token string) *Client {
 	return &Client{token: token, endpoint: "https://api.linear.app/graphql", http: &http.Client{Timeout: 20 * time.Second}}
+}
+
+func (c *Client) RegistrationContext(ctx context.Context) (RegistrationContext, error) {
+	var result struct {
+		Organization Workspace `json:"organization"`
+		Teams        struct {
+			Nodes []Team `json:"nodes"`
+		} `json:"teams"`
+		Projects struct {
+			Nodes []struct {
+				ID    string `json:"id"`
+				Name  string `json:"name"`
+				Teams struct {
+					Nodes []struct {
+						ID string `json:"id"`
+					} `json:"nodes"`
+				} `json:"teams"`
+			} `json:"nodes"`
+		} `json:"projects"`
+	}
+	query := `query HarnessRegistrationContext{organization{id name} teams{nodes{id name key}} projects{nodes{id name teams{nodes{id}}}}}`
+	if err := c.graphql(ctx, query, map[string]any{}, &result); err != nil {
+		return RegistrationContext{}, err
+	}
+	context := RegistrationContext{Workspace: result.Organization, Teams: result.Teams.Nodes, Projects: make([]Project, 0, len(result.Projects.Nodes))}
+	for _, project := range result.Projects.Nodes {
+		value := Project{ID: project.ID, Name: project.Name, TeamIDs: make([]string, 0, len(project.Teams.Nodes))}
+		for _, team := range project.Teams.Nodes {
+			value.TeamIDs = append(value.TeamIDs, team.ID)
+		}
+		context.Projects = append(context.Projects, value)
+	}
+	return context, nil
 }
 
 func (c *Client) ValidateRegistration(ctx context.Context, workspaceID, teamID, projectID string) error {

@@ -148,6 +148,8 @@ func (s *Server) managementRoutes(w http.ResponseWriter, r *http.Request) {
 		s.listRepositories(w, r)
 	case r.URL.Path == "/v1/repositories" && r.Method == http.MethodPost:
 		s.putRepository(w, r)
+	case r.URL.Path == "/v1/providers/linear/context" && r.Method == http.MethodGet:
+		s.linearRegistrationContext(w, r)
 	case strings.HasPrefix(r.URL.Path, "/v1/repositories/") && r.Method == http.MethodDelete:
 		id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/repositories/"), "/")
 		if id == "" {
@@ -172,6 +174,20 @@ func (s *Server) managementRoutes(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusNotFound, store.ErrNotFound)
 	}
+}
+
+func (s *Server) linearRegistrationContext(w http.ResponseWriter, r *http.Request) {
+	token, err := s.linearAccessToken(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	value, err := linearapi.New(token).RegistrationContext(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Errorf("Linear registration context: %w", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
 }
 
 func (s *Server) authSlots(w http.ResponseWriter, r *http.Request) {
