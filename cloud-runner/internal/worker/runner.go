@@ -706,7 +706,9 @@ func (r *Runner) branchName() string {
 	if len(suffix) > 12 {
 		suffix = suffix[len(suffix)-12:]
 	}
-	return "agent-harness/" + strings.ToLower(safeName(r.config.IssueKey)) + "-" + suffix
+	// Railway's sandbox Git policy permits pushes only beneath sandbox/*.
+	// Keep the human-readable harness prefix after that provider-owned boundary.
+	return "sandbox/agent-harness-" + strings.ToLower(safeName(r.config.IssueKey)) + "-" + suffix
 }
 
 func ensureSuccessfulResult(path string) error {

@@ -28,6 +28,13 @@ func TestTicketWaves(t *testing.T) {
 	}
 }
 
+func TestIntegrationBranchFitsRailwaySandboxPushPolicy(t *testing.T) {
+	runner := &Runner{config: Config{RunID: "run_3682e6dea7c890803e3b", IssueKey: "AGE-5"}}
+	if got, want := runner.branchName(), "sandbox/agent-harness-age-5-a7c890803e3b"; got != want {
+		t.Fatalf("branchName() = %q, want %q", got, want)
+	}
+}
+
 func TestTicketWavesResumeCompletedTickets(t *testing.T) {
 	waves, err := ticketWavesWithDone([]ticket{
 		{Key: "T01"},
