@@ -23,6 +23,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: cloud-runner/go.mod
+          cache-dependency-path: cloud-runner/go.sum
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -44,6 +45,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: cloud-runner
+          build-args: VERSION=${{ github.ref_name }}
           push: true
           tags: |
             ghcr.io/vessica-labs/agent-harness:${{ github.ref_name }}
@@ -71,13 +73,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: cloud-runner/go.mod
+          cache-dependency-path: cloud-runner/go.sum
       - name: Build binary
         working-directory: cloud-runner
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
-        run: go build -trimpath -ldflags="-s -w" -o agent-harness-${GOOS}-${GOARCH} ./cmd/agent-harness
+        run: go build -trimpath -ldflags="-s -w -X github.com/vessica-labs/agent-harness/cloud-runner/internal/cli.Version=${GITHUB_REF_NAME}" -o agent-harness-${GOOS}-${GOARCH} ./cmd/agent-harness
       - uses: actions/upload-artifact@v4
         with:
           name: agent-harness-${{ matrix.goos }}-${{ matrix.goarch }}

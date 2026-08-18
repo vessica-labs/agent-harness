@@ -22,6 +22,9 @@ import (
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/worker"
 )
 
+// Version is set from the release tag at build time.
+var Version = "dev"
+
 func Run(args []string) error {
 	if len(args) == 0 {
 		return usageError()
@@ -40,7 +43,7 @@ func Run(args []string) error {
 	case "ui":
 		return runUI(ctx, args[1:])
 	case "version", "--version", "-v":
-		fmt.Println("agent-harness dev")
+		fmt.Println(versionString())
 		return nil
 	case "help", "--help", "-h":
 		fmt.Println(usage())
@@ -48,6 +51,10 @@ func Run(args []string) error {
 	default:
 		return usageError()
 	}
+}
+
+func versionString() string {
+	return "agent-harness " + Version
 }
 
 func runServer(ctx context.Context) error {

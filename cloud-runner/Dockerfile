@@ -1,5 +1,6 @@
 ARG GO_VERSION=1.26
 FROM golang:${GO_VERSION}-bookworm AS build
+ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=secret,id=extra_ca,required=false \
@@ -9,7 +10,9 @@ RUN --mount=type=secret,id=extra_ca,required=false \
       go mod download; \
     fi
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/agent-harness ./cmd/agent-harness
+RUN CGO_ENABLED=0 go build -trimpath \
+    -ldflags="-s -w -X github.com/vessica-labs/agent-harness/cloud-runner/internal/cli.Version=${VERSION}" \
+    -o /out/agent-harness ./cmd/agent-harness
 
 FROM node:22-bookworm-slim
 ARG RAILWAY_CLI_VERSION=5.41.2
