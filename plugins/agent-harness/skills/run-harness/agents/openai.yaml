@@ -1,0 +1,4 @@
+interface:
+  display_name: "Run Harness"
+  short_description: "Run deterministic coding-agent pipelines"
+  default_prompt: "Use $run-harness to run the full pipeline for this issue."

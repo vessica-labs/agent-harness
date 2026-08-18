@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["agent", "status", "source_issue", "prd_markdown", "tickets", "coverage", "blockers"],
+  "properties": {
+    "agent": {"const": "product"},
+    "status": {"enum": ["ready", "blocked"]},
+    "source_issue": {"type": "object", "required": ["key", "url", "title"]},
+    "prd_markdown": {"type": "string"},
+    "tickets": {"type": "array"},
+    "coverage": {"type": "array"},
+    "blockers": {"type": "array"}
+  }
+}

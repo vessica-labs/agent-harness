@@ -1,0 +1,13 @@
+{
+  "apps": {
+    "linear": {
+      "id": "asdk_app_69a089a326dc8191b32a3f2553f5be2c"
+    },
+    "atlassian-rovo": {
+      "id": "connector_692de805e3ec8191834719067174a384"
+    },
+    "notion": {
+      "id": "asdk_app_69c18c28f1188191bf5b8445c4ab0a2e"
+    }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-harness.local/schemas/config.schema.json",
+  "title": "Agent Harness configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "tracker", "notion", "git"],
+  "properties": {
+    "version": {"const": 1},
+    "tracker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "workspace", "project"],
+      "properties": {
+        "provider": {"enum": ["linear", "jira"]},
+        "workspace": {"type": "string", "minLength": 1},
+        "project": {"type": "string", "minLength": 1},
+        "child_issue_type": {"type": ["string", "null"]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"provider": {"const": "jira"}}},
+          "then": {"required": ["child_issue_type"], "properties": {"child_issue_type": {"type": "string", "minLength": 1}}}
+        }
+      ]
+    },
+    "notion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["parent_page_id"],
+      "properties": {"parent_page_id": {"type": "string", "minLength": 1}}
+    },
+    "git": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["remote", "base_branch"],
+      "properties": {
+        "remote": {"type": "string", "minLength": 1},
+        "base_branch": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

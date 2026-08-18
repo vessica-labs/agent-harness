@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["agent", "status", "adr_filename", "adr_markdown", "ticket_constraints", "ticket_graph_valid", "blockers"],
+  "properties": {
+    "agent": {"const": "architect"},
+    "status": {"enum": ["ready", "blocked"]},
+    "adr_filename": {"type": "string", "pattern": "^ADR-.+\\.md$"},
+    "adr_markdown": {"type": "string"},
+    "ticket_constraints": {"type": "array"},
+    "ticket_graph_valid": {"type": "boolean"},
+    "blockers": {"type": "array"}
+  }
+}

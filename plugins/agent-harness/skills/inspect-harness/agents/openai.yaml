@@ -1,0 +1,4 @@
+interface:
+  display_name: "Inspect Harness"
+  short_description: "Inspect harness runs, tickets, and recovery"
+  default_prompt: "Use $inspect-harness to show the run and associated tickets."

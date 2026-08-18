@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-harness.local/schemas/state.schema.json",
+  "title": "Agent Harness run state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "issue", "status", "selected_stages", "stages", "tickets", "artifacts", "external", "git", "events", "created_at", "updated_at"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"type": "string", "pattern": "^run_"},
+    "issue": {
+      "type": "object",
+      "required": ["provider", "key"],
+      "properties": {
+        "provider": {"enum": ["linear", "jira"]},
+        "key": {"type": "string", "minLength": 1},
+        "id": {"type": ["string", "null"]},
+        "url": {"type": ["string", "null"]},
+        "title": {"type": ["string", "null"]}
+      }
+    },
+    "status": {"enum": ["running", "paused", "completed"]},
+    "selected_stages": {"type": "array", "items": {"type": "string"}},
+    "stages": {"type": "object"},
+    "tickets": {"type": "array"},
+    "artifacts": {"type": "object"},
+    "external": {"type": "object"},
+    "git": {"type": "object"},
+    "events": {"type": "array"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"}
+  }
+}

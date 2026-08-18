@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "architecture-document-present",
+      "type": "require_path",
+      "path": ".harness/ARCHITECTURE.md",
+      "message": "The repository must retain its architecture document."
+    },
+    {
+      "id": "source-files-under-800-lines",
+      "type": "max_file_lines",
+      "globs": [
+        "**/*.c",
+        "**/*.cc",
+        "**/*.cpp",
+        "**/*.cs",
+        "**/*.css",
+        "**/*.go",
+        "**/*.h",
+        "**/*.hpp",
+        "**/*.html",
+        "**/*.java",
+        "**/*.js",
+        "**/*.jsx",
+        "**/*.kt",
+        "**/*.kts",
+        "**/*.php",
+        "**/*.py",
+        "**/*.rb",
+        "**/*.rs",
+        "**/*.scala",
+        "**/*.scss",
+        "**/*.sh",
+        "**/*.sql",
+        "**/*.svelte",
+        "**/*.swift",
+        "**/*.ts",
+        "**/*.tsx",
+        "**/*.vue"
+      ],
+      "exclude": [
+        "**/node_modules/**",
+        "**/vendor/**",
+        "**/.venv/**",
+        "**/venv/**",
+        "**/dist/**",
+        "**/build/**",
+        "**/coverage/**",
+        "**/generated/**",
+        "**/gen/**",
+        "**/migrations/**",
+        "**/*.generated.*",
+        "**/*.min.js",
+        "**/*.min.css"
+      ],
+      "max_lines": 800,
+      "message": "Split large source files along a clear responsibility boundary."
+    },
+    {
+      "id": "no-committed-environment-files",
+      "type": "forbid_path",
+      "glob": "**/.env*",
+      "exclude": [
+        "**/.env*.example",
+        "**/.env*.sample",
+        "**/.env*.template"
+      ],
+      "message": "Do not commit environment secret files; commit only example, sample, or template variants."
+    }
+  ]
+}

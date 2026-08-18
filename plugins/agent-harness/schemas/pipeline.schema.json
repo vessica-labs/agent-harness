@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-harness.local/schemas/pipeline.schema.json",
+  "title": "Agent Harness workflow",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "name", "run_root", "defaults", "stages", "repair_loops"],
+  "properties": {
+    "version": {"const": 1},
+    "name": {"type": "string", "minLength": 1},
+    "run_root": {"type": "string", "pattern": "^[^/].*/\\{run_id\\}$"},
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository_access", "result_format"],
+      "properties": {
+        "repository_access": {"type": "boolean"},
+        "result_format": {"enum": ["json"]}
+      }
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "agent", "needs", "mode", "parallelism", "inputs", "outputs", "result", "hooks"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+          "agent": {"type": "string", "pattern": "^\\.agents/.+\\.md$"},
+          "needs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "mode": {"enum": ["single", "ticket_parallel"]},
+          "parallelism": {"type": "integer", "minimum": 1, "maximum": 16},
+          "inputs": {"type": "array", "items": {"$ref": "#/$defs/input"}},
+          "outputs": {"type": "array", "items": {"$ref": "#/$defs/output"}},
+          "result": {"$ref": "#/$defs/result"},
+          "hooks": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["before", "after", "on_failure"],
+            "properties": {
+              "before": {"$ref": "#/$defs/hooks"},
+              "after": {"$ref": "#/$defs/hooks"},
+              "on_failure": {"$ref": "#/$defs/hooks"}
+            }
+          }
+        }
+      }
+    },
+    "repair_loops": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from", "to", "through", "max_reentries"],
+        "properties": {
+          "from": {"type": "string"},
+          "to": {"type": "string"},
+          "through": {"type": "string"},
+          "max_reentries": {"type": "integer", "minimum": 1, "maximum": 10}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "file", "format", "required"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "file": {"type": "string", "minLength": 1},
+        "format": {"enum": ["json", "markdown", "text"]},
+        "required": {"type": "boolean"},
+        "sources": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "generated_from": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["file", "collection", "key"],
+          "properties": {
+            "file": {"type": "string", "minLength": 1},
+            "collection": {"type": "string", "minLength": 1},
+            "key": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "file", "format", "from_result"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "file": {"type": "string", "minLength": 1},
+        "format": {"enum": ["json", "markdown", "text"]},
+        "from_result": {"type": "string", "minLength": 1}
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "format", "agent"],
+      "properties": {
+        "file": {"type": "string", "minLength": 1},
+        "format": {"const": "json"},
+        "agent": {"enum": ["product", "architect", "coder", "lint", "qa", "docs", "pr"]}
+      }
+    },
+    "hooks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "argv"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-zA-Z0-9._-]+$"},
+          "argv": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "cwd": {"type": "string", "default": "."},
+          "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600, "default": 300}
+        }
+      }
+    }
+  }
+}

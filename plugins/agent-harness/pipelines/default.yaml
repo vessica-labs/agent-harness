@@ -1,0 +1,178 @@
+# Copied to .harness/pipeline.yaml during setup and intended to be edited.
+# File paths are relative to run_root. Each agent also receives repository access.
+# Result files contain the exact JSON message required by the selected agent definition.
+version: 1
+name: full-run
+run_root: .harness/runs/{run_id}
+defaults:
+  repository_access: true
+  result_format: json
+stages:
+  - id: product
+    agent: .agents/product.md
+    needs: []
+    mode: single
+    parallelism: 1
+    inputs:
+      - id: feature_request
+        file: inputs/feature-request.md
+        format: markdown
+        required: true
+        sources: [user_prompt, tracker_title_and_body]
+    outputs:
+      - id: prd
+        file: artifacts/prd.md
+        format: markdown
+        from_result: prd_markdown
+      - id: ticket_plan
+        file: artifacts/ticket-plan.json
+        format: json
+        from_result: tickets
+    result:
+      file: agent-output/product.json
+      format: json
+      agent: product
+    hooks:
+      before: []
+      after: []
+      on_failure: []
+  - id: arch
+    agent: .agents/architect.md
+    needs: [product]
+    mode: single
+    parallelism: 1
+    inputs:
+      - id: prd
+        file: artifacts/prd.md
+        format: markdown
+        required: true
+      - id: ticket_plan
+        file: artifacts/ticket-plan.json
+        format: json
+        required: true
+    outputs:
+      - id: adr
+        file: artifacts/adr.md
+        format: markdown
+        from_result: adr_markdown
+    result:
+      file: agent-output/arch.json
+      format: json
+      agent: architect
+    hooks:
+      before: []
+      after: []
+      on_failure: []
+  - id: coder
+    agent: .agents/coder.md
+    needs: [arch]
+    mode: ticket_parallel
+    parallelism: 3
+    inputs:
+      - id: ticket
+        file: inputs/tickets/{ticket_key}.json
+        format: json
+        required: true
+        generated_from:
+          file: artifacts/ticket-plan.json
+          collection: $
+          key: key
+    outputs:
+      - id: ticket_result
+        file: artifacts/ticket-results/{ticket_key}.json
+        format: json
+        from_result: $
+    result:
+      file: agent-output/coder/{ticket_key}.json
+      format: json
+      agent: coder
+    hooks:
+      before: []
+      after: []
+      on_failure: []
+  - id: lint
+    agent: .agents/lint.md
+    needs: [coder]
+    mode: single
+    parallelism: 1
+    inputs: []
+    outputs:
+      - id: lint_report
+        file: artifacts/lint-report.json
+        format: json
+        from_result: $
+    result:
+      file: agent-output/lint.json
+      format: json
+      agent: lint
+    hooks:
+      before: []
+      after:
+        - id: architecture-lint
+          argv: [python3, .harness/scripts/arch-lint.py]
+          cwd: .
+          timeout_seconds: 120
+      on_failure: []
+  - id: qa
+    agent: .agents/qa.md
+    needs: [lint]
+    mode: single
+    parallelism: 1
+    inputs:
+      - id: prd
+        file: artifacts/prd.md
+        format: markdown
+        required: true
+    outputs:
+      - id: qa_evidence
+        file: artifacts/qa-evidence.json
+        format: json
+        from_result: acceptance_results
+    result:
+      file: agent-output/qa.json
+      format: json
+      agent: qa
+    hooks:
+      before: []
+      after: []
+      on_failure: []
+  - id: pr
+    agent: .agents/pr.md
+    needs: [qa]
+    mode: single
+    parallelism: 1
+    inputs:
+      - id: prd
+        file: artifacts/prd.md
+        format: markdown
+        required: true
+      - id: adr
+        file: artifacts/adr.md
+        format: markdown
+        required: true
+      - id: ticket_results
+        file: artifacts/ticket-results/*.json
+        format: json
+        required: true
+      - id: lint_report
+        file: artifacts/lint-report.json
+        format: json
+        required: true
+      - id: qa_evidence
+        file: artifacts/qa-evidence.json
+        format: json
+        required: true
+    outputs:
+      - id: pull_request
+        file: artifacts/pull-request.json
+        format: json
+        from_result: pull_request
+    result:
+      file: agent-output/pr.json
+      format: json
+      agent: pr
+    hooks:
+      before: []
+      after: []
+      on_failure: []
+repair_loops: []

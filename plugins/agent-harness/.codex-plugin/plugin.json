@@ -1,0 +1,23 @@
+{
+  "name": "agent-harness",
+  "version": "0.1.0",
+  "description": "Initialize repositories and run deterministic issue-to-pull-request agent pipelines.",
+  "author": {
+    "name": "Agent Harness Contributors"
+  },
+  "skills": "./skills/",
+  "apps": "./.app.json",
+  "interface": {
+    "displayName": "Agent Harness",
+    "shortDescription": "Run issue-to-PR coding pipelines.",
+    "longDescription": "Initialize repository harnesses, connect Jira or Linear and Notion, run deterministic agent stages, and inspect resumable workflow state.",
+    "developerName": "Agent Harness Contributors",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Set up Agent Harness in this repository.",
+      "Run the full pipeline for Linear issue L-123.",
+      "List the harness tickets associated with L-123."
+    ]
+  }
+}

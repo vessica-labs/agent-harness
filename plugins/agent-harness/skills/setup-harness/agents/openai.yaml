@@ -1,0 +1,4 @@
+interface:
+  display_name: "Set Up Harness"
+  short_description: "Initialize and connect an agent harness"
+  default_prompt: "Use $setup-harness to initialize this repository."
