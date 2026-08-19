@@ -363,12 +363,18 @@ func roleRank(role string) int {
 func roleAllows(actual, required string) bool { return roleRank(actual) >= roleRank(required) }
 func requiredRole(r *http.Request) string {
 	p := r.URL.Path
-	if p == "/v1/status" || p == "/v1/whoami" || p == "/v1/logout" || p == "/v1/runs" || p == "/v1/events" {
+	if p == "/v1/status" || p == "/v1/whoami" || p == "/v1/logout" || p == "/v1/runs" || p == "/v1/events" || p == "/v1/input-requests" {
 		if r.Method == http.MethodGet || p == "/v1/logout" {
 			return "viewer"
 		}
 	}
 	if strings.HasPrefix(p, "/v1/runs/") {
+		if r.Method == http.MethodGet {
+			return "viewer"
+		}
+		return "operator"
+	}
+	if strings.HasPrefix(p, "/v1/input-requests/") {
 		if r.Method == http.MethodGet {
 			return "viewer"
 		}

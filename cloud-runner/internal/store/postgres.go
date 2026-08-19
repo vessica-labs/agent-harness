@@ -181,6 +181,191 @@ estimated_api_cost_usd=estimated_api_cost_usd+$7,updated_at=now() WHERE id=$1`, 
 	return err
 }
 
+const inputRequestColumns = `id,run_id,stage,round,status,summary,questions,created_at,updated_at,answered_at`
+const qualifiedInputRequestColumns = `r.id,r.run_id,r.stage,r.round,r.status,r.summary,r.questions,r.created_at,r.updated_at,r.answered_at`
+
+func scanInputRequest(row rowScanner) (model.InputRequest, error) {
+	var value model.InputRequest
+	var questions []byte
+	err := row.Scan(&value.ID, &value.RunID, &value.Stage, &value.Round, &value.Status,
+		&value.Summary, &questions, &value.CreatedAt, &value.UpdatedAt, &value.AnsweredAt)
+	if err == nil {
+		err = json.Unmarshal(questions, &value.Questions)
+	}
+	return value, err
+}
+
+func (p *Postgres) CreateInputRequest(ctx context.Context, value model.InputRequest) (model.InputRequest, error) {
+	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return value, err
+	}
+	defer tx.Rollback(ctx)
+	if value.ID == "" {
+		value.ID = newID("input")
+	}
+	questions, _ := json.Marshal(value.Questions)
+	value, err = scanInputRequest(tx.QueryRow(ctx, `INSERT INTO input_requests(id,run_id,stage,round,status,summary,questions)
+VALUES($1,$2,$3,$4,'open',$5,$6) ON CONFLICT(run_id,stage,round) DO NOTHING RETURNING `+inputRequestColumns,
+		value.ID, value.RunID, value.Stage, value.Round, value.Summary, questions))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return value, ErrConflict
+	}
+	if err != nil {
+		return value, err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE runs SET state='awaiting_input',current_stage=$2,queue_reason='human_input',
+error='',lease_owner='',lease_expires_at=NULL,updated_at=now() WHERE id=$1 AND state='running'`, value.RunID, value.Stage)
+	if err != nil {
+		return value, err
+	}
+	if tag.RowsAffected() == 0 {
+		return value, ErrNotFound
+	}
+	return value, tx.Commit(ctx)
+}
+
+func (p *Postgres) GetInputRequest(ctx context.Context, id string) (model.InputRequest, error) {
+	value, err := scanInputRequest(p.pool.QueryRow(ctx, `SELECT `+inputRequestColumns+` FROM input_requests WHERE id=$1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return value, ErrNotFound
+	}
+	return value, err
+}
+
+func (p *Postgres) ListInputRequests(ctx context.Context, filter model.InputRequestFilter) ([]model.InputRequest, error) {
+	limit := filter.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := p.pool.Query(ctx, `SELECT `+inputRequestColumns+` FROM input_requests
+WHERE ($1='' OR run_id=$1) AND ($2='' OR status=$2) ORDER BY updated_at DESC LIMIT $3`, filter.RunID, filter.Status, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := make([]model.InputRequest, 0)
+	for rows.Next() {
+		value, err := scanInputRequest(rows)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
+func scanInputResponse(row rowScanner) (model.InputResponse, error) {
+	var value model.InputResponse
+	var answers []byte
+	err := row.Scan(&value.ID, &value.RequestID, &value.RunID, &value.Channel, &value.ActorID,
+		&value.ActorName, &value.ExternalID, &answers, &value.Accepted, &value.CreatedAt)
+	if err == nil {
+		err = json.Unmarshal(answers, &value.Answers)
+	}
+	return value, err
+}
+
+func (p *Postgres) ListInputResponses(ctx context.Context, requestID string) ([]model.InputResponse, error) {
+	rows, err := p.pool.Query(ctx, `SELECT id,request_id,run_id,channel,actor_id,actor_name,external_id,answers,accepted,created_at
+FROM input_responses WHERE request_id=$1 ORDER BY created_at`, requestID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := make([]model.InputResponse, 0)
+	for rows.Next() {
+		value, err := scanInputResponse(rows)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
+func (p *Postgres) ResolveInputRequest(ctx context.Context, id string, response model.InputResponse) (model.InputRequest, model.InputResponse, error) {
+	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return model.InputRequest{}, response, err
+	}
+	defer tx.Rollback(ctx)
+	request, err := scanInputRequest(tx.QueryRow(ctx, `SELECT `+inputRequestColumns+` FROM input_requests WHERE id=$1 FOR UPDATE`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return request, response, ErrNotFound
+	}
+	if err != nil {
+		return request, response, err
+	}
+	if request.Status != "open" {
+		return request, response, ErrConflict
+	}
+	if response.ID == "" {
+		response.ID = newID("response")
+	}
+	answers, _ := json.Marshal(response.Answers)
+	response, err = scanInputResponse(tx.QueryRow(ctx, `INSERT INTO input_responses(id,request_id,run_id,channel,actor_id,actor_name,external_id,answers,accepted)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,true) ON CONFLICT DO NOTHING
+RETURNING id,request_id,run_id,channel,actor_id,actor_name,external_id,answers,accepted,created_at`, response.ID,
+		request.ID, request.RunID, response.Channel, response.ActorID, response.ActorName, response.ExternalID, answers))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return request, response, ErrConflict
+	}
+	if err != nil {
+		return request, response, err
+	}
+	request, err = scanInputRequest(tx.QueryRow(ctx, `UPDATE input_requests SET status='answered',answered_at=now(),updated_at=now()
+WHERE id=$1 RETURNING `+inputRequestColumns, id))
+	if err != nil {
+		return request, response, err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE runs SET state='queued',queue_reason='human_input_answered',error='',
+lease_owner='',lease_expires_at=NULL,updated_at=now() WHERE id=$1 AND state='awaiting_input'`, request.RunID)
+	if err != nil {
+		return request, response, err
+	}
+	if tag.RowsAffected() == 0 {
+		return request, response, ErrConflict
+	}
+	return request, response, tx.Commit(ctx)
+}
+
+func (p *Postgres) PutInputDelivery(ctx context.Context, value model.InputDelivery) error {
+	_, err := p.pool.Exec(ctx, `INSERT INTO input_deliveries(request_id,provider,state,external_id,external_url,error)
+VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(request_id,provider) DO UPDATE SET state=EXCLUDED.state,
+external_id=EXCLUDED.external_id,external_url=EXCLUDED.external_url,error=EXCLUDED.error,updated_at=now()`,
+		value.RequestID, value.Provider, value.State, value.ExternalID, value.ExternalURL, value.Error)
+	return err
+}
+
+func (p *Postgres) ListInputDeliveries(ctx context.Context, requestID string) ([]model.InputDelivery, error) {
+	rows, err := p.pool.Query(ctx, `SELECT request_id,provider,state,external_id,external_url,error,updated_at
+FROM input_deliveries WHERE request_id=$1 ORDER BY provider`, requestID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := make([]model.InputDelivery, 0)
+	for rows.Next() {
+		var value model.InputDelivery
+		if err := rows.Scan(&value.RequestID, &value.Provider, &value.State, &value.ExternalID,
+			&value.ExternalURL, &value.Error, &value.UpdatedAt); err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
+func (p *Postgres) FindInputRequestByDelivery(ctx context.Context, provider, externalID string) (model.InputRequest, error) {
+	value, err := scanInputRequest(p.pool.QueryRow(ctx, `SELECT `+qualifiedInputRequestColumns+` FROM input_requests r
+JOIN input_deliveries d ON d.request_id=r.id WHERE d.provider=$1 AND d.external_id=$2`, provider, externalID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return value, ErrNotFound
+	}
+	return value, err
+}
+
 func (p *Postgres) PutStage(ctx context.Context, value model.StageState) error {
 	_, err := p.pool.Exec(ctx, `INSERT INTO stages(run_id,stage,state,attempt,details,started_at,completed_at)
 VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(run_id,stage) DO UPDATE SET
@@ -301,9 +486,9 @@ VALUES ('linear',$1,$2,$3) ON CONFLICT DO NOTHING RETURNING run_id`, delivery.Is
 
 	if created {
 		_, err = tx.Exec(ctx, `INSERT INTO runs(id, repository_id, provider, source_issue_id,
-source_issue_key, source_issue_url, source_issue_title, feature_request, state)
-VALUES ($1,$2,'linear',$3,$4,$5,$6,$7,'queued')`, claimedRunID, repo.ID, delivery.IssueID,
-			delivery.IssueKey, delivery.IssueURL, delivery.IssueTitle, delivery.FeatureRequest)
+source_issue_key, source_issue_url, source_issue_title, feature_request, metadata, state)
+VALUES ($1,$2,'linear',$3,$4,$5,$6,$7,$8,'queued')`, claimedRunID, repo.ID, delivery.IssueID,
+			delivery.IssueKey, delivery.IssueURL, delivery.IssueTitle, delivery.FeatureRequest, jsonOrEmpty(delivery.SourceContext))
 		if err != nil {
 			return model.DeliveryResult{}, err
 		}
@@ -512,13 +697,25 @@ lease_owner='', lease_expires_at=NULL, updated_at=now() WHERE id=$1 AND state='p
 }
 
 func (p *Postgres) CancelRun(ctx context.Context, id string) error {
-	tag, err := p.pool.Exec(ctx, `UPDATE runs SET state='cancelled', lease_owner='',
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `UPDATE runs SET state='cancelled', lease_owner='',
 lease_expires_at=NULL, completed_at=now(), updated_at=now() WHERE id=$1
 AND state NOT IN ('completed','cancelled')`, id)
-	if err == nil && tag.RowsAffected() == 0 {
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return err
+	if _, err := tx.Exec(ctx, `UPDATE input_requests SET status='cancelled',updated_at=now()
+WHERE run_id=$1 AND status='open'`, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func appendEventTx(ctx context.Context, tx pgx.Tx, event model.Event) (model.Event, error) {

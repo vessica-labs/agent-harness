@@ -19,6 +19,16 @@ stages:
         format: markdown
         required: true
         sources: [user_prompt, tracker_title_and_body]
+      - id: source_issue
+        file: inputs/source-issue.json
+        format: json
+        required: true
+        sources: [tracker_metadata]
+      - id: human_input
+        file: inputs/human-input/product.json
+        format: json
+        required: false
+        sources: [human_response]
     outputs:
       - id: prd
         file: artifacts/prd.md
@@ -46,6 +56,11 @@ stages:
         file: artifacts/prd.md
         format: markdown
         required: true
+      - id: human_input
+        file: inputs/human-input/arch.json
+        format: json
+        required: false
+        sources: [human_response]
       - id: ticket_plan
         file: artifacts/ticket-plan.json
         format: json

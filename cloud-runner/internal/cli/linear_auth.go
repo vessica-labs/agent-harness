@@ -36,7 +36,7 @@ func linearAuth(ctx context.Context, client *apiClient, args []string) error {
 			"oauth.client_uri":    {"https://github.com/vessica-labs/agent-harness"},
 			"oauth.redirect_uris": {linearLocalCallback}, "oauth.grant_types": {"authorization_code"},
 			"webhook.enabled": {"true"}, "webhook.url": {strings.TrimRight(*publicURL, "/") + "/webhooks/linear"},
-			"webhook.resourceTypes": {"Issue", "OAuthAuthorization"},
+			"webhook.resourceTypes": {"Issue", "Comment", "OAuthAuthorization"},
 		}
 		manifestURL := "https://linear.app/settings/api/applications/new?" + values.Encode()
 		if err := openBrowser(manifestURL); err != nil {

@@ -3,6 +3,7 @@ package worker
 import (
 	"archive/tar"
 	"compress/gzip"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -130,5 +131,30 @@ func TestJournalRoundTripAndTraversalRejection(t *testing.T) {
 	_ = file.Close()
 	if err := extractDirectory(unsafe, filepath.Join(root, "target")); err == nil {
 		t.Fatal("path traversal accepted")
+	}
+}
+
+func TestOnlyProductAndArchitectureCanRequestInputOnce(t *testing.T) {
+	root := t.TempDir()
+	result := filepath.Join(root, "result.json")
+	body := `{"status":"needs_input","input_request":{"summary":"Choose","questions":[{"id":"choice","prompt":"Which?","options":[{"id":"a","label":"A","recommended":true},{"id":"b","label":"B"}],"allow_free_text":true,"required":true}]}}`
+	if err := os.WriteFile(result, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &Runner{config: Config{RunID: "run_test"}}
+	var signal *inputRequestSignal
+	if err := runner.detectInputRequest(Stage{ID: "product"}, result); !errors.As(err, &signal) {
+		t.Fatalf("product request was not signaled: %v", err)
+	}
+	var policy *inputPolicyError
+	if err := runner.detectInputRequest(Stage{ID: "coder"}, result); !errors.As(err, &policy) {
+		t.Fatalf("coder request was not rejected by policy: %v", err)
+	}
+	runner.config.HumanInput = []byte(`[{"request":{"stage":"product"},"responses":[{"answers":[]}]}]`)
+	if err := runner.detectInputRequest(Stage{ID: "product"}, result); !errors.As(err, &policy) {
+		t.Fatalf("second product round was not rejected: %v", err)
+	}
+	if err := runner.detectInputRequest(Stage{ID: "arch"}, result); !errors.As(err, &signal) {
+		t.Fatalf("product response incorrectly exhausted architect round: %v", err)
 	}
 }

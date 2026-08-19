@@ -23,11 +23,17 @@ const (
 )
 
 type ParsedWebhook struct {
-	Delivery  model.LinearDelivery
-	Labels    []string
-	HasParent bool
-	Archived  bool
-	Cancelled bool
+	Delivery        model.LinearDelivery
+	Labels          []string
+	HasParent       bool
+	Archived        bool
+	Cancelled       bool
+	CommentID       string
+	ParentCommentID string
+	CommentBody     string
+	ActorID         string
+	ActorName       string
+	ActorType       string
 }
 
 func Verify(headers http.Header, body []byte, secret string, now time.Time, tolerance time.Duration) error {
@@ -87,6 +93,20 @@ func Parse(headers http.Header, body []byte, receivedAt time.Time) (ParsedWebhoo
 		IssueTitle: value(data, "title"), WorkspaceID: coalesce(value(root, "organizationId"), nestedID(data, "organization")),
 		TeamID: nestedID(data, "team"), ProjectID: nestedID(data, "project"),
 		ReceivedAt: receivedAt, RawPayload: append([]byte(nil), body...),
+	}
+	if strings.EqualFold(parsed.Delivery.EventType, "Comment") {
+		parsed.CommentID = value(data, "id")
+		parsed.ParentCommentID = coalesce(value(data, "parentId"), nestedID(data, "parent"))
+		parsed.CommentBody = strings.TrimSpace(value(data, "body"))
+		actor, _ := root["actor"].(map[string]any)
+		parsed.ActorID, parsed.ActorName, parsed.ActorType = coalesce(value(actor, "id"), value(data, "userId")), value(actor, "name"), strings.ToLower(value(actor, "type"))
+		parsed.Delivery.IssueID = coalesce(value(data, "issueId"), nestedID(data, "issue"))
+		if parsed.CommentID == "" || parsed.Delivery.IssueID == "" {
+			return ParsedWebhook{}, errors.New("Linear comment webhook comment id or issue id is missing")
+		}
+		hash := sha256.Sum256(body)
+		parsed.Delivery.PayloadSHA256 = hex.EncodeToString(hash[:])
+		return parsed, nil
 	}
 	description := value(data, "description")
 	parsed.Delivery.FeatureRequest = strings.TrimSpace(parsed.Delivery.IssueTitle + "\n\n" + description)

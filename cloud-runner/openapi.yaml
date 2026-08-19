@@ -170,7 +170,41 @@ paths:
       security: [{bearerAuth: []}]
       parameters: [{name: run_id, in: path, required: true, schema: {type: string}}]
       responses:
-        "200": {description: Run, stage DAG, logical tickets, and artifact metadata}
+        "200": {description: Run, stage DAG, logical tickets, artifact metadata, and human-input requests, responses, and deliveries}
+  /v1/input-requests:
+    get:
+      security: [{bearerAuth: []}]
+      description: List durable human-input requests for the Inbox or a selected run
+      parameters:
+        - {name: status, in: query, required: false, schema: {type: string, enum: [open, answered, cancelled]}}
+        - {name: run_id, in: query, required: false, schema: {type: string}}
+      responses:
+        "200": {description: Human-input requests}
+  /v1/input-requests/{request_id}:
+    get:
+      security: [{bearerAuth: []}]
+      parameters: [{name: request_id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "200": {description: Request with its channel deliveries and responses}
+  /v1/input-requests/{request_id}/responses:
+    post:
+      security: [{bearerAuth: []}]
+      description: Atomically accept an operator response, answer the request, and requeue the checkpointed run
+      parameters: [{name: request_id, in: path, required: true, schema: {type: string}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [answers]
+              properties:
+                answers:
+                  type: array
+                  items: {$ref: '#/components/schemas/InputAnswer'}
+      responses:
+        "202": {description: Response accepted and run queued to resume}
+        "409": {description: Request was already answered}
   /v1/runs/{run_id}/artifacts:
     get:
       security: [{bearerAuth: []}]
@@ -224,6 +258,14 @@ paths:
       responses:
         "201": {description: Encrypted Codex authentication slot stored}
 components:
+  schemas:
+    InputAnswer:
+      type: object
+      required: [question_id]
+      properties:
+        question_id: {type: string}
+        option_id: {type: string}
+        text: {type: string}
   securitySchemes:
     bearerAuth:
       type: http

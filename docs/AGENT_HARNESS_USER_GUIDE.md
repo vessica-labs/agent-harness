@@ -245,7 +245,7 @@ For each runnable cloud issue, the scheduler creates a disposable Railway sandbo
 6. Uploads checkpoints throughout the run.
 7. Synchronizes Linear and Notion through the control plane.
 8. Returns updated Codex authentication material to its encrypted slot.
-9. Ends after completion or pause; the control plane then destroys the sandbox.
+9. Ends after completion, a durable input checkpoint, or pause; the control plane then destroys the sandbox.
 
 Sandboxes are disposable. The journal, pushed branch, and control-plane records are the recovery authorities.
 
@@ -279,6 +279,7 @@ In **cloud execution**, Agent Harness uses the configured Linear team's real wor
 
 - A newly claimed parent immediately moves to Todo and receives an Agent Harness activity comment.
 - The first pipeline stage moves the parent to In Progress; every stage start, completion, and retry adds activity to the parent.
+- A Product or Architecture input request moves the parent to Needs Input and creates one replyable question thread. Answering in that thread or the control-plane Inbox returns it to In Progress.
 - New child tickets are created directly in the team's Todo state.
 - A coder claim moves that child to In Progress.
 - A child moves to Done after its commit is integrated.
@@ -808,7 +809,8 @@ Agent Harness resolves only unambiguous integration conflicts automatically. A c
 |---|---|
 | `queued` | Claimed and waiting for run capacity, auth capacity, or Railway capacity |
 | `running` | Leased to the scheduler and executing in a sandbox |
-| `paused` | Execution stopped with a recoverable error or required human decision |
+| `awaiting_input` | Product or Architecture checkpointed one structured question round and stopped the disposable sandbox |
+| `paused` | Execution stopped with a recoverable execution, contract, or infrastructure error |
 | `completed` | The full selected workflow completed successfully |
 | `cancelled` | An operator explicitly cancelled a non-terminal run |
 
@@ -816,11 +818,11 @@ A completed or cancelled run cannot be downgraded by a late worker event or reco
 
 ### Stage states
 
-Stages are registered from the repository pipeline and move through pending, running, completed, or blocked states. Stage details retain the declared order, dependencies, mode, parallelism, and retry information.
+Stages are registered from the repository pipeline and move through pending, running, waiting for input, completed, or blocked states. Only Product and Architecture can enter waiting for input, and each can do so at most once. Stage details retain the declared order, dependencies, mode, parallelism, and retry information.
 
 ### Automatic retry
 
-A cloud stage is attempted up to three times. Between attempts, Agent Harness persists the failure, resets the stage to pending, uploads the journal, and retries from durable state. A context cancellation or structured QA repair request does not consume ordinary retries in the same way.
+A cloud stage is attempted up to three times. Between attempts, Agent Harness persists the failure, resets the stage to pending, uploads the journal, and retries from durable state. A context cancellation, structured QA repair request, or valid Product/Architecture input request does not consume ordinary retries in the same way. A request from any other stage, or a second request round, is rejected immediately as a contract violation rather than retried as a question.
 
 After the final failed attempt, the run pauses.
 
@@ -912,6 +914,7 @@ Select a run to view:
 - Pipeline DAG, execution order, dependencies, modes, and parallelism.
 - Logical ticket state, dependencies, Linear link, and commit SHA.
 - Local journal artifacts and published Notion artifacts.
+- Open or answered input requests, channel deliveries, and accepted responses.
 
 ### Usage telemetry
 
@@ -932,13 +935,19 @@ The estimate uses the checked-in model pricing table. Codex authenticated throug
 
 The activity feed can show all runs or the selected run. Command and file-edit activities use distinct cards with action state, duration, command or repository-relative paths, event type, and timestamp. The dashboard keeps the most recent activity readable and refreshes run details as events arrive.
 
-The **Runs** view is intentionally read-only. Use the CLI to submit input, resume, cancel, reconcile, export, or change run or repository configuration. The **Team** view is different: owners and administrators can use it to create invitations, change non-owner roles, and revoke members, invitations, or device sessions.
+The Inbox button at the top of the dashboard shows the current response count. Its list opens the relevant Run Detail, where operators can choose an option, see which choice the agent recommends, or provide an alternate free-text answer. Submitting the complete response automatically queues the checkpointed run. The rest of the **Runs** view is read-only; use the CLI for legacy paused-run input, manual resume, cancel, reconcile, export, or configuration. The **Team** view lets owners and administrators create invitations, change non-owner roles, and revoke members, invitations, or device sessions.
 
 ## 14. Clarify, resume, cancel, reconcile, and export
 
+### Answer a Product or Architecture question
+
+Open the dashboard Inbox and select the request, or reply directly beneath the matching Agent Harness question comment in Linear. UI answers require one response per question and accept either a listed choice or the free-text alternative. A Linear reply is treated as one complete free-text response bundle. The first accepted response wins across all channels, is recorded with its actor and channel, moves the Linear issue from Needs Input to In Progress, and automatically queues a fresh sandbox that restores the journal.
+
+Product and Architecture are instructed to inspect the issue and repository first, bundle all material decisions into one round, recommend an option, and avoid asking when a safe reversible assumption is available. Coder, lint, documentation, QA, pull-request, and custom downstream stages cannot wait for a user and must work from their supplied context until a terminal result.
+
 ### Update a paused run's input
 
-When a run pauses because the feature request needs clarification, write the revised request to a Markdown file and submit it:
+The legacy paused-run input endpoint remains for operator-directed recovery from an execution failure. To replace its feature request, write the revised request to a Markdown file and submit it:
 
 ```sh
 agent-harness cloud runs input <run-id> \
@@ -1019,6 +1028,7 @@ Agent Harness uses stable hidden markers for:
 - Child issue body.
 - Child progress comment.
 - Terminal summary.
+- Human-input question thread.
 
 The provider IDs and URLs returned by successful writes are checkpointed immediately. If a write fails, the pending synchronization remains recorded so recovery can search remote state before retrying.
 

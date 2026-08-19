@@ -41,6 +41,11 @@ func TestLocalUIKeepsBearerTokenServerSide(t *testing.T) {
 			t.Fatalf("runner UI is missing %q", expected)
 		}
 	}
+	for _, expected := range []string{`id="inbox-button"`, `id="inbox-badge"`, "Input inbox", "loadInbox()", "data-input-request", "Recommended", "Another answer", "/v1/input-requests/"} {
+		if !strings.Contains(root.Body.String(), expected) {
+			t.Fatalf("runner input UI is missing %q", expected)
+		}
+	}
 	if strings.Contains(root.Body.String(), "Reconnecting…") {
 		t.Fatal("routine event-stream retries should not be highlighted")
 	}

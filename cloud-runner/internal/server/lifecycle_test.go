@@ -70,11 +70,33 @@ func TestLinearParentLifecycleFollowsRunAndMergeEvents(t *testing.T) {
 		{Type: "pr.merged", Stage: "pr", Message: "merged"},
 	}
 	for _, event := range events {
+		if event.Type == "stage.completed" && event.Stage == "product" {
+			if err := memory.SetRunState(ctx, claimed.Run.ID, "running", "arch", ""); err != nil {
+				t.Fatal(err)
+			}
+			request, requestErr := memory.CreateInputRequest(ctx, model.InputRequest{RunID: claimed.Run.ID, Stage: "arch", Round: 1,
+				Summary: "Choose a boundary", Questions: []model.InputQuestion{{ID: "boundary", Prompt: "Which boundary?", AllowFreeText: true,
+					Required: true, Options: []model.InputOption{{ID: "existing", Label: "Existing", Recommended: true}, {ID: "new", Label: "New"}}}}})
+			if requestErr != nil {
+				t.Fatal(requestErr)
+			}
+			if err := server.syncLinearInputRequested(ctx, request); err != nil {
+				t.Fatal(err)
+			}
+			request, _, requestErr = memory.ResolveInputRequest(ctx, request.ID, model.InputResponse{Channel: "control_plane",
+				Answers: []model.InputAnswer{{QuestionID: "boundary", OptionID: "existing"}}})
+			if requestErr != nil {
+				t.Fatal(requestErr)
+			}
+			if err := server.syncLinearInputAnswered(ctx, request); err != nil {
+				t.Fatal(err)
+			}
+		}
 		if err := server.syncLinearLifecycleEvent(ctx, claimed.Run.ID, event); err != nil {
 			t.Fatalf("sync %s: %v", event.Type, err)
 		}
 	}
-	if strings.Join(transitions, ",") != "todo,progress,review,done" {
+	if strings.Join(transitions, ",") != "todo,progress,input,progress,review,done" {
 		t.Fatalf("unexpected lifecycle transitions: %v", transitions)
 	}
 	for _, key := range []string{"activity:run:queued", "activity:stage:product:started", "activity:stage:product:completed", "activity:run:completed", "activity:pr:merged"} {

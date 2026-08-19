@@ -248,7 +248,7 @@ Use these Linear application settings:
 | Client credentials | Off |
 | Webhooks | On |
 | Webhook URL | `https://<control-plane-domain>/webhooks/linear` |
-| Webhook resources | `Issue`, `OAuthAuthorization` |
+| Webhook resources | `Issue`, `Comment`, `OAuthAuthorization` |
 
 Temporarily add the following sealed variables to the Railway `control-plane` service:
 
@@ -266,6 +266,8 @@ railway run --service control-plane --environment production -- \
 Approve the Linear OAuth page. Verify `linear_oauth` and `linear_webhook_secret` with `agent-harness cloud auth status`, then remove all three temporary variables. The durable access and refresh tokens remain encrypted in Postgres.
 
 Repository registration idempotently creates the team-specific **Needs Input** and **For Review** states in Linear's Started category when they are absent. Existing **In Review** or **Review** states satisfy the review-state requirement and are not duplicated. The authorizing Linear member must be allowed to manage the team's workflow statuses.
+
+If the OAuth app predates human-input support, add `Comment` to its webhook resources. New manifests already subscribe to `Issue`, `Comment`, and `OAuthAuthorization`.
 
 ### E. Connect Notion
 
@@ -344,7 +346,7 @@ Every redemption creates a named member and an individually revocable device ses
 | Role | Access |
 |---|---|
 | Viewer | Read status, runs, artifacts, and the live event stream |
-| Operator | Viewer access plus run input, resume, cancel, and reconcile actions and disposable Linear issue utilities |
+| Operator | Viewer access plus Inbox responses, run input, resume, cancel, and reconcile actions and disposable Linear issue utilities |
 | Administrator | Operator access plus repositories, provider credentials, Codex slots, invitations, roles, sessions, and the authentication audit |
 | Owner | Administrator access plus the immutable installation-owner identity |
 
@@ -370,8 +372,10 @@ Open the localhost dashboard:
 agent-harness ui
 ```
 
-The UI binds to `127.0.0.1` and streams authenticated events without exposing device credentials to browser JavaScript. The **Runs** view is read-only. For owners and administrators, the **Team** view can issue one-time invitation links, change non-owner roles, revoke members, invitations, or devices, and inspect authentication history.
+The UI binds to `127.0.0.1` and streams authenticated events without exposing device credentials to browser JavaScript. Its top-level **Inbox** lists open Product and Architecture questions; operators can select the recommended or alternate choice, provide free text, and atomically queue the checkpointed run. The remaining **Runs** surface is read-only. For owners and administrators, the **Team** view can issue one-time invitation links, change non-owner roles, revoke members, invitations, or devices, and inspect authentication history.
 Selecting a pipeline run filters the event stream to that run. Run details include duration, model, token counts, and estimated API-equivalent token cost; Playwright execution in Railway sandboxes is resource-capped without reducing the number of independent ticket pipelines.
+
+Only Product and Architecture may request human input, and each may do so once. The runner uploads the journal, records the request, exits the disposable sandbox without retrying, moves Linear to **Needs Input**, and accepts the first answer from either the Inbox or a reply to the exact question thread. All later stages are prompt- and runtime-constrained from waiting for a user.
 
 Resume, cancel, or export a run:
 

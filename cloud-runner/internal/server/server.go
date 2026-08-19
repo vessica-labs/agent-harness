@@ -110,6 +110,10 @@ func (s *Server) linearWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	if strings.EqualFold(parsed.Delivery.EventType, "Comment") {
+		s.linearInputComment(w, r, parsed)
+		return
+	}
 	repository, err := s.store.FindLinearRepository(r.Context(), parsed.Delivery.WorkspaceID,
 		parsed.Delivery.TeamID, parsed.Delivery.ProjectID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -126,6 +130,20 @@ func (s *Server) linearWebhook(w http.ResponseWriter, r *http.Request) {
 		duplicate, _ := s.store.RecordIgnoredLinearDelivery(r.Context(), parsed.Delivery, repository.ID, reason)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ignored": true, "duplicate": duplicate, "reason": reason})
 		return
+	}
+	if token, tokenErr := s.linearAccessToken(r.Context()); tokenErr == nil {
+		client := s.linear(token)
+		contextCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		issue, issueErr := client.IssueContext(contextCtx, parsed.Delivery.IssueID)
+		if issueErr != nil {
+			issue, issueErr = client.Issue(contextCtx, parsed.Delivery.IssueID)
+		}
+		if issueErr == nil {
+			parsed.Delivery.SourceContext, _ = json.Marshal(map[string]any{"provider": "linear", "id": issue.ID,
+				"key": issue.Identifier, "url": issue.URL, "title": issue.Title, "description": issue.Description,
+				"comments": issue.Comments.Nodes, "attachments": issue.Attachments.Nodes})
+		}
 	}
 	result, err := s.store.AcceptLinearDelivery(r.Context(), repository, parsed.Delivery)
 	if err != nil {
@@ -198,6 +216,10 @@ func (s *Server) managementRoutes(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": id, "enabled": false})
 	case r.URL.Path == "/v1/runs" && r.Method == http.MethodGet:
 		s.listRuns(w, r)
+	case r.URL.Path == "/v1/input-requests" && r.Method == http.MethodGet:
+		s.listInputRequests(w, r)
+	case strings.HasPrefix(r.URL.Path, "/v1/input-requests/"):
+		s.inputRequestRoute(w, r)
 	case r.URL.Path == "/v1/events" && r.Method == http.MethodGet:
 		s.streamEvents(w, r)
 	case r.URL.Path == "/v1/auth-slots":
@@ -469,12 +491,20 @@ func (s *Server) runRoute(w http.ResponseWriter, r *http.Request) {
 		tickets, ticketErr := s.store.ListTickets(r.Context(), runID)
 		artifacts, artifactErr := s.store.ListArtifacts(r.Context(), runID)
 		externalSyncs, syncErr := s.store.ListExternalSyncs(r.Context(), runID)
-		if stageErr != nil || ticketErr != nil || artifactErr != nil || syncErr != nil {
-			writeError(w, http.StatusInternalServerError, errors.Join(stageErr, ticketErr, artifactErr, syncErr))
+		inputRequests, inputErr := s.store.ListInputRequests(r.Context(), model.InputRequestFilter{RunID: runID, Limit: 100})
+		inputResponses := map[string][]model.InputResponse{}
+		inputDeliveries := map[string][]model.InputDelivery{}
+		for _, request := range inputRequests {
+			inputResponses[request.ID], _ = s.store.ListInputResponses(r.Context(), request.ID)
+			inputDeliveries[request.ID], _ = s.store.ListInputDeliveries(r.Context(), request.ID)
+		}
+		if stageErr != nil || ticketErr != nil || artifactErr != nil || syncErr != nil || inputErr != nil {
+			writeError(w, http.StatusInternalServerError, errors.Join(stageErr, ticketErr, artifactErr, syncErr, inputErr))
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"run": run, "stages": stages, "tickets": tickets,
-			"artifacts": artifacts, "external_syncs": externalSyncs})
+			"artifacts": artifacts, "external_syncs": externalSyncs, "input_requests": inputRequests,
+			"input_responses": inputResponses, "input_deliveries": inputDeliveries})
 		return
 	}
 	if len(segments) != 2 {
@@ -778,6 +808,20 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 	capability := secure.Bearer(r.Header.Get("Authorization"))
 	value.Message = secure.Redact(value.Message, s.config.ManagementToken, capability)
 	value.Payload = secure.RedactJSON(value.Payload, s.config.ManagementToken, capability)
+	var inputRequest *model.InputRequest
+	if value.Type == "human_input.requested" {
+		request, requestErr := decodeInputRequestEvent(runID, value.Stage, value.Payload)
+		if requestErr != nil {
+			writeError(w, http.StatusBadRequest, requestErr)
+			return
+		}
+		request, requestErr = s.store.CreateInputRequest(r.Context(), request)
+		if requestErr != nil {
+			writeStoreError(w, requestErr)
+			return
+		}
+		inputRequest = &request
+	}
 	stored, err := s.appendEvent(r.Context(), value)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -794,7 +838,13 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 			return
 		}
 	}
-	if value.Type == "run.completed" {
+	if value.Type == "human_input.requested" && inputRequest != nil {
+		_ = s.store.PutStage(r.Context(), model.StageState{RunID: runID, Stage: value.Stage,
+			State: "waiting_for_input", Details: value.Payload, StartedAt: &stored.CreatedAt})
+		if err := s.syncLinearInputRequested(r.Context(), *inputRequest); err != nil {
+			s.logger.Error("project human input request to Linear", "run_id", runID, "request_id", inputRequest.ID, "error", err)
+		}
+	} else if value.Type == "run.completed" {
 		_ = s.store.SetRunState(r.Context(), runID, "completed", value.Stage, "")
 	} else if value.Type == "run.paused" || value.Type == "run.failed" {
 		_ = s.store.SetRunState(r.Context(), runID, "paused", value.Stage, value.Message)

@@ -398,6 +398,9 @@ func (s *Server) reconcileRunProjections(ctx context.Context, runID string) (map
 	if run.State == "running" || run.CurrentStage != "" || len(tickets) > 0 {
 		parentState = lifecycle.InProgress
 	}
+	if run.State == "awaiting_input" {
+		parentState = lifecycle.NeedsInput
+	}
 	if run.State == "completed" && allTicketsCompleted(ctx, s, runID) {
 		parentState = lifecycle.ForReview
 	}
@@ -422,6 +425,15 @@ func (s *Server) reconcileRunProjections(ctx context.Context, runID string) (map
 			return nil, err
 		}
 		linearActivities++
+	}
+	inputRequests, err := s.store.ListInputRequests(ctx, model.InputRequestFilter{RunID: runID, Status: "open", Limit: 10})
+	if err != nil {
+		return nil, err
+	}
+	for _, request := range inputRequests {
+		if err := s.syncLinearInputRequested(ctx, request); err != nil {
+			return nil, err
+		}
 	}
 
 	notionRestored := 0
@@ -450,7 +462,7 @@ func (s *Server) reconcileRunProjections(ctx context.Context, runID string) (map
 		}
 	}
 	return map[string]any{"ok": true, "linear_issues_updated": linearUpdated,
-		"linear_activities_updated": linearActivities, "notion_pages_restored": notionRestored}, nil
+		"linear_activities_updated": linearActivities, "input_requests_updated": len(inputRequests), "notion_pages_restored": notionRestored}, nil
 }
 
 func (s *Server) linearAccessToken(ctx context.Context) (string, error) {

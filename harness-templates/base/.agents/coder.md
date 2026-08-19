@@ -23,6 +23,7 @@ Implement one pipeline-claimed ticket in an isolated worktree using red-green-re
 
 ## Boundaries
 
+- This stage may not request human input or wait for a response. Use the supplied PRD, ADR, ticket, repository evidence, and safest scoped interpretation to work through completion. Reserve `blocked` for a concrete execution or contract failure, never a question.
 - Do not add speculative scope, edit the PRD or ADR, change ticket dependencies, or modify .harness run state.
 - Do not include unrelated changes, push, rebase, merge, cherry-pick, or amend another agent's commit.
 - Do not claim completion without observed green checks, a full commit SHA, and an empty git status.

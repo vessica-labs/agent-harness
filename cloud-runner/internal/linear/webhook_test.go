@@ -66,3 +66,17 @@ func TestVerifyUsesDocumentedBodyTimestampFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestParseCommentReply(t *testing.T) {
+	now := time.Now()
+	body := []byte(`{"action":"create","type":"Comment","organizationId":"org-1","actor":{"id":"user-1","name":"Taylor","type":"user"},"data":{"id":"reply-1","issueId":"issue-1","parentId":"question-comment","body":"Choose the recommended option."}}`)
+	headers := signedHeaders(body, "s", now)
+	headers.Set(HeaderEvent, "Comment")
+	parsed, err := Parse(headers, body, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.ParentCommentID != "question-comment" || parsed.ActorID != "user-1" || parsed.CommentBody == "" {
+		t.Fatalf("bad comment parse: %+v", parsed)
+	}
+}
