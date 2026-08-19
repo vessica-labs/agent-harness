@@ -8,7 +8,7 @@ For the complete product, setup, workflow, operations, security, recovery, and C
 
 - `harness-templates/base` — canonical `.harness` and `.agents` bootstrap files.
 - `plugins/agent-harness` — Codex skills for setup, cloud onboarding, execution, and inspection.
-- `cloud-runner` — one Go binary for the Railway control plane, isolated workers, local management CLI, and read-only monitor.
+- `cloud-runner` — one Go binary for the Railway control plane, isolated workers, local management CLI, and localhost dashboard.
 - `.agents/plugins/marketplace.json` — the repository marketplace used to install the Codex plugin.
 - `tests` — plugin, template, pipeline, and architecture-lint verification.
 
@@ -203,7 +203,7 @@ agent-harness cloud team initialize --name "Your name" --device "Your laptop"
 agent-harness cloud whoami
 ```
 
-The bootstrap token is then rejected by ordinary APIs. The CLI stores this device's rotating session in the operating-system keychain with a mode-0600 file fallback.
+The bootstrap token is accepted only by the one-time owner-initialization endpoint and is rejected by ordinary APIs. Initialization creates the installation's permanent owner identity and this device's revocable session. The current release does not transfer or promote installation ownership. The CLI stores the rotating session in the operating-system keychain with a mode-0600 file fallback.
 
 Do not continue until the deployment reaches `SUCCESS` and both endpoints respond successfully:
 
@@ -307,6 +307,37 @@ agent-harness cloud auth status
 
 The trigger label must match `.harness/config.yaml`. Do not add it to a real issue until all credentials, Codex slots, health checks, and repository registration are green.
 
+### H. Add and administer teammates
+
+The owner or an administrator can create a single-use invitation for a viewer, operator, or administrator:
+
+```sh
+agent-harness cloud team invite \
+  --role operator \
+  --label "Teammate" \
+  --expires 1h
+```
+
+Send the complete link through a secure channel. The invitation secret is stored in the URL fragment, is not sent when the landing page loads, and is returned only when the invitation is created. Links expire after one use; their lifetime can be between one minute and seven days.
+
+The recipient joins from their own device:
+
+```sh
+agent-harness cloud join 'https://<control-plane-domain>/join#invite=...' \
+  --name "Teammate" \
+  --device "Work laptop"
+agent-harness cloud whoami
+```
+
+Every redemption creates a named member and an individually revocable device session. Use the CLI or the dashboard's **Team** view to inspect members, invitations, sessions, and authentication audit events. Administrators can change any non-owner member among the viewer, operator, and administrator roles, or revoke a member, invitation, or device session without rotating anyone else's credentials.
+
+| Role | Access |
+|---|---|
+| Viewer | Read status, runs, artifacts, and the live event stream |
+| Operator | Viewer access plus run input, resume, cancel, and reconcile actions and disposable Linear issue utilities |
+| Administrator | Operator access plus repositories, provider credentials, Codex slots, invitations, roles, sessions, and the authentication audit |
+| Owner | Administrator access plus the immutable installation-owner identity |
+
 ## Run and monitor
 
 ### Automatic cloud execution
@@ -323,13 +354,13 @@ agent-harness cloud runs input <run-id> --file clarified-request.md
 agent-harness cloud runs reconcile <run-id>
 ```
 
-Open the local read-only dashboard:
+Open the localhost dashboard:
 
 ```sh
 agent-harness ui
 ```
 
-The UI binds to `127.0.0.1` and streams authenticated events without exposing device credentials to browser JavaScript. Its Team view can issue one-time invitation links, change roles, revoke members or devices, and inspect authentication history.
+The UI binds to `127.0.0.1` and streams authenticated events without exposing device credentials to browser JavaScript. The **Runs** view is read-only. For owners and administrators, the **Team** view can issue one-time invitation links, change non-owner roles, revoke members, invitations, or devices, and inspect authentication history.
 Selecting a pipeline run filters the event stream to that run. Run details include duration, model, token counts, and estimated API-equivalent token cost; Playwright execution in Railway sandboxes is resource-capped without reducing the number of independent ticket pipelines.
 
 Resume, cancel, or export a run:
@@ -361,8 +392,9 @@ Named stages run exactly those stages in pipeline order. An unfinished run resum
 - Each source issue has one permanent claim and one resumable cloud run.
 - Sandboxes are disposable; Postgres journals and pushed integration branches are recovery authorities.
 - Pull requests are drafts and are never merged automatically.
-- Management and event endpoints require short-lived, role-scoped member access; only health checks, the signed Linear webhook, the join page, invitation redemption, and token rotation are public.
-- Team invitations are single-use and expire by default after one hour. Access tokens last 15 minutes, refresh tokens rotate, and replay revokes the device session.
+- Management and event endpoints require short-lived, role-scoped member access. The only non-member routes are health checks, the signed Linear webhook, the inert join page, one-time bootstrap initialization, invitation redemption, and token rotation; initialization still requires the bootstrap bearer.
+- Team invitations are single-use, expire after one hour by default, and may be configured for no more than seven days. Access tokens last 15 minutes and device refresh tokens last 30 days. The CLI refreshes and rotates them automatically; replay of the previous refresh token revokes that device session.
+- Revoking a member revokes all of that member's device sessions. Revoking a single session or logging out affects only that device. The bootstrap owner cannot be demoted or revoked, and owner transfer is not supported in this release.
 
 ## Development
 

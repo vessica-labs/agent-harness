@@ -517,7 +517,7 @@ agent-harness cloud team initialize --name "Your name" --device "Your laptop"
 agent-harness cloud whoami
 ```
 
-After initialization, the bootstrap token is rejected by ordinary API endpoints.
+The bootstrap bearer is accepted only by this one-time initialization endpoint and is rejected by ordinary API endpoints. Initialization creates the installation's permanent owner identity and the first revocable device session. The owner cannot be demoted or revoked, and this release does not support transferring ownership or promoting another member to owner.
 
 Do not connect providers until Railway reports a successful deployment and both health endpoints pass.
 
@@ -918,7 +918,7 @@ The estimate uses the checked-in model pricing table. Codex authenticated throug
 
 The activity feed can show all runs or the selected run. Command and file-edit activities use distinct cards with action state, duration, command or repository-relative paths, event type, and timestamp. The dashboard keeps the most recent activity readable and refreshes run details as events arrive.
 
-The dashboard is intentionally read-only. Use the CLI to submit input, resume, cancel, reconcile, export, or change configuration.
+The **Runs** view is intentionally read-only. Use the CLI to submit input, resume, cancel, reconcile, export, or change run or repository configuration. The **Team** view is different: owners and administrators can use it to create invitations, change non-owner roles, and revoke members, invitations, or device sessions.
 
 ## 14. Clarify, resume, cancel, reconcile, and export
 
@@ -1212,43 +1212,92 @@ The control plane stores the GitHub App identity. For a worker, it mints a repos
 
 Each sandbox receives a signed, expiring capability scoped to one run. The capability authorizes only that run's internal event, journal, heartbeat, auth-return, GitHub-token, and synchronization operations.
 
-### Team sessions, management API, and UI
+### Bootstrap and installation ownership
 
-Each person and device receives an individually revocable session. Access tokens expire after 15 minutes. Refresh tokens rotate on use; reuse of an older refresh token revokes that device session. The local profile stores the control-plane URL separately from its credentials. On macOS, credentials are stored in Keychain when available; the fallback credential file is created with mode `0600`.
+`HARNESS_MANAGEMENT_TOKEN` is a one-time installation bootstrap bearer, not a shared operator credential. `agent-harness railway init` stores it in the initial local profile. After the first successful deployment, `cloud team initialize` sends it only to `/auth/v1/initialize`, atomically creates the owner and first device session, and replaces the local bootstrap credential with rotating device credentials.
 
-Viewer, operator, admin, and owner roles are enforced for every management request. The final owner cannot be removed or demoted. Owners and administrators can create one-use invitations, change roles, and revoke a member, invitation, or device without rotating everyone else's credentials.
+The bootstrap bearer is never accepted by ordinary `/v1/*` management or event endpoints. Initialization can succeed only once. The resulting owner has administrator capabilities and is also the permanent installation anchor: the owner cannot be demoted or revoked, invitations cannot grant the owner role, and this release has no ownership-transfer or owner-promotion command.
 
-The dashboard binds only to loopback and proxies authenticated calls server-side. The browser never receives device credentials.
+### Roles and authorization
 
-### Public endpoints
+Every `/v1/*` request is authenticated as an active member and device session, then checked against the route's minimum role.
 
-Only these control-plane endpoints are public:
+| Role | Capabilities |
+|---|---|
+| `viewer` | Read control-plane status, identity, runs, run artifacts, and the replayable event stream; log out the current device |
+| `operator` | Viewer capabilities plus submit clarified run input, resume, cancel, and reconcile runs, and create or archive disposable Linear issues |
+| `admin` | Operator capabilities plus manage repositories, provider credentials, Codex authentication slots, invitations, non-owner roles, members, device sessions, and authentication audit history |
+| `owner` | Administrator capabilities plus the immutable installation-owner identity |
 
-- `/healthz`
-- `/readyz`
-- `/webhooks/linear`
-- `/join` (the invitation secret remains in the URL fragment and is not sent to the server)
-- `/auth/v1/invitations/redeem`
-- `/auth/v1/token`
+Authorization failures return `403` and are appended to the authentication audit. Invalid, expired, logged-out, or revoked sessions return `401`.
 
-### Add a teammate
+### Invitations and joining
 
-An owner or administrator creates a one-hour, one-use link:
+An owner or administrator creates a one-time invitation for a viewer, operator, or administrator:
 
 ```sh
-agent-harness cloud team invite --role operator --label "Teammate" --expires 1h
+agent-harness cloud team invite \
+  --role operator \
+  --label "Teammate" \
+  --expires 1h
 ```
 
-The teammate can paste the complete link into Codex and ask it to join, or run:
+The default lifetime is one hour. The server accepts lifetimes from one minute through seven days. The label is administrative context, not an identity check. The invitation secret is returned only in the newly created join URL; invitation listings never return it.
+
+Send the complete link through a secure channel. The secret is stored in the URL fragment, so opening `/join` does not send it to the control plane or in an HTTP referrer. The landing page is inert except for rendering a local CLI command and uses a restrictive content-security policy.
+
+The teammate can paste the complete link into Codex and ask it to join, or run on their own device:
 
 ```sh
-agent-harness cloud join 'https://<control-plane>/join#invite=...'
+agent-harness cloud join 'https://<control-plane>/join#invite=...' \
+  --name "Teammate" \
+  --device "Work laptop"
 agent-harness cloud whoami
 ```
 
-Review and revoke access with `cloud team members`, `cloud team sessions`, `cloud team audit`, and `cloud team revoke member|session|invite <id>`.
+`cloud join` accepts HTTPS links, with HTTP permitted only for `localhost` or `127.0.0.1`. It extracts the fragment locally, redeems the invitation once, and saves a new named member and device session. Used, expired, invalid, or revoked invitations return `410 Gone` and cannot be replayed.
 
-The Linear webhook requires a valid signature and recent timestamp. Duplicate deliveries are persisted and safely deduplicated.
+### Device sessions and token rotation
+
+Each successful initialization or invitation redemption creates a device session with a 15-minute access token and a 30-day refresh token. The CLI refreshes within one minute of access-token expiry and retries once after an authenticated request receives `401`. Every refresh rotates both tokens and persists the new pair before continuing. Reuse of the immediately previous refresh token is treated as replay and revokes the whole device session.
+
+The local profile stores the control-plane URL separately from credentials. On macOS, credentials are stored in Keychain when available. The fallback credential file and profile metadata use mode `0600`. `AGENT_HARNESS_URL` plus `AGENT_HARNESS_TOKEN` provide a non-refreshing automation override and both variables must be present.
+
+`agent-harness cloud logout` revokes the current device session and removes its locally stored credential. An administrator can revoke one device without affecting another member, or revoke a non-owner member to revoke all sessions associated with that member. Revoking a pending invitation prevents redemption without rotating existing sessions.
+
+Review the current state with:
+
+```sh
+agent-harness cloud whoami
+agent-harness cloud team members
+agent-harness cloud team sessions
+agent-harness cloud team audit
+agent-harness cloud team revoke member <member-id>
+agent-harness cloud team revoke session <session-id>
+agent-harness cloud team revoke invite <invitation-id>
+```
+
+The audit includes initialization, invitation creation and redemption, token refresh and detected replay, logout and administrative revocation, role changes, and denied authorization attempts.
+
+### Dashboard authentication and administration
+
+The dashboard binds only to loopback. Its local backend reads and refreshes the selected profile, attaches access tokens to proxied REST and SSE calls, and never sends access or refresh tokens to browser JavaScript. The **Runs** view is read-only. The **Team** view lets owners and administrators create and revoke invitations, change non-owner roles, revoke members or device sessions, and inspect authentication history.
+
+### Non-member endpoints
+
+The control plane exposes only these routes without a member access token:
+
+| Endpoint | Protection and purpose |
+|---|---|
+| `GET /healthz` | Unauthenticated process liveness |
+| `GET /readyz` | Unauthenticated readiness, including Postgres reachability |
+| `POST /webhooks/linear` | Linear signature and recent timestamp; duplicate deliveries are persisted and deduplicated |
+| `GET /join` | Inert, no-referrer landing page; the invitation secret stays in the URL fragment |
+| `POST /auth/v1/initialize` | One-time bootstrap bearer; creates the owner and first device session |
+| `POST /auth/v1/invitations/redeem` | Single-use invitation secret; creates a member and device session |
+| `POST /auth/v1/token` | Active refresh token; rotates the device credential pair |
+
+All `/v1/*` routes require a role-scoped member access token. All `/internal/v1/*` worker routes require a separate, expiring run capability.
 
 ### Event redaction
 
@@ -1313,21 +1362,23 @@ agent-harness ui [--address 127.0.0.1:7373] [--profile NAME]
 agent-harness cloud profile set --url URL --token TOKEN [--name NAME]
 ```
 
-`profile set` establishes the initial URL and bootstrap token. `cloud team initialize` or `cloud join` replaces it with a rotating device session. `AGENT_HARNESS_URL` and `AGENT_HARNESS_TOKEN` remain available as non-refreshing automation overrides.
+`profile set` establishes a named URL and bearer credential. During first installation that credential is the bootstrap token, usable only by `cloud team initialize`; initialization replaces it with the owner's rotating device session. `cloud join` creates or replaces the selected profile with the invited member's rotating device session. `AGENT_HARNESS_URL` and `AGENT_HARNESS_TOKEN` remain available as non-refreshing automation overrides.
 
 ### Team access
 
 ```text
-agent-harness cloud team initialize [--name NAME] [--device DEVICE]
+agent-harness cloud team initialize [--name NAME] [--device DEVICE] [--profile NAME]
 agent-harness cloud team invite [--role operator] [--label LABEL] [--expires 1h]
 agent-harness cloud team members
 agent-harness cloud team sessions
 agent-harness cloud team audit
 agent-harness cloud team revoke <member|session|invite> ID
-agent-harness cloud join INVITE_LINK [--name NAME] [--device DEVICE]
+agent-harness cloud join INVITE_LINK [--name NAME] [--device DEVICE] [--profile NAME]
 agent-harness cloud whoami
-agent-harness cloud logout
+agent-harness cloud logout [--profile NAME]
 ```
+
+`team initialize` is a one-time bootstrap exchange. `team invite` accepts `viewer`, `operator`, or `admin`; its expiry defaults to one hour and the server limits it to seven days. `join` requires HTTPS except for localhost development. Team listing, invitation, role, session, and audit operations require `admin` or `owner`. `whoami` and `logout` are available to every member role.
 
 ### Authentication
 
@@ -1492,7 +1543,7 @@ The helper also recognizes agent-result contracts for the optional `docs` role a
 | Variable | Required | Purpose |
 |---|---:|---|
 | `DATABASE_URL` | Yes | Railway Postgres connection |
-| `HARNESS_MANAGEMENT_TOKEN` | Yes | Bearer token for management API and SSE |
+| `HARNESS_MANAGEMENT_TOKEN` | Yes | One-time bootstrap bearer for first-owner initialization; never a shared `/v1/*` credential |
 | `HARNESS_CREDENTIAL_KEY` | Yes | AES-256-GCM key for encrypted credentials |
 | `HARNESS_PUBLIC_URL` | With scheduler | Public HTTPS control-plane origin |
 | `HARNESS_RAILWAY_PROJECT` | With scheduler | Sandbox project ID |
@@ -1531,7 +1582,7 @@ Remove temporary Railway variables after the encrypted credential is verified.
 | Variable | Purpose |
 |---|---|
 | `AGENT_HARNESS_URL` | Override stored control-plane URL |
-| `AGENT_HARNESS_TOKEN` | Override stored management token |
+| `AGENT_HARNESS_TOKEN` | Override the stored bearer with a non-refreshing access token |
 
 Both must be present for the override to take effect.
 
@@ -1541,18 +1592,47 @@ The scheduler injects run IDs, issue IDs, repository coordinates, feature input,
 
 ## 24. API and events
 
-The management API, worker API, schemas, authentication rules, endpoint examples, and event protocol will be published as a separate **API Reference** MDX route. Use the CLI for ordinary operation.
+Use the CLI for ordinary operation. `cloud-runner/openapi.yaml` is the machine-readable public contract; the implemented server routes and authorization guard remain the runtime authority.
 
-At a high level:
+### Authentication endpoints
 
-- Health and readiness endpoints are unauthenticated.
-- Linear webhook intake is signature-authenticated.
-- `/v1/*` management endpoints require a short-lived member access token and enforce the route's minimum role.
-- `/internal/v1/*` worker endpoints require an expiring capability scoped to one run.
-- `/v1/events` is a replayable Server-Sent Events stream using an `after` cursor or `Last-Event-ID`.
-- Run detail includes the run, stage DAG, tickets, artifacts, and external synchronization records.
+| Method and path | Authentication | Result |
+|---|---|---|
+| `POST /auth/v1/initialize` | One-time bootstrap bearer | Atomically create the owner and first device session; returns `409` after initialization |
+| `POST /auth/v1/invitations/redeem` | Unused invitation secret in the JSON body | Consume the invitation and create a member plus device session; invalid lifecycle state returns `410` |
+| `POST /auth/v1/token` | Active refresh token in the JSON body | Rotate the access and refresh tokens; detected replay returns `401` and revokes the session |
+| `GET /v1/whoami` | Viewer or higher | Return the authenticated member, role, and redacted device session |
+| `POST /v1/logout` | Viewer or higher | Revoke the current device session |
 
-The future API route should be generated or checked against both `cloud-runner/openapi.yaml` and the implemented server routes so that CLI-only additions such as reconciliation do not drift from the reference.
+### Team-administration endpoints
+
+The following routes require `admin` or `owner`:
+
+| Method and path | Purpose |
+|---|---|
+| `GET /v1/team/members` | List active and revoked members |
+| `PATCH /v1/team/members/{member_id}` | Change a non-owner role to viewer, operator, or administrator |
+| `DELETE /v1/team/members/{member_id}` | Revoke a non-owner member and all associated sessions |
+| `GET /v1/team/invitations` | List invitation history without secrets |
+| `POST /v1/team/invitations` | Return a one-time invitation URL exactly once |
+| `DELETE /v1/team/invitations/{invitation_id}` | Revoke an invitation |
+| `GET /v1/team/sessions` | List redacted device sessions; optionally filter by `member_id` |
+| `DELETE /v1/team/sessions/{session_id}` | Revoke one device session |
+| `GET /v1/team/audit` | Return authentication and authorization audit events |
+
+### Management role boundaries
+
+- Viewer: `GET /v1/status`, `GET /v1/runs`, `GET /v1/runs/*`, `GET /v1/events`, `GET /v1/whoami`, and `POST /v1/logout`.
+- Operator: every viewer route plus non-GET `/v1/runs/*` actions and Linear issue create/archive utilities.
+- Administrator and owner: every management route, including repositories, provider connection records, Codex slots, and team administration.
+
+All `/v1/*` calls require a short-lived member bearer. Missing or invalid credentials return `401`; an insufficient role returns `403` and creates an audit event. `/internal/v1/*` worker endpoints use a different signed, expiring capability scoped to one run.
+
+### Events and run detail
+
+`GET /v1/events` is a replayable Server-Sent Events stream. Use the `after` query parameter or `Last-Event-ID`; optionally filter by `run_id`. Event objects use protocol `agent-harness.events/v1` and include global and run-local sequence numbers. Run detail includes the run, stage DAG, tickets, artifacts, and external synchronization records.
+
+The CLI automatically refreshes expiring device access tokens and reconnects the event stream from the last observed event ID. Browser clients should use the localhost dashboard proxy so device credentials never enter browser JavaScript.
 
 ## 25. Self-hosting and operations
 
@@ -1632,10 +1712,19 @@ Run:
 ```sh
 agent-harness cloud profile set \
   --url https://<control-plane-domain> \
-  --token '<management-token>'
+  --token '<bootstrap-or-member-access-token>'
 ```
 
 If the token is missing from Keychain or the protected fallback file, set the profile again.
+
+### A team invitation or device session fails
+
+- `410 Gone` while joining means the invitation is invalid, expired, revoked, or already used. Ask an owner or administrator for a new link; do not try to reuse the old one.
+- `401` on an ordinary command means the access token and refresh path could not establish an active session. The device may have been logged out, revoked, expired after 30 days without renewal, or revoked after refresh-token replay. Rejoin with a new invitation.
+- `403` means the session is valid but its viewer or operator role does not authorize the action. Check `cloud whoami` and ask an administrator for the minimum necessary role.
+- If only one device should lose access, revoke its session. Revoking a member invalidates all sessions associated with that member.
+
+Use `cloud team audit` from an administrator session to distinguish expiration, logout, administrative revocation, replay detection, and denied authorization. Do not replace `HARNESS_MANAGEMENT_TOKEN`: it is only the initialization bootstrap and cannot restore ordinary member access.
 
 ### Railway Sandboxes are unavailable
 
@@ -1753,12 +1842,15 @@ Export refuses to overwrite `.harness/runs/<run-id>`. Inspect and preserve an ex
 | Feature/issue input | Non-empty and under 64 KiB |
 | Default request limit | 4 MiB |
 | Default journal limit | 100 MiB |
-| Dashboard | Localhost-only and read-only |
+| Dashboard | Localhost-only; Runs view is read-only, Team view performs authorized access administration |
+| Team ownership | One permanent bootstrap owner; no owner transfer or promotion in this release |
+| Invitations | Single-use; one hour by default, configurable from one minute through seven days |
+| Device tokens | 15-minute access token and rotating 30-day refresh token |
 | Notion | Required for cloud repository registration |
 | Pull requests | Draft; never automatically merged |
 | Target deployments | Not performed by the default workflow |
 | Usage cost | API-equivalent estimate, not a billing statement |
-| Management API documentation | Separate MDX route |
+| Management API documentation | OpenAPI contract plus the user-guide and MDX API reference |
 
 ## 28. Glossary
 
