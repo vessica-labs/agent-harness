@@ -16,6 +16,12 @@ import (
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/model"
 )
 
+// Railway Sandboxes place a conservative safe-git wrapper in /usr/local/bin.
+// Codex subprocesses should keep that guardrail, while the deterministic
+// orchestrator needs the distro Git binary for controlled worktree lifecycle
+// operations that the wrapper intentionally denies.
+const orchestratorGit = "/usr/bin/git"
+
 type Runner struct {
 	config          Config
 	client          *controlClient
@@ -201,20 +207,20 @@ func (r *Runner) checkout(ctx context.Context) error {
 			return err
 		}
 		url := fmt.Sprintf("https://github.com/%s/%s.git", r.config.GitHubOwner, r.config.GitHubRepo)
-		if _, err := runCommand(ctx, r.config.Workspace, gitEnvironment(r.githubToken), "git", "clone", "--origin", "origin", url, r.repo); err != nil {
+		if _, err := runCommand(ctx, r.config.Workspace, gitEnvironment(r.githubToken), orchestratorGit, "clone", "--origin", "origin", url, r.repo); err != nil {
 			return fmt.Errorf("clone repository: %w", err)
 		}
 	}
-	if _, err := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), "git", "fetch", "origin", "--prune"); err != nil {
+	if _, err := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), orchestratorGit, "fetch", "origin", "--prune"); err != nil {
 		return err
 	}
-	_, remoteErr := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), "git", "ls-remote", "--exit-code", "--heads", "origin", branch)
+	_, remoteErr := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), orchestratorGit, "ls-remote", "--exit-code", "--heads", "origin", branch)
 	if remoteErr == nil {
 		r.branchPublished = true
-		_, err := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), "git", "checkout", "-B", branch, "origin/"+branch)
+		_, err := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), orchestratorGit, "checkout", "-B", branch, "origin/"+branch)
 		return err
 	}
-	_, err := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), "git", "checkout", "-B", branch, "origin/"+r.config.BaseBranch)
+	_, err := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), orchestratorGit, "checkout", "-B", branch, "origin/"+r.config.BaseBranch)
 	return err
 }
 
@@ -327,11 +333,11 @@ func (r *Runner) runSingleStage(ctx context.Context, stage Stage) error {
 		extra = "The orchestrator will merge every required_owned_paths and additional_dependencies entry from a ready result into the product ticket plan and validate the revised DAG. Treat those declared additions as applied. The downstream docs stage owns documentation artifacts and the downstream QA stage owns Playwright acceptance evidence, so do not block solely because coder tickets omit those paths."
 	}
 	if stage.ID == "pr" {
-		_, fetchErr := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), "git", "fetch", "origin", r.config.BaseBranch)
+		_, fetchErr := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), orchestratorGit, "fetch", "origin", r.config.BaseBranch)
 		if fetchErr != nil {
 			return fetchErr
 		}
-		_, rebaseErr := runCommand(ctx, r.repo, sanitizedEnvironment(""), "git", "rebase", "origin/"+r.config.BaseBranch)
+		_, rebaseErr := runCommand(ctx, r.repo, sanitizedEnvironment(""), orchestratorGit, "rebase", "origin/"+r.config.BaseBranch)
 		if rebaseErr != nil {
 			extra = "A rebase is in progress. Resolve it safely and verify the result. Do not push or call GitHub; the orchestrator owns those credentials. Return status blocked with the proposed PR title and complete body so the orchestrator can finish delivery."
 		} else {
@@ -403,7 +409,7 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 		for _, item := range wave {
 			worktree := filepath.Join(r.config.Workspace, "worktrees", safeName(item.Key))
 			_ = os.RemoveAll(worktree)
-			if _, err := runCommand(ctx, r.repo, sanitizedEnvironment(""), "git", "worktree", "add", "--detach", worktree, "HEAD"); err != nil {
+			if _, err := runCommand(ctx, r.repo, sanitizedEnvironment(""), orchestratorGit, "worktree", "add", "--detach", worktree, "HEAD"); err != nil {
 				return err
 			}
 			worktreeRun := runDirectory(worktree, r.pipeline, r.config.RunID)
@@ -476,8 +482,8 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 				r.cleanupWorktrees(ctx, runs)
 				return current.err
 			}
-			if _, err := runCommand(ctx, r.repo, sanitizedEnvironment(""), "git", "cherry-pick", current.commit); err != nil {
-				_, _ = runCommand(context.WithoutCancel(ctx), r.repo, sanitizedEnvironment(""), "git", "cherry-pick", "--abort")
+			if _, err := runCommand(ctx, r.repo, sanitizedEnvironment(""), orchestratorGit, "cherry-pick", current.commit); err != nil {
+				_, _ = runCommand(context.WithoutCancel(ctx), r.repo, sanitizedEnvironment(""), orchestratorGit, "cherry-pick", "--abort")
 				r.cleanupWorktrees(ctx, runs)
 				return fmt.Errorf("integrate ticket %s: %w", current.ticket.Key, err)
 			}
@@ -509,12 +515,12 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 
 func (r *Runner) cleanupWorktrees(ctx context.Context, runs []*ticketRun) {
 	for _, current := range runs {
-		_, _ = runCommand(context.WithoutCancel(ctx), r.repo, sanitizedEnvironment(""), "git", "worktree", "remove", "--force", current.worktree)
+		_, _ = runCommand(context.WithoutCancel(ctx), r.repo, sanitizedEnvironment(""), orchestratorGit, "worktree", "remove", "--force", current.worktree)
 	}
 }
 
 func (r *Runner) finalizePullRequest(ctx context.Context, resultPath string) error {
-	status, err := runCommand(ctx, r.repo, sanitizedEnvironment(""), "git", "status", "--porcelain")
+	status, err := runCommand(ctx, r.repo, sanitizedEnvironment(""), orchestratorGit, "status", "--porcelain")
 	if err != nil {
 		return err
 	}
@@ -523,12 +529,12 @@ func (r *Runner) finalizePullRequest(ctx context.Context, resultPath string) err
 	}
 	wasPublished := r.branchPublished
 	if wasPublished {
-		head, err := runCommand(ctx, r.repo, sanitizedEnvironment(""), "git", "rev-parse", "--short=12", "HEAD")
+		head, err := runCommand(ctx, r.repo, sanitizedEnvironment(""), orchestratorGit, "rev-parse", "--short=12", "HEAD")
 		if err != nil {
 			return err
 		}
 		r.deliveryBranch = r.baseRunBranchName() + "-pr-" + strings.TrimSpace(string(head))
-		if _, err := runCommand(ctx, r.repo, sanitizedEnvironment(""), "git", "checkout", "-B", r.deliveryBranch); err != nil {
+		if _, err := runCommand(ctx, r.repo, sanitizedEnvironment(""), orchestratorGit, "checkout", "-B", r.deliveryBranch); err != nil {
 			return err
 		}
 		r.branchPublished = false
@@ -588,7 +594,7 @@ func (r *Runner) finalizePullRequest(ctx context.Context, resultPath string) err
 
 func (r *Runner) pushBranch(ctx context.Context) error {
 	args := []string{"push", "--set-upstream", "origin", r.branchName()}
-	_, err := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), "git", args...)
+	_, err := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), orchestratorGit, args...)
 	if err == nil {
 		r.branchPublished = true
 	}
