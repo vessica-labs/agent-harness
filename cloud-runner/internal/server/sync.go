@@ -24,11 +24,14 @@ type syncRequest struct {
 }
 
 type ticketProgress struct {
-	Key       string   `json:"key"`
-	State     string   `json:"status"`
-	Owner     string   `json:"owner"`
-	Commit    string   `json:"commit"`
-	DependsOn []string `json:"depends_on"`
+	Key         string   `json:"key"`
+	State       string   `json:"status"`
+	Owner       string   `json:"owner"`
+	Commit      string   `json:"commit"`
+	DependsOn   []string `json:"depends_on"`
+	ProviderID  string   `json:"provider_id,omitempty"`
+	ProviderKey string   `json:"provider_key,omitempty"`
+	ProviderURL string   `json:"provider_url,omitempty"`
 }
 
 type syncArtifact struct {
