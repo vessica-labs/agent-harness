@@ -1,6 +1,6 @@
 ---
 name: onboard-cloud-runner
-description: Set up or repair the Agent Harness Railway cloud runner from first login through repository registration. Use when a user asks to deploy the control plane, enable automatic Linear issue execution, connect Railway, GitHub, Linear, Notion, or Codex authentication, create a cloud profile, register a repository, or finish an interrupted cloud onboarding.
+description: Set up, join, or repair the Agent Harness Railway cloud runner from first login through repository registration and team access. Use when a user asks to deploy the control plane, join one from an invitation link, invite or revoke teammates, enable automatic Linear issue execution, connect Railway, GitHub, Linear, Notion, or Codex authentication, create a cloud profile, register a repository, or finish an interrupted cloud onboarding.
 ---
 
 # Onboard Cloud Runner
@@ -16,6 +16,18 @@ Drive the onboarding to a verified, registered repository. Perform safe steps di
 - Show the target Railway project, service, environment, GitHub repositories, Linear team/project, Notion parent, and trigger label before registering the repository.
 - Never add the trigger label to a real Linear issue during onboarding.
 - Never claim a provider is ready from configuration alone. Run the checks specified below.
+- Never repeat, log, or inspect a magic-link fragment. Pass a user-provided invitation link directly to `agent-harness cloud join`, then discard it from working context.
+
+## Join an existing team
+
+When the user supplies an Agent Harness invitation link, this is a short path—not a deployment:
+
+1. Confirm `agent-harness` is installed.
+2. Run `agent-harness cloud join '<invite-link>'`. Let the CLI derive the control-plane URL, redeem the one-time secret, and store this device's rotating session in the OS keychain.
+3. Run `agent-harness cloud whoami` and report the member name, role, and device. Never print stored access or refresh tokens.
+4. Run `agent-harness cloud runs list` to verify the granted access. Stop if the role does not permit the requested action.
+
+The link is single-use and normally expires in one hour. Ask an administrator for a new link if redemption reports that it is expired, revoked, or already used.
 
 ## 1. Inspect
 
@@ -49,6 +61,25 @@ agent-harness railway deploy --project <project-id> --environment production \
 ```
 
 6. Wait for terminal Railway success. Verify `/healthz`, `/readyz`, the local cloud profile, and Sandbox listing before provider setup.
+
+## 2A. Initialize team access
+
+Immediately after the first successful deployment, exchange the generated bootstrap token for the first named owner session:
+
+```text
+agent-harness cloud team initialize --name <owner-name> --device <device-name>
+agent-harness cloud whoami
+```
+
+This is an atomic one-time operation. After it succeeds, `HARNESS_MANAGEMENT_TOKEN` is rejected by ordinary APIs. The CLI stores a short-lived access token and rotating refresh token in the OS keychain, with a mode-0600 fallback. Do not proceed with provider setup until `whoami` reports the owner role.
+
+To add teammates later, the owner or an administrator runs:
+
+```text
+agent-harness cloud team invite --role operator --label <recipient> --expires 1h
+```
+
+Send the returned magic link privately. Use `cloud team members`, `cloud team sessions`, and `cloud team revoke member|session|invite <id>` to review or revoke access.
 
 ## 3. Connect GitHub
 

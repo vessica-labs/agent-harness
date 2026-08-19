@@ -18,6 +18,87 @@ paths:
       responses:
         "200": {description: Delivery accepted, deduplicated, or intentionally ignored}
         "401": {description: Invalid signature or timestamp}
+  /join:
+    get:
+      description: Inert no-referrer landing page for a fragment-based one-time invitation
+      responses:
+        "200": {description: Join instructions; the URL fragment is never sent to the server}
+  /auth/v1/initialize:
+    post:
+      description: Atomically exchange the Railway bootstrap bearer for the first owner device session
+      security: [{bootstrapAuth: []}]
+      responses:
+        "201": {description: Owner and rotating device credentials created}
+        "409": {description: Team access is already initialized}
+  /auth/v1/invitations/redeem:
+    post:
+      description: Consume a one-time invitation and create a named member and device session
+      responses:
+        "201": {description: Invitation redeemed}
+        "410": {description: Invitation is invalid, expired, revoked, or already used}
+  /auth/v1/token:
+    post:
+      description: Rotate a device refresh token and mint a 15-minute access token
+      responses:
+        "200": {description: Rotated device credentials}
+        "401": {description: Invalid token or replay; replay revokes the device session}
+  /v1/whoami:
+    get:
+      security: [{bearerAuth: []}]
+      responses:
+        "200": {description: Authenticated member, role, and device session}
+  /v1/logout:
+    post:
+      security: [{bearerAuth: []}]
+      responses:
+        "200": {description: Current device session revoked}
+  /v1/team/members:
+    get:
+      security: [{bearerAuth: []}]
+      responses:
+        "200": {description: Team members; admin role required}
+  /v1/team/members/{member_id}:
+    patch:
+      security: [{bearerAuth: []}]
+      parameters: [{name: member_id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "200": {description: Role updated; final owner cannot be demoted}
+    delete:
+      security: [{bearerAuth: []}]
+      parameters: [{name: member_id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "200": {description: Member and all device sessions revoked}
+  /v1/team/invitations:
+    get:
+      security: [{bearerAuth: []}]
+      responses:
+        "200": {description: Invitation history without invitation secrets}
+    post:
+      security: [{bearerAuth: []}]
+      responses:
+        "201": {description: Single-use magic link returned exactly once}
+  /v1/team/invitations/{invitation_id}:
+    delete:
+      security: [{bearerAuth: []}]
+      parameters: [{name: invitation_id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "200": {description: Invitation revoked}
+  /v1/team/sessions:
+    get:
+      security: [{bearerAuth: []}]
+      responses:
+        "200": {description: Redacted device session inventory}
+  /v1/team/sessions/{session_id}:
+    delete:
+      security: [{bearerAuth: []}]
+      parameters: [{name: session_id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "200": {description: Device session revoked}
+  /v1/team/audit:
+    get:
+      security: [{bearerAuth: []}]
+      responses:
+        "200": {description: Authentication and authorization audit events}
   /v1/status:
     get:
       security: [{bearerAuth: []}]
@@ -147,3 +228,8 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
+      description: Short-lived member access token with viewer, operator, admin, or owner authorization
+    bootstrapAuth:
+      type: http
+      scheme: bearer
+      description: One-time installation bootstrap token

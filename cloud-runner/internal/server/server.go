@@ -45,6 +45,10 @@ func New(config Config, values store.Store, box *secure.Box, broker *events.Brok
 	mux.HandleFunc("GET /healthz", server.health)
 	mux.HandleFunc("GET /readyz", server.readiness)
 	mux.HandleFunc("POST /webhooks/linear", server.linearWebhook)
+	mux.HandleFunc("GET /join", server.joinPage)
+	mux.HandleFunc("POST /auth/v1/initialize", server.initializeTeam)
+	mux.HandleFunc("POST /auth/v1/invitations/redeem", server.redeemInvitation)
+	mux.HandleFunc("POST /auth/v1/token", server.refreshToken)
 	mux.Handle("/v1/", server.management(http.HandlerFunc(server.managementRoutes)))
 	mux.Handle("/internal/v1/", http.HandlerFunc(server.internalRoutes))
 	server.http = &http.Server{Addr: config.Address, Handler: server.logging(mux),
@@ -132,11 +136,20 @@ func (s *Server) linearWebhook(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) management(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !secure.EqualSecret(secure.Bearer(r.Header.Get("Authorization")), s.config.ManagementToken) {
-			writeError(w, http.StatusUnauthorized, errors.New("management bearer token required"))
+		token := secure.Bearer(r.Header.Get("Authorization"))
+		principal, err := s.store.AuthenticateSession(r.Context(), s.box.TokenDigest("access", token), time.Now().UTC())
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, errors.New("valid team session required"))
 			return
 		}
-		next.ServeHTTP(w, r)
+		if !roleAllows(principal.Member.Role, requiredRole(r)) {
+			_ = s.store.AppendAuthAudit(r.Context(), model.AuthAudit{MemberID: principal.Member.ID, SessionID: principal.Session.ID, ActorID: principal.Member.ID, Action: "authorization.denied", TargetID: r.Method + " " + r.URL.Path})
+			writeError(w, http.StatusForbidden, errors.New("this action is not allowed for your team role"))
+			return
+		}
+		ctx := context.WithValue(r.Context(), principalContextKey{}, principal)
+		ctx = context.WithValue(ctx, accessDigestContextKey{}, s.box.TokenDigest("access", token))
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -144,6 +157,12 @@ func (s *Server) managementRoutes(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/status":
 		s.status(w, r)
+	case r.URL.Path == "/v1/whoami" && r.Method == http.MethodGet:
+		s.whoami(w, r)
+	case r.URL.Path == "/v1/logout" && r.Method == http.MethodPost:
+		s.logout(w, r)
+	case strings.HasPrefix(r.URL.Path, "/v1/team/"):
+		s.teamRoutes(w, r)
 	case r.URL.Path == "/v1/repositories" && r.Method == http.MethodGet:
 		s.listRepositories(w, r)
 	case r.URL.Path == "/v1/repositories" && r.Method == http.MethodPost:
@@ -603,6 +622,12 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-updates:
 		case <-keepalive.C:
+			digest, _ := r.Context().Value(accessDigestContextKey{}).([]byte)
+			if _, err := s.store.AuthenticateSession(r.Context(), digest, time.Now().UTC()); err != nil {
+				fmt.Fprint(w, "event: auth_revoked\ndata: {\"message\":\"team session expired or revoked\"}\n\n")
+				flusher.Flush()
+				return
+			}
 			fmt.Fprint(w, ": keepalive\n\n")
 			flusher.Flush()
 		}

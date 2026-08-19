@@ -63,4 +63,20 @@ type Store interface {
 	LeaseAuthSlots(context.Context, string, int, time.Duration) ([]model.AuthSlot, error)
 	ReleaseAuthSlot(context.Context, string, string, []byte, string) error
 	QuarantineAuthSlot(context.Context, string, string, string) error
+
+	GetInstallationState(context.Context) (model.InstallationState, error)
+	InitializeTeam(context.Context, model.Member, model.MemberSession, model.AuthAudit) error
+	CreateInvitation(context.Context, model.Invitation, model.AuthAudit) error
+	ListInvitations(context.Context, bool) ([]model.Invitation, error)
+	RevokeInvitation(context.Context, string, string, model.AuthAudit) error
+	RedeemInvitation(context.Context, []byte, model.Member, model.MemberSession, model.AuthAudit) error
+	AuthenticateSession(context.Context, []byte, time.Time) (model.Principal, error)
+	RefreshSession(context.Context, []byte, []byte, []byte, time.Time, time.Time) (model.SessionRefreshResult, error)
+	ListMembers(context.Context) ([]model.Member, error)
+	UpdateMemberRole(context.Context, string, string, string, model.AuthAudit) error
+	RevokeMember(context.Context, string, string, string, model.AuthAudit) error
+	ListMemberSessions(context.Context, string) ([]model.MemberSession, error)
+	RevokeMemberSession(context.Context, string, string, string, model.AuthAudit) error
+	AppendAuthAudit(context.Context, model.AuthAudit) error
+	ListAuthAudit(context.Context, int) ([]model.AuthAudit, error)
 }

@@ -23,6 +23,8 @@ With the server running, set the local profile and open the read-only dashboard:
 
 ```text
 agent-harness cloud profile set --url http://127.0.0.1:8080 --token "$HARNESS_MANAGEMENT_TOKEN"
+agent-harness cloud team initialize --name "Local owner" --device "Development machine"
+agent-harness cloud whoami
 agent-harness ui
 ```
 
@@ -32,13 +34,34 @@ agent-harness ui
 2. Create one single-replica control-plane service and one Postgres service.
 3. Publish a tagged release, then create the versioned worker checkpoint with `agent-harness railway upgrade --project <id> --version vX.Y.Z`.
 4. Run `agent-harness railway init` to install sealed service configuration and a local profile.
-5. Add independent Codex login slots and GitHub, Linear, and Notion service credentials with `agent-harness cloud auth`.
-6. Register each repository with `agent-harness cloud repo add`.
-7. Deploy with `agent-harness railway deploy` and wait for terminal Railway success plus `/healthz` and `/readyz`.
+5. Run `agent-harness cloud team initialize` once to exchange the bootstrap token for the first owner device session.
+6. Add independent Codex login slots and GitHub, Linear, and Notion service credentials with `agent-harness cloud auth`.
+7. Register each repository with `agent-harness cloud repo add`.
+8. Deploy with `agent-harness railway deploy` and wait for terminal Railway success plus `/healthz` and `/readyz`.
 
 `railway init` first checks that the target environment can list Sandboxes. It stops with an enablement instruction when the feature is unavailable. The Railway CLI and Codex CLI versions are pinned in the image and checkpoint builder.
 
 ## Service authentication
+
+### Team access
+
+The generated `HARNESS_MANAGEMENT_TOKEN` is a bootstrap secret, not a shared daily credential. The first operator exchanges it exactly once:
+
+```text
+agent-harness cloud team initialize --name "Owner name" --device "Owner laptop"
+```
+
+Each teammate then receives a one-time magic link and claims an individual device session:
+
+```text
+agent-harness cloud team invite --role operator --label "Teammate" --expires 1h
+agent-harness cloud join 'https://control-plane.example/join#invite=...'
+agent-harness cloud whoami
+```
+
+Access tokens expire after 15 minutes and are refreshed by a rotating device credential stored in the OS keychain. Reusing an old refresh token revokes the entire device session. Owners and administrators can inspect and revoke access with `cloud team members`, `cloud team sessions`, `cloud team audit`, and `cloud team revoke member|session|invite <id>`. The final owner cannot be removed or demoted.
+
+Roles are deliberately small: viewers can inspect runs and events; operators can also control runs and create test issues; administrators manage repositories, integrations, Codex slots, invitations, roles, and sessions; owners additionally anchor installation ownership and recovery.
 
 Configure independent Codex sessions with `agent-harness cloud auth codex add --slots 3`. The command performs a three-process safety check against the first session. A safe session may serve the YAML-declared coder concurrency; otherwise the scheduler atomically leases one independent auth slot per concurrent Codex process.
 
@@ -79,7 +102,7 @@ agent-harness ui
 
 The issue commands use the control plane's encrypted Linear app credential; provider tokens never enter the local process. `issue create` applies the repository's configured trigger label so Linear's signed webhook remains the only run-claim path. `issue archive` refuses to archive a source issue or canonical child already mapped to a durable run.
 
-The UI binds only to `127.0.0.1`. Its backend injects the bearer token into proxied REST and SSE calls; browser JavaScript never receives the credential.
+The UI binds only to `127.0.0.1`. Its backend refreshes and injects the current device access token into proxied REST and SSE calls; browser JavaScript never receives either device credential. The Team view manages invitations, roles, members, devices, and the authentication audit history.
 
 Selecting a run filters the SSE feed to that run; “Show all runs” reconnects to the global feed. Each run reports execution duration, explicit Codex model, model calls, input/cached-input/output/reasoning token counts, and an estimated API-equivalent cost. The estimate uses the checked-in pricing table for the selected model; ChatGPT-based Codex authentication may be billed through a plan rather than as API token charges.
 
@@ -87,14 +110,14 @@ Cloud workers cap Playwright at two workers by default. This preserves browser p
 
 Linear child issues start in the team's Todo workflow state, move to In Progress when their coder wave is claimed, and move to Done after their commit is integrated. The parent moves to In Progress when the ticket plan is published and to Done only after all durable child tickets complete. Workflow IDs are discovered from the configured team rather than hard-coded.
 
-The public surface is deliberately small: signed Linear webhook intake and health checks. Management and SSE endpoints require the generated bearer token. Worker endpoints require a short-lived capability scoped to one run. The localhost UI proxies that token server-side and never stores it in browser JavaScript.
+The public surface is deliberately small: signed Linear webhook intake, health checks, the inert join page, invitation redemption, and token rotation. Management and SSE endpoints require a short-lived member access token and enforce viewer/operator/admin/owner roles. Worker endpoints require a separate short-lived capability scoped to one run. The localhost UI proxies device authentication server-side and never stores it in browser JavaScript.
 
 ## Required service variables
 
 | Variable | Purpose |
 |---|---|
 | `DATABASE_URL` | Railway Postgres connection |
-| `HARNESS_MANAGEMENT_TOKEN` | Management API bearer token |
+| `HARNESS_MANAGEMENT_TOKEN` | One-time first-owner bootstrap token; rejected by ordinary APIs after team initialization |
 | `HARNESS_CREDENTIAL_KEY` | AES-256-GCM key for provider and Codex credentials |
 | `HARNESS_PUBLIC_URL` | Public control-plane origin |
 | `HARNESS_RAILWAY_PROJECT` | Sandbox project ID |

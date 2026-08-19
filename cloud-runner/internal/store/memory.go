@@ -11,19 +11,25 @@ import (
 )
 
 type Memory struct {
-	mu           sync.Mutex
-	repositories map[string]model.Repository
-	deliveries   map[string]model.DeliveryResult
-	claims       map[string]string
-	runs         map[string]model.Run
-	events       []model.Event
-	artifacts    map[string]model.Artifact
-	credentials  map[string]model.Credential
-	authSlots    map[string]model.AuthSlot
-	externalSync map[string]model.ExternalSync
-	stages       map[string]model.StageState
-	tickets      map[string]model.TicketState
-	seq          int64
+	mu             sync.Mutex
+	repositories   map[string]model.Repository
+	deliveries     map[string]model.DeliveryResult
+	claims         map[string]string
+	runs           map[string]model.Run
+	events         []model.Event
+	artifacts      map[string]model.Artifact
+	credentials    map[string]model.Credential
+	authSlots      map[string]model.AuthSlot
+	externalSync   map[string]model.ExternalSync
+	stages         map[string]model.StageState
+	tickets        map[string]model.TicketState
+	installation   model.InstallationState
+	members        map[string]model.Member
+	invitations    map[string]model.Invitation
+	memberSessions map[string]model.MemberSession
+	authAudit      []model.AuthAudit
+	auditSeq       int64
+	seq            int64
 }
 
 func NewMemory() *Memory {
@@ -34,6 +40,8 @@ func NewMemory() *Memory {
 		credentials: make(map[string]model.Credential), authSlots: make(map[string]model.AuthSlot),
 		externalSync: make(map[string]model.ExternalSync),
 		stages:       make(map[string]model.StageState), tickets: make(map[string]model.TicketState),
+		members: make(map[string]model.Member), invitations: make(map[string]model.Invitation),
+		memberSessions: make(map[string]model.MemberSession),
 	}
 }
 

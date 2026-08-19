@@ -2,6 +2,8 @@
 
 Agent Harness is a lean, editable issue-to-pull-request coding workflow for Codex. Each repository owns its context documents, agent definitions, deterministic pipeline YAML, architecture rules, and durable run journal. The optional Railway cloud runner watches labeled Linear issues and executes the same repository-owned workflow in isolated sandboxes.
 
+For the complete product, setup, workflow, operations, security, recovery, and CLI documentation, see the [Agent Harness User Guide](docs/AGENT_HARNESS_USER_GUIDE.md).
+
 ## What is included
 
 - `harness-templates/base` — canonical `.harness` and `.agents` bootstrap files.
@@ -56,7 +58,7 @@ Download a release binary from [GitHub Releases](https://github.com/vessica-labs
 mkdir -p "$HOME/.local/bin"
 
 # Apple Silicon macOS
-curl -fL https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.11/agent-harness-darwin-arm64 \
+curl -fL https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.22/agent-harness-darwin-arm64 \
   -o "$HOME/.local/bin/agent-harness"
 
 # Intel macOS: use agent-harness-darwin-amd64
@@ -120,7 +122,7 @@ Railway control-plane service ---- Railway Postgres
 
 The default limit is three simultaneous source-ticket runs. One source Linear issue has one permanent claim and one resumable run ID. A completed pipeline creates a draft GitHub pull request and never merges automatically.
 
-The localhost UI connects through an authenticated local proxy. The browser never receives the cloud management token.
+The localhost UI connects through an authenticated local proxy. The browser never receives the device access or refresh token.
 
 ## Guided cloud setup
 
@@ -177,7 +179,7 @@ export RAILWAY_API_TOKEN='<enter privately>'
 agent-harness railway upgrade \
   --project <railway-project-id> \
   --environment production \
-  --version v0.1.0-rc.11
+  --version v0.1.0-rc.22
 
 agent-harness railway init \
   --project <railway-project-id> \
@@ -185,7 +187,7 @@ agent-harness railway init \
   --service control-plane \
   --postgres-service Postgres \
   --url https://<control-plane-domain> \
-  --checkpoint agent-harness-worker-0.1.0-rc.11
+  --checkpoint agent-harness-worker-0.1.0-rc.22
 
 agent-harness railway deploy \
   --project <railway-project-id> \
@@ -194,7 +196,14 @@ agent-harness railway deploy \
   --path /path/to/agent-harness/cloud-runner
 ```
 
-`railway init` generates the management token and encryption key, seals them in Railway, connects Postgres, and stores the local management token in the operating-system keychain with a mode-0600 file fallback.
+`railway init` generates a one-time bootstrap token and encryption key, seals them in Railway, connects Postgres, and stores the bootstrap credential locally. After the first successful deployment, initialize the team owner:
+
+```sh
+agent-harness cloud team initialize --name "Your name" --device "Your laptop"
+agent-harness cloud whoami
+```
+
+The bootstrap token is then rejected by ordinary APIs. The CLI stores this device's rotating session in the operating-system keychain with a mode-0600 file fallback.
 
 Do not continue until the deployment reaches `SUCCESS` and both endpoints respond successfully:
 
@@ -320,7 +329,7 @@ Open the local read-only dashboard:
 agent-harness ui
 ```
 
-The UI binds to `127.0.0.1` and streams authenticated events without exposing the management token to browser JavaScript.
+The UI binds to `127.0.0.1` and streams authenticated events without exposing device credentials to browser JavaScript. Its Team view can issue one-time invitation links, change roles, revoke members or devices, and inspect authentication history.
 Selecting a pipeline run filters the event stream to that run. Run details include duration, model, token counts, and estimated API-equivalent token cost; Playwright execution in Railway sandboxes is resource-capped without reducing the number of independent ticket pipelines.
 
 Resume, cancel, or export a run:
@@ -352,7 +361,8 @@ Named stages run exactly those stages in pipeline order. An unfinished run resum
 - Each source issue has one permanent claim and one resumable cloud run.
 - Sandboxes are disposable; Postgres journals and pushed integration branches are recovery authorities.
 - Pull requests are drafts and are never merged automatically.
-- Management and event endpoints require a bearer token; only health checks and the signed Linear webhook are public.
+- Management and event endpoints require short-lived, role-scoped member access; only health checks, the signed Linear webhook, the join page, invitation redemption, and token rotation are public.
+- Team invitations are single-use and expire by default after one hour. Access tokens last 15 minutes, refresh tokens rotate, and replay revokes the device session.
 
 ## Development
 

@@ -96,7 +96,7 @@ func railwayInit(ctx context.Context, args []string) error {
 	if err := saveProfile(*profileName, *publicURL, managementToken); err != nil {
 		return err
 	}
-	fmt.Printf("Configured Railway service and local cloud profile %q.\n", *profileName)
+	fmt.Printf("Configured Railway service and bootstrap profile %q. After the first successful deployment, run: agent-harness cloud team initialize\n", *profileName)
 	return nil
 }
 

@@ -23,6 +23,18 @@ import (
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/store"
 )
 
+func testTeamToken(t *testing.T, memory *store.Memory, box *secure.Box, role string) string {
+	t.Helper()
+	token := "team-access-" + role
+	now := time.Now().UTC()
+	member := model.Member{ID: "member-" + role, DisplayName: "Test " + role, Role: role, State: "active", CreatedAt: now}
+	session := model.MemberSession{ID: "session-" + role, MemberID: member.ID, DeviceName: "test", AccessTokenHash: box.TokenDigest("access", token), RefreshTokenHash: box.TokenDigest("refresh", "refresh-"+role), AccessExpiresAt: now.Add(time.Hour), RefreshExpiresAt: now.Add(24 * time.Hour), CreatedAt: now}
+	if err := memory.InitializeTeam(context.Background(), member, session, model.AuthAudit{Action: "test.initialized"}); err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
 func TestSignedWebhookClaimsOnceAndManagementIsProtected(t *testing.T) {
 	ctx := context.Background()
 	memory := store.NewMemory()
@@ -35,6 +47,7 @@ func TestSignedWebhookClaimsOnceAndManagementIsProtected(t *testing.T) {
 	box, _ := secure.NewBox(key)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server := New(Config{ManagementToken: "management-secret", LinearWebhookSecret: "webhook-secret", MaxRequestBytes: 1 << 20, MaxJournalBytes: 1 << 20, WebhookTolerance: time.Minute}, memory, box, events.NewBroker(), logger)
+	teamToken := testTeamToken(t, memory, box, "owner")
 	host := httptest.NewServer(server.Handler())
 	defer host.Close()
 	body := []byte(`{"action":"create","type":"Issue","organizationId":"org","data":{"id":"issue-1","identifier":"ENG-1","title":"Build","description":"It","url":"https://linear.app/ENG-1","team":{"id":"team"},"labels":[{"name":"agent-harness"}]}}`)
@@ -103,7 +116,7 @@ func TestSignedWebhookClaimsOnceAndManagementIsProtected(t *testing.T) {
 	}
 	response.Body.Close()
 	req, _ := http.NewRequest(http.MethodGet, host.URL+"/v1/runs", nil)
-	req.Header.Set("Authorization", "Bearer management-secret")
+	req.Header.Set("Authorization", "Bearer "+teamToken)
 	response, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -124,10 +137,12 @@ func TestSignedWebhookClaimsOnceAndManagementIsProtected(t *testing.T) {
 func TestEmptyRunListEncodesAsArray(t *testing.T) {
 	key, _ := secure.GenerateKey()
 	box, _ := secure.NewBox(key)
+	memory := store.NewMemory()
 	server := New(Config{ManagementToken: "management-secret", MaxRequestBytes: 1 << 20, MaxJournalBytes: 1 << 20},
-		store.NewMemory(), box, events.NewBroker(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+		memory, box, events.NewBroker(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	teamToken := testTeamToken(t, memory, box, "owner")
 	request := httptest.NewRequest(http.MethodGet, "/v1/runs", nil)
-	request.Header.Set("Authorization", "Bearer management-secret")
+	request.Header.Set("Authorization", "Bearer "+teamToken)
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
 	var result map[string]any
@@ -190,9 +205,10 @@ func TestPausedRunInputCanBeClarifiedBeforeResume(t *testing.T) {
 	box, _ := secure.NewBox(key)
 	server := New(Config{ManagementToken: "management-secret", MaxRequestBytes: 1 << 20, MaxJournalBytes: 1 << 20},
 		memory, box, events.NewBroker(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	teamToken := testTeamToken(t, memory, box, "owner")
 	body := bytes.NewBufferString(`{"feature_request":"public message board MVP"}`)
 	request := httptest.NewRequest(http.MethodPost, "/v1/runs/"+claimed.Run.ID+"/input", body)
-	request.Header.Set("Authorization", "Bearer management-secret")
+	request.Header.Set("Authorization", "Bearer "+teamToken)
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
@@ -212,14 +228,16 @@ func TestPausedRunInputCanBeClarifiedBeforeResume(t *testing.T) {
 func TestEventStreamFlushesHeadersImmediately(t *testing.T) {
 	key, _ := secure.GenerateKey()
 	box, _ := secure.NewBox(key)
+	memory := store.NewMemory()
 	server := New(Config{ManagementToken: "management-secret", MaxRequestBytes: 1 << 20, MaxJournalBytes: 1 << 20},
-		store.NewMemory(), box, events.NewBroker(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+		memory, box, events.NewBroker(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	teamToken := testTeamToken(t, memory, box, "owner")
 	host := httptest.NewServer(server.Handler())
 	defer host.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, host.URL+"/v1/events", nil)
-	request.Header.Set("Authorization", "Bearer management-secret")
+	request.Header.Set("Authorization", "Bearer "+teamToken)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatalf("event stream did not establish immediately: %v", err)

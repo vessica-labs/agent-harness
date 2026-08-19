@@ -133,12 +133,12 @@ func runUI(ctx context.Context, args []string) error {
 			profile = args[index]
 		}
 	}
-	url, token, err := loadProfile(profile)
+	client, err := newAPI(profile)
 	if err != nil {
 		return err
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	local, err := ui.New(address, url, token, logger)
+	local, err := ui.NewDynamic(address, client.url, client.currentToken, logger)
 	if err != nil {
 		return err
 	}

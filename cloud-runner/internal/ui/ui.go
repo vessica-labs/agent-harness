@@ -25,12 +25,16 @@ type Server struct {
 }
 
 func New(address, cloudURL, token string, logger *slog.Logger) (*Server, error) {
+	return NewDynamic(address, cloudURL, func(context.Context) (string, error) { return token, nil }, logger)
+}
+
+func NewDynamic(address, cloudURL string, tokenSource func(context.Context) (string, error), logger *slog.Logger) (*Server, error) {
 	target, err := url.Parse(strings.TrimRight(cloudURL, "/"))
 	if err != nil || target.Scheme == "" || target.Host == "" {
 		return nil, errors.New("a valid cloud control-plane URL is required")
 	}
-	if token == "" {
-		return nil, errors.New("a cloud management token is required")
+	if tokenSource == nil {
+		return nil, errors.New("a cloud team session is required")
 	}
 	if address == "" {
 		address = "127.0.0.1:7373"
@@ -48,6 +52,7 @@ func New(address, cloudURL, token string, logger *slog.Logger) (*Server, error) 
 			request.URL.Path = "/v1/events"
 		}
 		request.Host = target.Host
+		token, _ := tokenSource(request.Context())
 		request.Header.Set("Authorization", "Bearer "+token)
 		request.Header.Del("Cookie")
 	}
@@ -64,7 +69,9 @@ func New(address, cloudURL, token string, logger *slog.Logger) (*Server, error) 
 		w.Write(indexHTML)
 	})
 	mux.Handle("GET /assets/", http.FileServer(http.FS(assetFS)))
-	mux.Handle("GET /api/", proxy)
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+		mux.Handle(method+" /api/", proxy)
+	}
 	mux.Handle("GET /events", proxy)
 	return &Server{logger: logger, http: &http.Server{Addr: address, Handler: mux,
 		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 75 * time.Second}}, nil

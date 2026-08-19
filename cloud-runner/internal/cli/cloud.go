@@ -14,13 +14,14 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/model"
 )
 
 func runCloud(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("cloud requires profile, repo, runs, or auth")
+		return errors.New("cloud requires profile, join, whoami, logout, team, repo, runs, or auth")
 	}
 	switch args[0] {
 	case "profile":
@@ -31,9 +32,233 @@ func runCloud(ctx context.Context, args []string) error {
 		return cloudRuns(ctx, args[1:])
 	case "auth":
 		return cloudAuth(ctx, args[1:])
+	case "team":
+		return cloudTeam(ctx, args[1:])
+	case "join":
+		return cloudJoin(ctx, args[1:])
+	case "whoami":
+		return cloudWhoami(ctx)
+	case "logout":
+		return cloudLogout(ctx, args[1:])
 	default:
 		return fmt.Errorf("unknown cloud command %q", args[0])
 	}
+}
+
+func defaultIdentity() (string, string) {
+	name := strings.TrimSpace(os.Getenv("USER"))
+	if name == "" {
+		name = "Agent Harness user"
+	}
+	device, err := os.Hostname()
+	if err != nil || device == "" {
+		device = "Codex device"
+	}
+	return name, device
+}
+
+func cloudJoin(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("cloud join", flag.ContinueOnError)
+	profileName := flags.String("profile", "default", "local profile name")
+	defaultName, defaultDevice := defaultIdentity()
+	name := flags.String("name", defaultName, "team display name")
+	device := flags.String("device", defaultDevice, "device name")
+	inviteLink := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		inviteLink, args = args[0], args[1:]
+	}
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if inviteLink == "" && flags.NArg() == 1 {
+		inviteLink = flags.Arg(0)
+	}
+	if inviteLink == "" || flags.NArg() > 0 {
+		return errors.New("usage: agent-harness cloud join <invite-link> [--name NAME] [--device DEVICE]")
+	}
+	parsed, err := url.Parse(inviteLink)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return errors.New("invite link must be a complete HTTPS URL")
+	}
+	if parsed.Scheme != "https" && parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" {
+		return errors.New("invite link must use HTTPS")
+	}
+	token := parsed.Query().Get("invite")
+	if token == "" {
+		fragment, parseErr := url.ParseQuery(parsed.Fragment)
+		if parseErr == nil {
+			token = fragment.Get("invite")
+		}
+	}
+	if token == "" {
+		return errors.New("invite link does not contain an invitation secret")
+	}
+	base := parsed.Scheme + "://" + parsed.Host
+	var result struct {
+		Tokens sessionCredentials `json:"tokens"`
+		Member model.Member       `json:"member"`
+	}
+	if err := publicAPI(ctx, base, http.MethodPost, "/auth/v1/invitations/redeem", "", map[string]string{"invite_token": token, "display_name": strings.TrimSpace(*name), "device_name": strings.TrimSpace(*device)}, &result); err != nil {
+		return err
+	}
+	if err := saveSessionProfile(*profileName, base, result.Tokens); err != nil {
+		return err
+	}
+	fmt.Printf("Joined %s as %s (%s). This device now has its own revocable session.\n", base, result.Member.DisplayName, result.Member.Role)
+	return nil
+}
+
+func cloudTeam(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return errors.New("team requires initialize, invite, members, sessions, audit, or revoke")
+	}
+	if args[0] == "initialize" {
+		flags := flag.NewFlagSet("cloud team initialize", flag.ContinueOnError)
+		profileName := flags.String("profile", "", "profile name")
+		defaultName, defaultDevice := defaultIdentity()
+		name := flags.String("name", defaultName, "owner display name")
+		device := flags.String("device", defaultDevice, "device name")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		actual, urlValue, credentials, err := loadProfileSession(*profileName)
+		if err != nil {
+			return err
+		}
+		var result struct {
+			Tokens sessionCredentials `json:"tokens"`
+			Member model.Member       `json:"member"`
+		}
+		if err := publicAPI(ctx, urlValue, http.MethodPost, "/auth/v1/initialize", credentials.AccessToken, map[string]string{"display_name": strings.TrimSpace(*name), "device_name": strings.TrimSpace(*device)}, &result); err != nil {
+			return err
+		}
+		if err := saveSessionProfile(actual, urlValue, result.Tokens); err != nil {
+			return err
+		}
+		fmt.Printf("Team access initialized. %s is the owner; the shared bootstrap token is no longer accepted for ordinary API calls.\n", result.Member.DisplayName)
+		return nil
+	}
+	client, err := newAPI("")
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "invite":
+		flags := flag.NewFlagSet("cloud team invite", flag.ContinueOnError)
+		role := flags.String("role", "operator", "viewer, operator, or admin")
+		label := flags.String("label", "", "recipient label")
+		expiry := flags.Duration("expires", time.Hour, "one-time link lifetime")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		minutes := int(expiry.Minutes())
+		if minutes < 1 {
+			return errors.New("--expires must be at least one minute")
+		}
+		var result any
+		if err := client.do(ctx, http.MethodPost, "/v1/team/invitations", map[string]any{"role": *role, "label": *label, "expires_in_minutes": minutes}, &result); err != nil {
+			return err
+		}
+		return printJSON(result)
+	case "members":
+		var result any
+		if err := client.do(ctx, http.MethodGet, "/v1/team/members", nil, &result); err != nil {
+			return err
+		}
+		return printJSON(result)
+	case "sessions":
+		var result any
+		if err := client.do(ctx, http.MethodGet, "/v1/team/sessions", nil, &result); err != nil {
+			return err
+		}
+		return printJSON(result)
+	case "audit":
+		var result any
+		if err := client.do(ctx, http.MethodGet, "/v1/team/audit", nil, &result); err != nil {
+			return err
+		}
+		return printJSON(result)
+	case "revoke":
+		if len(args) != 3 {
+			return errors.New("usage: cloud team revoke <member|session|invite> <id>")
+		}
+		var endpoint string
+		switch args[1] {
+		case "member":
+			endpoint = "/v1/team/members/"
+		case "session":
+			endpoint = "/v1/team/sessions/"
+		case "invite":
+			endpoint = "/v1/team/invitations/"
+		default:
+			return errors.New("revoke target must be member, session, or invite")
+		}
+		var result any
+		if err := client.do(ctx, http.MethodDelete, endpoint+url.PathEscape(args[2]), nil, &result); err != nil {
+			return err
+		}
+		return printJSON(result)
+	default:
+		return fmt.Errorf("unknown team command %q", args[0])
+	}
+}
+
+func cloudWhoami(ctx context.Context) error {
+	client, err := newAPI("")
+	if err != nil {
+		return err
+	}
+	var result any
+	if err := client.do(ctx, http.MethodGet, "/v1/whoami", nil, &result); err != nil {
+		return err
+	}
+	return printJSON(result)
+}
+func cloudLogout(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("cloud logout", flag.ContinueOnError)
+	profileName := flags.String("profile", "", "profile name")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	client, err := newAPI(*profileName)
+	if err != nil {
+		return err
+	}
+	var result any
+	if err := client.do(ctx, http.MethodPost, "/v1/logout", map[string]any{}, &result); err != nil {
+		return err
+	}
+	name := client.profileName
+	if err := deleteSecret(name); err != nil {
+		return err
+	}
+	fmt.Println("This device has been logged out and its cloud session revoked.")
+	return nil
+}
+
+func publicAPI(ctx context.Context, base, method, path, bearer string, input, output any) error {
+	body, err := json.Marshal(input)
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(base, "/")+path, strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	if bearer != "" {
+		request.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		message, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		return fmt.Errorf("control plane returned %d: %s", response.StatusCode, strings.TrimSpace(string(message)))
+	}
+	return json.NewDecoder(response.Body).Decode(output)
 }
 
 func cloudProfile(args []string) error {

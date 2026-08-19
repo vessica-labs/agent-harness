@@ -54,6 +54,20 @@ func GenerateKey() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(value), nil
 }
 
+func RandomToken() (string, error) {
+	value := make([]byte, 32)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(value), nil
+}
+
+func (b *Box) TokenDigest(purpose, token string) []byte {
+	mac := hmac.New(sha256.New, b.key)
+	mac.Write([]byte("token:" + purpose + ":" + token))
+	return mac.Sum(nil)
+}
+
 func decodeKey(value string) ([]byte, error) {
 	for _, decoder := range []func(string) ([]byte, error){base64.RawURLEncoding.DecodeString, base64.StdEncoding.DecodeString, hex.DecodeString} {
 		decoded, err := decoder(value)

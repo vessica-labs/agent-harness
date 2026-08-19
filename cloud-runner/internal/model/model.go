@@ -199,3 +199,70 @@ type ExternalSync struct {
 	Error       string    `json:"error,omitempty"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
+
+type InstallationState struct {
+	Initialized   bool       `json:"initialized"`
+	OwnerMemberID string     `json:"owner_member_id,omitempty"`
+	InitializedAt *time.Time `json:"initialized_at,omitempty"`
+}
+
+type Member struct {
+	ID          string     `json:"id"`
+	DisplayName string     `json:"display_name"`
+	Role        string     `json:"role"`
+	State       string     `json:"state"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	LastSeenAt  *time.Time `json:"last_seen_at,omitempty"`
+}
+
+type Invitation struct {
+	ID         string     `json:"id"`
+	Role       string     `json:"role"`
+	CreatedBy  string     `json:"created_by"`
+	Label      string     `json:"label,omitempty"`
+	SecretHash []byte     `json:"-"`
+	MaxUses    int        `json:"max_uses"`
+	UseCount   int        `json:"use_count"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	CreatedAt  time.Time  `json:"created_at"`
+	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
+	ConsumedAt *time.Time `json:"consumed_at,omitempty"`
+}
+
+type MemberSession struct {
+	ID                       string     `json:"id"`
+	MemberID                 string     `json:"member_id"`
+	DeviceName               string     `json:"device_name"`
+	AccessTokenHash          []byte     `json:"-"`
+	RefreshTokenHash         []byte     `json:"-"`
+	PreviousRefreshTokenHash []byte     `json:"-"`
+	AccessExpiresAt          time.Time  `json:"access_expires_at"`
+	RefreshExpiresAt         time.Time  `json:"refresh_expires_at"`
+	CreatedAt                time.Time  `json:"created_at"`
+	UpdatedAt                time.Time  `json:"updated_at"`
+	LastSeenAt               *time.Time `json:"last_seen_at,omitempty"`
+	RevokedAt                *time.Time `json:"revoked_at,omitempty"`
+	RevokedReason            string     `json:"revoked_reason,omitempty"`
+}
+
+type Principal struct {
+	Member  Member        `json:"member"`
+	Session MemberSession `json:"session"`
+}
+
+type SessionRefreshResult struct {
+	Principal Principal
+	Reused    bool
+}
+
+type AuthAudit struct {
+	ID        int64           `json:"id"`
+	MemberID  string          `json:"member_id,omitempty"`
+	SessionID string          `json:"session_id,omitempty"`
+	ActorID   string          `json:"actor_id,omitempty"`
+	Action    string          `json:"action"`
+	TargetID  string          `json:"target_id,omitempty"`
+	Details   json.RawMessage `json:"details,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
+}
