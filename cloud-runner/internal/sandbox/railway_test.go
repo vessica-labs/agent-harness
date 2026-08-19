@@ -3,12 +3,27 @@ package sandbox
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestWorkerBootstrapUsesDigestCacheAndReportsBootstrapFailures(t *testing.T) {
+	script := workerBootstrap("agent-harness")
+	for _, expected := range []string{"worker-binary", "HARNESS_WORKER_CACHE_HIT=1", "run.failed", "exec \"$worker\" worker"} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("bootstrap missing %q:\n%s", expected, script)
+		}
+	}
+	command := exec.Command("bash", "-n")
+	command.Stdin = strings.NewReader(script)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("bootstrap syntax: %v: %s", err, output)
+	}
+}
 
 func TestRailwayStartWorkerWaitsUntilSandboxIsRunning(t *testing.T) {
 	directory := t.TempDir()

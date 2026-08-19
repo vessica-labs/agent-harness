@@ -20,8 +20,9 @@ import (
 )
 
 type manifestConversion struct {
-	ID         int64  `json:"id"`
-	PrivateKey string `json:"pem"`
+	ID            int64  `json:"id"`
+	PrivateKey    string `json:"pem"`
+	WebhookSecret string `json:"webhook_secret"`
 }
 
 func githubManifestFlow(ctx context.Context, client *apiClient, owner, appName string) error {
@@ -42,7 +43,8 @@ func githubManifestFlow(ctx context.Context, client *apiClient, owner, appName s
 	manifest, _ := json.Marshal(map[string]any{
 		"name": appName, "url": "https://github.com/vessica-labs/agent-harness",
 		"description":  "Creates isolated Agent Harness branches and draft pull requests.",
-		"redirect_url": callback, "public": false, "default_events": []string{},
+		"redirect_url": callback, "public": false, "default_events": []string{"pull_request"},
+		"hook_attributes":     map[string]any{"url": strings.TrimRight(client.url, "/") + "/webhooks/github", "active": true},
 		"default_permissions": map[string]string{"metadata": "read", "contents": "write", "pull_requests": "write"},
 	})
 	action := "https://github.com/settings/apps/new?state=" + state
@@ -87,7 +89,8 @@ func githubManifestFlow(ctx context.Context, client *apiClient, owner, appName s
 		if value.err != nil {
 			return value.err
 		}
-		credential, _ := json.Marshal(map[string]any{"app_id": value.conversion.ID, "private_key": value.conversion.PrivateKey})
+		credential, _ := json.Marshal(map[string]any{"app_id": value.conversion.ID, "private_key": value.conversion.PrivateKey,
+			"webhook_secret": value.conversion.WebhookSecret})
 		return putCredential(ctx, client, "github_app", string(credential))
 	case <-time.After(10 * time.Minute):
 		return errors.New("GitHub App manifest flow timed out")
@@ -116,8 +119,8 @@ func convertGitHubManifest(ctx context.Context, code string) (manifestConversion
 	if err := json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&value); err != nil {
 		return value, err
 	}
-	if value.ID == 0 || value.PrivateKey == "" {
-		return value, errors.New("GitHub manifest conversion omitted app credentials")
+	if value.ID == 0 || value.PrivateKey == "" || value.WebhookSecret == "" {
+		return value, errors.New("GitHub manifest conversion omitted app credentials or webhook secret")
 	}
 	return value, nil
 }

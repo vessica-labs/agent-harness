@@ -10,3 +10,14 @@ func TestVersionStringUsesBuildVersion(t *testing.T) {
 		t.Fatalf("versionString() = %q, want %q", got, want)
 	}
 }
+
+func TestEnvStringMap(t *testing.T) {
+	t.Setenv("HARNESS_TEST_MAP", `{"repo-1":"checkpoint-1"}`)
+	if got := envStringMap("HARNESS_TEST_MAP")["repo-1"]; got != "checkpoint-1" {
+		t.Fatalf("checkpoint=%q", got)
+	}
+	t.Setenv("HARNESS_TEST_MAP", "not-json")
+	if got := envStringMap("HARNESS_TEST_MAP"); len(got) != 0 {
+		t.Fatalf("invalid map=%v", got)
+	}
+}

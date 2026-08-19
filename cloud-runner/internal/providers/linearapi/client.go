@@ -44,6 +44,7 @@ type WorkflowState struct {
 type LifecycleStates struct {
 	Todo       WorkflowState
 	InProgress WorkflowState
+	ForReview  WorkflowState
 	Done       WorkflowState
 }
 
@@ -91,6 +92,10 @@ type Ticket struct {
 
 func New(token string) *Client {
 	return &Client{token: token, endpoint: "https://api.linear.app/graphql", http: &http.Client{Timeout: 20 * time.Second}}
+}
+
+func NewWithEndpoint(token, endpoint string) *Client {
+	return &Client{token: token, endpoint: endpoint, http: &http.Client{Timeout: 20 * time.Second}}
 }
 
 func (c *Client) RegistrationContext(ctx context.Context) (RegistrationContext, error) {
@@ -195,10 +200,15 @@ func (c *Client) LifecycleStates(ctx context.Context, teamID string) (LifecycleS
 	}
 	states := LifecycleStates{
 		Todo: choose("unstarted", "Todo", "To Do"), InProgress: choose("started", "In Progress", "Doing"),
-		Done: choose("completed", "Done", "Completed"),
+		ForReview: choose("started", "For Review", "In Review", "Review"),
+		Done:      choose("completed", "Done", "Completed"),
 	}
-	if states.Todo.ID == "" || states.InProgress.ID == "" || states.Done.ID == "" {
-		return LifecycleStates{}, errors.New("Linear team must have unstarted, started, and completed workflow states")
+	if states.ForReview.ID == states.InProgress.ID && !strings.EqualFold(strings.TrimSpace(states.ForReview.Name), "For Review") &&
+		!strings.EqualFold(strings.TrimSpace(states.ForReview.Name), "In Review") && !strings.EqualFold(strings.TrimSpace(states.ForReview.Name), "Review") {
+		states.ForReview = WorkflowState{}
+	}
+	if states.Todo.ID == "" || states.InProgress.ID == "" || states.ForReview.ID == "" || states.Done.ID == "" {
+		return LifecycleStates{}, errors.New("Linear team must have Todo, In Progress, For Review, and Done workflow states")
 	}
 	return states, nil
 }
@@ -302,7 +312,13 @@ func (c *Client) UpsertComment(ctx context.Context, issueID, marker, body string
 				} `json:"commentUpdate"`
 			}
 			err := c.graphql(ctx, `mutation HarnessCommentUpdate($id:String!,$body:String!){commentUpdate(id:$id,input:{body:$body}){success comment{id body}}}`, map[string]any{"id": comment.ID, "body": body}, &result)
-			return result.CommentUpdate.Comment, err
+			if err != nil {
+				return Comment{}, err
+			}
+			if !result.CommentUpdate.Success || result.CommentUpdate.Comment.ID == "" {
+				return Comment{}, errors.New("Linear comment update did not succeed")
+			}
+			return result.CommentUpdate.Comment, nil
 		}
 	}
 	var result struct {
@@ -312,13 +328,19 @@ func (c *Client) UpsertComment(ctx context.Context, issueID, marker, body string
 		} `json:"commentCreate"`
 	}
 	err = c.graphql(ctx, `mutation HarnessCommentCreate($issueId:String!,$body:String!){commentCreate(input:{issueId:$issueId,body:$body}){success comment{id body}}}`, map[string]any{"issueId": issueID, "body": body}, &result)
-	return result.CommentCreate.Comment, err
+	if err != nil {
+		return Comment{}, err
+	}
+	if !result.CommentCreate.Success || result.CommentCreate.Comment.ID == "" {
+		return Comment{}, errors.New("Linear comment creation did not succeed")
+	}
+	return result.CommentCreate.Comment, nil
 }
 
-func (c *Client) UpsertChild(ctx context.Context, parentID, teamID, existingID, marker string, ticket Ticket) (Issue, error) {
+func (c *Client) UpsertChild(ctx context.Context, parentID, teamID, existingID, marker string, ticket Ticket, state WorkflowState) (Issue, error) {
 	description := ticketDescription(marker, ticket)
 	if existingID != "" {
-		return c.updateChild(ctx, existingID, ticket.Title, description)
+		return c.updateChild(ctx, existingID, ticket.Title, description, state)
 	}
 	parent, err := c.Issue(ctx, parentID)
 	if err != nil {
@@ -326,7 +348,7 @@ func (c *Client) UpsertChild(ctx context.Context, parentID, teamID, existingID, 
 	}
 	for _, child := range parent.Children.Nodes {
 		if strings.Contains(child.Description, marker) {
-			return c.updateChild(ctx, child.ID, ticket.Title, description)
+			return c.updateChild(ctx, child.ID, ticket.Title, description, state)
 		}
 	}
 	var result struct {
@@ -335,19 +357,31 @@ func (c *Client) UpsertChild(ctx context.Context, parentID, teamID, existingID, 
 			Issue   Issue `json:"issue"`
 		} `json:"issueCreate"`
 	}
-	err = c.graphql(ctx, `mutation HarnessIssueCreate($teamId:String!,$parentId:String!,$title:String!,$description:String!){issueCreate(input:{teamId:$teamId,parentId:$parentId,title:$title,description:$description}){success issue{id identifier title url description}}}`, map[string]any{"teamId": teamID, "parentId": parentID, "title": ticket.Title, "description": description}, &result)
-	return result.IssueCreate.Issue, err
+	err = c.graphql(ctx, `mutation HarnessIssueCreate($teamId:String!,$parentId:String!,$title:String!,$description:String!,$stateId:String!){issueCreate(input:{teamId:$teamId,parentId:$parentId,title:$title,description:$description,stateId:$stateId}){success issue{id identifier title url description state{id name type position}}}}`, map[string]any{"teamId": teamID, "parentId": parentID, "title": ticket.Title, "description": description, "stateId": state.ID}, &result)
+	if err != nil {
+		return Issue{}, err
+	}
+	if !result.IssueCreate.Success || result.IssueCreate.Issue.ID == "" {
+		return Issue{}, errors.New("Linear child issue creation did not succeed")
+	}
+	return result.IssueCreate.Issue, nil
 }
 
-func (c *Client) updateChild(ctx context.Context, id, title, description string) (Issue, error) {
+func (c *Client) updateChild(ctx context.Context, id, title, description string, state WorkflowState) (Issue, error) {
 	var result struct {
 		IssueUpdate struct {
 			Success bool  `json:"success"`
 			Issue   Issue `json:"issue"`
 		} `json:"issueUpdate"`
 	}
-	err := c.graphql(ctx, `mutation HarnessIssueUpdate($id:String!,$title:String!,$description:String!){issueUpdate(id:$id,input:{title:$title,description:$description}){success issue{id identifier title url description}}}`, map[string]any{"id": id, "title": title, "description": description}, &result)
-	return result.IssueUpdate.Issue, err
+	err := c.graphql(ctx, `mutation HarnessIssueUpdate($id:String!,$title:String!,$description:String!,$stateId:String!){issueUpdate(id:$id,input:{title:$title,description:$description,stateId:$stateId}){success issue{id identifier title url description state{id name type position}}}}`, map[string]any{"id": id, "title": title, "description": description, "stateId": state.ID}, &result)
+	if err != nil {
+		return Issue{}, err
+	}
+	if !result.IssueUpdate.Success || result.IssueUpdate.Issue.ID == "" {
+		return Issue{}, errors.New("Linear child issue update did not succeed")
+	}
+	return result.IssueUpdate.Issue, nil
 }
 
 func ticketDescription(marker string, ticket Ticket) string {

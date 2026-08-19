@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -20,17 +19,19 @@ import (
 )
 
 type Config struct {
-	Owner             string
-	ControlPlaneURL   string
-	Checkpoint        string
-	MaxActiveRuns     int
-	LeaseDuration     time.Duration
-	AuthLeaseDuration time.Duration
-	PollInterval      time.Duration
-	HeartbeatInterval time.Duration
-	IdleTimeout       int
-	CodexModel        string
-	PlaywrightWorkers int
+	Owner                 string
+	ControlPlaneURL       string
+	Checkpoint            string
+	RepositoryCheckpoints map[string]string
+	MaxActiveRuns         int
+	LeaseDuration         time.Duration
+	AuthLeaseDuration     time.Duration
+	PollInterval          time.Duration
+	HeartbeatInterval     time.Duration
+	StartupTimeout        time.Duration
+	IdleTimeout           int
+	CodexModel            string
+	PlaywrightWorkers     int
 }
 
 type Scheduler struct {
@@ -59,6 +60,9 @@ func New(values store.Store, provider sandbox.Provider, box *secure.Box, broker 
 	if config.HeartbeatInterval <= 0 {
 		config.HeartbeatInterval = 5 * time.Minute
 	}
+	if config.StartupTimeout <= 0 {
+		config.StartupTimeout = 90 * time.Second
+	}
 	if config.IdleTimeout <= 0 {
 		config.IdleTimeout = 120
 	}
@@ -66,7 +70,7 @@ func New(values store.Store, provider sandbox.Provider, box *secure.Box, broker 
 		config.Owner = "control-plane"
 	}
 	if config.CodexModel == "" {
-		config.CodexModel = "gpt-5.3-codex"
+		config.CodexModel = "gpt-5.6-sol"
 	}
 	if config.PlaywrightWorkers <= 0 {
 		config.PlaywrightWorkers = 2
@@ -80,6 +84,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 	defer claimTicker.Stop()
 	defer heartbeatTicker.Stop()
 	s.claim(ctx)
+	s.reconcile(ctx)
 	for {
 		select {
 		case <-ctx.Done():
@@ -110,6 +115,11 @@ func (s *Scheduler) claim(ctx context.Context) {
 }
 
 func (s *Scheduler) launch(ctx context.Context, run model.Run) {
+	requestedAt := time.Now()
+	s.event(ctx, model.Event{RunID: run.ID, SourceIssueID: run.SourceIssueID,
+		Type: "run.infrastructure.stage", Level: "info", Message: "Startup phase completed",
+		Payload: mustJSON(map[string]any{"stage": "control_plane_queue", "duration_ms": max(time.Since(run.CreatedAt).Milliseconds(), 0), "status": "completed"})})
+	authStarted := time.Now()
 	parallelSafe := false
 	if credential, getErr := s.store.GetCredential(ctx, "codex_parallel_safe"); getErr == nil {
 		if plaintext, openErr := s.box.Open(credential.Ciphertext, secure.Purpose("credential", "codex_parallel_safe")); openErr == nil {
@@ -132,6 +142,9 @@ func (s *Scheduler) launch(ctx context.Context, run model.Run) {
 		s.pause(ctx, run, "auth_slot_error", err.Error())
 		return
 	}
+	s.event(ctx, model.Event{RunID: run.ID, SourceIssueID: run.SourceIssueID,
+		Type: "run.infrastructure.stage", Level: "info", Message: "Startup phase completed",
+		Payload: mustJSON(map[string]any{"stage": "auth_slot_lease", "duration_ms": time.Since(authStarted).Milliseconds(), "status": "completed", "slots": len(slots)})})
 	slotIDs := make([]string, 0, len(slots))
 	for _, slot := range slots {
 		slotIDs = append(slotIDs, slot.ID)
@@ -188,10 +201,23 @@ func (s *Scheduler) launch(ctx context.Context, run model.Run) {
 		"PLAYWRIGHT_WORKERS":                  strconv.Itoa(s.config.PlaywrightWorkers),
 		"PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": "/usr/bin/chromium",
 		"CI":                                  "true",
+		"HARNESS_SANDBOX_REQUESTED_AT_MS":     strconv.FormatInt(requestedAt.UnixMilli(), 10),
 	}
-	instance, err := s.sandbox.Create(ctx, sandbox.CreateSpec{Checkpoint: s.config.Checkpoint,
+	checkpoint, checkpointKind := s.config.Checkpoint, "toolchain"
+	if repositoryCheckpoint := strings.TrimSpace(s.config.RepositoryCheckpoints[repository.ID]); repositoryCheckpoint != "" {
+		checkpoint, checkpointKind = repositoryCheckpoint, "repository"
+	}
+	variables["HARNESS_SANDBOX_CHECKPOINT"] = checkpoint
+	createStarted := time.Now()
+	s.event(ctx, model.Event{RunID: run.ID, SourceIssueID: run.SourceIssueID,
+		Type: "run.infrastructure.stage", Level: "info", Message: "Starting Railway sandbox",
+		Payload: mustJSON(map[string]any{"stage": "sandbox_create", "status": "started", "checkpoint": checkpoint, "checkpoint_kind": checkpointKind, "cache_hit": checkpointKind == "repository"})})
+	instance, err := s.sandbox.Create(ctx, sandbox.CreateSpec{Checkpoint: checkpoint,
 		IdleTimeoutMinutes: s.config.IdleTimeout, Variables: variables})
 	if err != nil {
+		s.event(ctx, model.Event{RunID: run.ID, SourceIssueID: run.SourceIssueID,
+			Type: "run.infrastructure.stage", Level: "error", Message: "Railway sandbox creation failed",
+			Payload: mustJSON(map[string]any{"stage": "sandbox_create", "duration_ms": time.Since(createStarted).Milliseconds(), "status": "failed", "checkpoint": checkpoint, "checkpoint_kind": checkpointKind})})
 		s.releaseSlots(ctx, run.ID, slots, "")
 		message := strings.ToLower(err.Error())
 		if strings.Contains(message, "quota") || strings.Contains(message, "limit") || strings.Contains(message, "capacity") {
@@ -203,11 +229,15 @@ func (s *Scheduler) launch(ctx context.Context, run model.Run) {
 		s.pause(ctx, run, "sandbox_create_failed", err.Error())
 		return
 	}
+	s.event(ctx, model.Event{RunID: run.ID, SourceIssueID: run.SourceIssueID, SandboxID: instance.ID,
+		Type: "run.infrastructure.stage", Level: "info", Message: "Startup phase completed",
+		Payload: mustJSON(map[string]any{"stage": "sandbox_create", "duration_ms": time.Since(createStarted).Milliseconds(), "status": "completed", "checkpoint": checkpoint, "checkpoint_kind": checkpointKind, "cache_hit": checkpointKind == "repository"})})
 	if s.terminal(ctx, run.ID) {
 		s.sandbox.Destroy(context.WithoutCancel(ctx), instance.ID)
 		s.releaseSlots(ctx, run.ID, slots, "")
 		return
 	}
+	workerStarted := time.Now()
 	session, err := s.sandbox.StartWorker(ctx, instance.ID)
 	if err != nil {
 		s.sandbox.Destroy(context.WithoutCancel(ctx), instance.ID)
@@ -220,7 +250,12 @@ func (s *Scheduler) launch(ctx context.Context, run model.Run) {
 	}
 	s.event(ctx, model.Event{RunID: run.ID, SourceIssueID: run.SourceIssueID, SandboxID: instance.ID,
 		Type: "sandbox.started", Level: "info", Message: "Railway sandbox worker started",
-		Payload: []byte(fmt.Sprintf(`{"session":%q}`, session))})
+		Payload: mustJSON(map[string]any{"session": session, "duration_ms": time.Since(workerStarted).Milliseconds(), "request_to_session_ms": time.Since(requestedAt).Milliseconds(), "checkpoint": checkpoint, "checkpoint_kind": checkpointKind})})
+}
+
+func mustJSON(value any) []byte {
+	body, _ := json.Marshal(value)
+	return body
 }
 
 func (s *Scheduler) releaseSlots(ctx context.Context, runID string, slots []model.AuthSlot, reason string) {
@@ -249,6 +284,10 @@ func (s *Scheduler) reconcile(ctx context.Context) {
 		if run.SandboxID == "" {
 			continue
 		}
+		if s.workerSessionStale(ctx, run) {
+			s.pause(ctx, run, "sandbox_worker_start_timeout", "Sandbox session started but the worker process did not report startup within the timeout")
+			continue
+		}
 		if err := s.sandbox.Heartbeat(ctx, run.SandboxID); err != nil {
 			s.logger.Warn("sandbox heartbeat failed", "run_id", run.ID, "sandbox_id", run.SandboxID, "error", err)
 			status, statusErr := s.sandbox.Status(ctx, run.SandboxID)
@@ -266,6 +305,26 @@ func (s *Scheduler) reconcile(ctx context.Context) {
 		}
 	}
 	s.cleanupTerminal(ctx)
+}
+
+func (s *Scheduler) workerSessionStale(ctx context.Context, run model.Run) bool {
+	if run.CurrentStage != "" || run.SandboxID == "" {
+		return false
+	}
+	events, err := s.store.ListEvents(ctx, model.EventFilter{RunID: run.ID, Limit: 1000})
+	if err != nil {
+		return false
+	}
+	var sessionStarted time.Time
+	for _, event := range events {
+		switch event.Type {
+		case "worker.starting", "run.started", "run.failed", "run.paused", "pipeline.stage", "stage.started":
+			return false
+		case "sandbox.started":
+			sessionStarted = event.CreatedAt
+		}
+	}
+	return !sessionStarted.IsZero() && time.Since(sessionStarted) > s.config.StartupTimeout
 }
 
 func (s *Scheduler) cleanupTerminal(ctx context.Context) {

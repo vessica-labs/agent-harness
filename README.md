@@ -220,7 +220,7 @@ Run the guided GitHub App manifest flow:
 agent-harness cloud auth github --manifest-owner <github-owner>
 ```
 
-Approve the app and install it only on repositories the runner is allowed to modify. The app requests Metadata read, Contents write, and Pull Requests write. Record the installation ID for repository registration.
+Approve the app and install it only on repositories the runner is allowed to modify. The app requests Metadata read, Contents write, and Pull Requests write, and configures a signed pull-request webhook at `/webhooks/github`. Record the installation ID for repository registration.
 
 ### D. Connect Linear
 
@@ -392,7 +392,7 @@ Named stages run exactly those stages in pipeline order. An unfinished run resum
 - Each source issue has one permanent claim and one resumable cloud run.
 - Sandboxes are disposable; Postgres journals and pushed integration branches are recovery authorities.
 - Pull requests are drafts and are never merged automatically.
-- Management and event endpoints require short-lived, role-scoped member access. The only non-member routes are health checks, the signed Linear webhook, the inert join page, one-time bootstrap initialization, invitation redemption, and token rotation; initialization still requires the bootstrap bearer.
+- Management and event endpoints require short-lived, role-scoped member access. The only non-member routes are health checks, signed Linear and GitHub webhooks, the inert join page, one-time bootstrap initialization, invitation redemption, and token rotation; initialization still requires the bootstrap bearer.
 - Team invitations are single-use, expire after one hour by default, and may be configured for no more than seven days. Access tokens last 15 minutes and device refresh tokens last 30 days. The CLI refreshes and rotates them automatically; replay of the previous refresh token revokes that device session.
 - Revoking a member revokes all of that member's device sessions. Revoking a single session or logging out affects only that device. The bootstrap owner cannot be demoted or revoked, and owner transfer is not supported in this release.
 

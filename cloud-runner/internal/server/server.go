@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -36,15 +37,17 @@ type Server struct {
 	http     *http.Server
 	ready    atomic.Bool
 	linearMu sync.Mutex
+	linear   func(string) *linearapi.Client
 }
 
 func New(config Config, values store.Store, box *secure.Box, broker *events.Broker, logger *slog.Logger) *Server {
-	server := &Server{config: config, store: values, box: box, broker: broker, logger: logger}
+	server := &Server{config: config, store: values, box: box, broker: broker, logger: logger, linear: linearapi.New}
 	server.ready.Store(true)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", server.health)
 	mux.HandleFunc("GET /readyz", server.readiness)
 	mux.HandleFunc("POST /webhooks/linear", server.linearWebhook)
+	mux.HandleFunc("POST /webhooks/github", server.githubWebhook)
 	mux.HandleFunc("GET /join", server.joinPage)
 	mux.HandleFunc("POST /auth/v1/initialize", server.initializeTeam)
 	mux.HandleFunc("POST /auth/v1/invitations/redeem", server.redeemInvitation)
@@ -129,6 +132,14 @@ func (s *Server) linearWebhook(w http.ResponseWriter, r *http.Request) {
 	if result.Run != nil && result.Duplicate {
 		s.appendEvent(r.Context(), model.Event{RunID: result.Run.ID, SourceIssueID: result.Run.SourceIssueID,
 			Type: "webhook.duplicate", Level: "info", Message: "Duplicate or repeated qualifying Linear webhook resolved to the existing run"})
+	}
+	if result.Run != nil && result.Run.State == "queued" && result.Run.CurrentStage == "" {
+		if err := s.syncLinearLifecycleEvent(r.Context(), result.Run.ID, model.Event{RunID: result.Run.ID,
+			SourceIssueID: result.Run.SourceIssueID, Type: "run.queued", Level: "info",
+			Message: "Linear issue claimed and queued"}); err != nil {
+			writeError(w, http.StatusBadGateway, fmt.Errorf("synchronize claimed Linear issue: %w", err))
+			return
+		}
 	}
 	s.broker.Notify()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "run": result.Run, "duplicate": result.Duplicate})
@@ -388,8 +399,11 @@ func (s *Server) validateRepositoryRegistration(ctx context.Context, value model
 		return errors.New("GitHub App credential is not configured")
 	}
 	var githubCredential githubapp.Credentials
-	if json.Unmarshal(githubRaw, &githubCredential) != nil {
+	if json.Unmarshal(githubRaw, &githubCredential) != nil || githubCredential.AppID == 0 || githubCredential.PrivateKey == "" {
 		return errors.New("GitHub App credential is invalid")
+	}
+	if githubCredential.WebhookSecret == "" {
+		return errors.New("GitHub App webhook secret is not configured; rerun the manifest flow or import GITHUB_WEBHOOK_SECRET")
 	}
 	if _, err := githubapp.New(githubCredential).MintInstallationToken(ctx, value.GitHubInstallation, value.GitHubOwner, value.GitHubRepo); err != nil {
 		return fmt.Errorf("GitHub installation: %w", err)
@@ -398,8 +412,12 @@ func (s *Server) validateRepositoryRegistration(ctx context.Context, value model
 	if err != nil {
 		return err
 	}
-	if err := linearapi.New(linearToken).ValidateRegistration(ctx, value.LinearWorkspaceID, value.LinearTeamID, value.LinearProjectID); err != nil {
+	linearClient := linearapi.New(linearToken)
+	if err := linearClient.ValidateRegistration(ctx, value.LinearWorkspaceID, value.LinearTeamID, value.LinearProjectID); err != nil {
 		return fmt.Errorf("Linear registration: %w", err)
+	}
+	if _, err := linearClient.LifecycleStates(ctx, value.LinearTeamID); err != nil {
+		return fmt.Errorf("Linear workflow: %w", err)
 	}
 	notionToken, err := s.credential(ctx, "notion")
 	if err != nil {
@@ -595,7 +613,9 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
-	fmt.Fprint(w, ": connected\n\n")
+	// A short retry keeps expected access-token rotation unobtrusive while
+	// Last-Event-ID ensures the browser resumes without dropping events.
+	fmt.Fprint(w, "retry: 1000\n: connected\n\n")
 	flusher.Flush()
 	updates, unsubscribe := s.broker.Subscribe()
 	defer unsubscribe()
@@ -657,11 +677,49 @@ func (s *Server) internalRoutes(w http.ResponseWriter, r *http.Request) {
 		s.internalAuthReturn(w, r, runID)
 	case "github-token":
 		s.internalGitHubToken(w, r, runID)
+	case "worker-binary":
+		s.internalWorkerBinary(w, r)
 	case "sync":
 		s.internalSync(w, r, runID)
 	default:
 		writeError(w, http.StatusNotFound, store.ErrNotFound)
 	}
+}
+
+func (s *Server) internalWorkerBinary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+		return
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	file, err := os.Open(executable)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	info, err := file.Stat()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("X-Agent-Harness-Worker-SHA256", hex.EncodeToString(hash.Sum(nil)))
+	w.Header().Set("Cache-Control", "private, no-store")
+	http.ServeContent(w, r, "agent-harness", info.ModTime(), file)
 }
 
 func (s *Server) internalGitHubToken(w http.ResponseWriter, r *http.Request, runID string) {
@@ -769,6 +827,13 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 		}
 		if json.Unmarshal(value.Payload, &payload) == nil {
 			_ = s.store.SetDelivery(r.Context(), runID, payload.Branch, payload.URL)
+		}
+	}
+	if value.Type == "stage.started" || value.Type == "stage.completed" || value.Type == "stage.retrying" ||
+		value.Type == "run.completed" {
+		if err := s.syncLinearLifecycleEvent(r.Context(), runID, stored); err != nil {
+			writeError(w, http.StatusBadGateway, fmt.Errorf("synchronize Linear lifecycle: %w", err))
+			return
 		}
 	}
 	writeJSON(w, http.StatusCreated, stored)

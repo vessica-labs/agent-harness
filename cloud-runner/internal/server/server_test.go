@@ -77,6 +77,13 @@ func TestSignedWebhookClaimsOnceAndManagementIsProtected(t *testing.T) {
 		t.Fatalf("got %d runs", len(runs))
 	}
 	capability, _ := box.MintCapability(runs[0].ID, time.Now().Add(time.Hour))
+	binaryRequest, _ := http.NewRequest(http.MethodHead, host.URL+"/internal/v1/runs/"+runs[0].ID+"/worker-binary", nil)
+	binaryRequest.Header.Set("Authorization", "Bearer "+capability)
+	binaryResponse, err := http.DefaultClient.Do(binaryRequest)
+	if err != nil || binaryResponse.StatusCode != http.StatusOK || binaryResponse.Header.Get("X-Agent-Harness-Worker-SHA256") == "" {
+		t.Fatalf("worker binary endpoint failed: %v status=%v digest=%q", err, binaryResponse.StatusCode, binaryResponse.Header.Get("X-Agent-Harness-Worker-SHA256"))
+	}
+	binaryResponse.Body.Close()
 	eventBody := bytes.NewBufferString(`{"stage":"coder","type":"ticket.completed","level":"info","message":"integrated","payload":{"ticket_key":"ENG-1-T01","commit":"abc123","depends_on":[]}}`)
 	eventRequest, _ := http.NewRequest(http.MethodPost, host.URL+"/internal/v1/runs/"+runs[0].ID+"/events", eventBody)
 	eventRequest.Header.Set("Authorization", "Bearer "+capability)
@@ -246,8 +253,9 @@ func TestEventStreamFlushesHeadersImmediately(t *testing.T) {
 	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("unexpected stream response: %d %q", response.StatusCode, response.Header.Get("Content-Type"))
 	}
-	initial := make([]byte, len(": connected\n\n"))
-	if _, err := io.ReadFull(response.Body, initial); err != nil || string(initial) != ": connected\n\n" {
+	initialFrame := "retry: 1000\n: connected\n\n"
+	initial := make([]byte, len(initialFrame))
+	if _, err := io.ReadFull(response.Body, initial); err != nil || string(initial) != initialFrame {
 		t.Fatalf("event stream did not send initial connection frame: %q %v", initial, err)
 	}
 }

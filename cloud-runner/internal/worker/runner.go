@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,9 +50,27 @@ func New(config Config, logger *slog.Logger) *Runner {
 }
 
 func (r *Runner) Run(ctx context.Context) (runErr error) {
+	startupStarted := time.Now()
+	startupPhase := "worker_process"
+	pipelineReady := false
+	defer func() {
+		if runErr != nil && !pipelineReady {
+			failureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			defer cancel()
+			_ = r.event(failureCtx, "run.failed", "error", runErr.Error(), "", map[string]any{
+				"phase": startupPhase, "startup_duration_ms": time.Since(startupStarted).Milliseconds(),
+			})
+		}
+	}()
+	_ = r.event(ctx, "worker.starting", "info", "Sandbox worker process started", "", map[string]any{
+		"checkpoint": os.Getenv("HARNESS_SANDBOX_CHECKPOINT"),
+	})
+	phaseStarted := time.Now()
 	if err := r.prepareFilesystem(); err != nil {
 		return err
 	}
+	r.startupTiming(ctx, "filesystem_prepare", phaseStarted, map[string]any{"status": "completed"})
+	r.remoteStartupTimings(ctx)
 	defer func() {
 		authError := ""
 		if runErr != nil && strings.Contains(strings.ToLower(runErr.Error()), "auth") {
@@ -69,32 +88,41 @@ func (r *Runner) Run(ctx context.Context) (runErr error) {
 			}
 		}
 	}()
+	heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)
+	defer stopHeartbeat()
+	go r.heartbeat(heartbeatCtx)
 
 	var err error
+	startupPhase, phaseStarted = "github_credential", time.Now()
 	r.githubToken, err = r.client.githubToken(ctx)
 	if err != nil {
 		return fmt.Errorf("obtain repository credential: %w", err)
 	}
+	r.startupTiming(ctx, startupPhase, phaseStarted, map[string]any{"status": "completed"})
+	startupPhase, phaseStarted = "repository_checkout", time.Now()
+	_, repositoryCached := os.Stat(filepath.Join(r.repo, ".git"))
 	if err := r.checkout(ctx); err != nil {
 		return err
 	}
+	r.startupTiming(ctx, startupPhase, phaseStarted, map[string]any{"status": "completed", "cache_hit": repositoryCached == nil})
+	startupPhase, phaseStarted = "pipeline_load", time.Now()
 	pipelinePath := filepath.Join(r.repo, ".harness", "pipeline.yaml")
 	r.pipeline, err = loadPipeline(pipelinePath)
 	if err != nil {
 		return fmt.Errorf("load pipeline: %w", err)
 	}
+	r.startupTiming(ctx, startupPhase, phaseStarted, map[string]any{"status": "completed"})
 	r.runDir = runDirectory(r.repo, r.pipeline, r.config.RunID)
+	startupPhase, phaseStarted = "journal_restore", time.Now()
 	if err := r.restoreOrInitialize(ctx, pipelinePath); err != nil {
 		return err
 	}
+	r.startupTiming(ctx, startupPhase, phaseStarted, map[string]any{"status": "completed"})
 	if _, err := r.harness(ctx, r.repo, "checkpoint", "--run-dir", r.runDir, "--patch-json",
 		string(mustJSON(map[string]any{"git": map[string]any{"branch": r.branchName(), "base": r.config.BaseBranch}})), "--event", "git.branch-prepared"); err != nil {
 		return err
 	}
 
-	heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)
-	defer stopHeartbeat()
-	go r.heartbeat(heartbeatCtx)
 	for order, stage := range r.pipeline.Stages {
 		if err := r.event(ctx, "pipeline.stage", "info", "Pipeline stage registered", stage.ID,
 			map[string]any{"order": order, "needs": stage.Needs, "mode": stage.Mode, "parallelism": stage.Parallelism, "agent": stage.Agent}); err != nil {
@@ -104,6 +132,8 @@ func (r *Runner) Run(ctx context.Context) (runErr error) {
 	if err := r.event(ctx, "run.started", "info", "Sandbox worker began pipeline execution", "", nil); err != nil {
 		return err
 	}
+	pipelineReady = true
+	r.startupTiming(ctx, "sandbox_to_pipeline_ready", startupStarted, map[string]any{"status": "completed"})
 	if err := r.checkpoint(ctx); err != nil {
 		return err
 	}
@@ -202,19 +232,29 @@ func (r *Runner) prepareFilesystem() error {
 
 func (r *Runner) checkout(ctx context.Context) error {
 	branch := r.branchName()
-	if _, err := os.Stat(filepath.Join(r.repo, ".git")); errors.Is(err, os.ErrNotExist) {
+	_, repositoryErr := os.Stat(filepath.Join(r.repo, ".git"))
+	repositoryCached := repositoryErr == nil
+	if errors.Is(repositoryErr, os.ErrNotExist) {
 		if err := os.RemoveAll(r.repo); err != nil {
 			return err
 		}
 		url := fmt.Sprintf("https://github.com/%s/%s.git", r.config.GitHubOwner, r.config.GitHubRepo)
-		if _, err := runCommand(ctx, r.config.Workspace, gitEnvironment(r.githubToken), orchestratorGit, "clone", "--origin", "origin", url, r.repo); err != nil {
+		if _, err := r.gitWithPublicFallback(ctx, r.config.Workspace, "clone", "--origin", "origin", url, r.repo); err != nil {
 			return fmt.Errorf("clone repository: %w", err)
 		}
 	}
-	if _, err := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), orchestratorGit, "fetch", "origin", "--prune"); err != nil {
-		return err
+	if _, err := r.gitWithPublicFallback(ctx, r.repo, "fetch", "origin", "--prune"); err != nil {
+		if !repositoryCached {
+			return err
+		}
+		if _, verifyErr := runCommand(ctx, r.repo, sanitizedEnvironment(""), orchestratorGit, "rev-parse", "--verify", "origin/"+r.config.BaseBranch); verifyErr != nil {
+			return err
+		}
+		_ = r.event(context.WithoutCancel(ctx), "run.infrastructure.stage", "warning", "Remote sync failed; using the verified repository checkpoint", "", map[string]any{
+			"stage": "repository_sync", "status": "degraded", "cache_hit": true, "mode": "checkpoint_fallback",
+		})
 	}
-	_, remoteErr := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), orchestratorGit, "ls-remote", "--exit-code", "--heads", "origin", branch)
+	_, remoteErr := r.gitWithPublicFallback(ctx, r.repo, "ls-remote", "--exit-code", "--heads", "origin", branch)
 	if remoteErr == nil {
 		r.branchPublished = true
 		_, err := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), orchestratorGit, "checkout", "-B", branch, "origin/"+branch)
@@ -222,6 +262,58 @@ func (r *Runner) checkout(ctx context.Context) error {
 	}
 	_, err := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), orchestratorGit, "checkout", "-B", branch, "origin/"+r.config.BaseBranch)
 	return err
+}
+
+func (r *Runner) gitWithPublicFallback(ctx context.Context, cwd string, args ...string) ([]byte, error) {
+	output, err := runCommand(ctx, cwd, gitEnvironment(r.githubToken), orchestratorGit, args...)
+	if err == nil || r.githubToken == "" {
+		return output, err
+	}
+	fallback, fallbackErr := runCommand(ctx, cwd, sanitizedEnvironment(""), orchestratorGit, args...)
+	if fallbackErr == nil {
+		_ = r.event(context.WithoutCancel(ctx), "run.infrastructure.stage", "warning", "Authenticated Git failed; public repository access succeeded", "", map[string]any{
+			"stage": "repository_auth_fallback", "status": "completed",
+		})
+		return fallback, nil
+	}
+	return output, err
+}
+
+func (r *Runner) startupTiming(ctx context.Context, stage string, started time.Time, payload map[string]any) {
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	payload["stage"] = stage
+	payload["duration_ms"] = time.Since(started).Milliseconds()
+	_ = r.event(ctx, "run.infrastructure.stage", "info", "Startup phase completed", "", payload)
+}
+
+func (r *Runner) remoteStartupTimings(ctx context.Context) {
+	parse := func(key string) int64 {
+		value, _ := strconv.ParseInt(strings.TrimSpace(os.Getenv(key)), 10, 64)
+		return value
+	}
+	requested := parse("HARNESS_SANDBOX_REQUESTED_AT_MS")
+	bootstrap := parse("HARNESS_BOOTSTRAP_STARTED_AT_MS")
+	downloadStarted := parse("HARNESS_WORKER_DOWNLOAD_STARTED_AT_MS")
+	downloaded := parse("HARNESS_WORKER_DOWNLOADED_AT_MS")
+	for _, item := range []struct {
+		stage      string
+		start, end int64
+		cacheHit   bool
+	}{
+		{stage: "checkpoint_boot", start: requested, end: bootstrap},
+		{stage: "worker_download", start: downloadStarted, end: downloaded, cacheHit: os.Getenv("HARNESS_WORKER_CACHE_HIT") == "1"},
+	} {
+		if item.start <= 0 || item.end < item.start {
+			continue
+		}
+		payload := map[string]any{"stage": item.stage, "duration_ms": item.end - item.start, "status": "completed"}
+		if item.stage == "worker_download" {
+			payload["cache_hit"] = item.cacheHit
+		}
+		_ = r.event(ctx, "run.infrastructure.stage", "info", "Startup phase completed", "", payload)
+	}
 }
 
 func (r *Runner) restoreOrInitialize(ctx context.Context, pipelinePath string) error {
@@ -279,7 +371,7 @@ func (r *Runner) executeStage(ctx context.Context, stage Stage) error {
 		"--status", "running", "--details-json", `{"summary":"cloud worker executing"}`); err != nil {
 		return err
 	}
-	if err := r.event(ctx, "stage.started", "info", "Stage started", stage.ID, nil); err != nil {
+	if err := r.event(ctx, "stage.started", "info", fmt.Sprintf("Stage %s started", stage.ID), stage.ID, nil); err != nil {
 		return err
 	}
 	if err := r.checkpoint(ctx); err != nil {
@@ -320,7 +412,7 @@ func (r *Runner) executeStage(ctx context.Context, stage Stage) error {
 	if err := r.checkpoint(ctx); err != nil {
 		return err
 	}
-	return r.event(ctx, "stage.completed", "info", "Stage completed", stage.ID, nil)
+	return r.event(ctx, "stage.completed", "info", fmt.Sprintf("Stage %s completed", stage.ID), stage.ID, nil)
 }
 
 func (r *Runner) runSingleStage(ctx context.Context, stage Stage) error {
@@ -405,12 +497,6 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 		return err
 	}
 	for _, wave := range waves {
-		if err := r.recordTicketWaveStarted(ctx, wave); err != nil {
-			return err
-		}
-		if err := r.syncTicketProgress(ctx, stage.ID); err != nil {
-			return fmt.Errorf("sync started ticket wave: %w", err)
-		}
 		runs := make([]*ticketRun, 0, len(wave))
 		for _, item := range wave {
 			worktree := filepath.Join(r.config.Workspace, "worktrees", safeName(item.Key))
@@ -430,6 +516,7 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 		}
 		semaphore := make(chan struct{}, parallelism)
 		var wait sync.WaitGroup
+		var progressMu sync.Mutex
 		for _, current := range runs {
 			wait.Add(1)
 			go func(current *ticketRun) {
@@ -442,6 +529,16 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 				}()
 				semaphore <- struct{}{}
 				defer func() { <-semaphore }()
+				progressMu.Lock()
+				claimErr := r.recordTicketWaveStarted(ctx, []ticket{current.ticket})
+				if claimErr == nil {
+					claimErr = r.syncTicketProgress(ctx, stage.ID)
+				}
+				progressMu.Unlock()
+				if claimErr != nil {
+					current.err = fmt.Errorf("claim ticket %s: %w", current.ticket.Key, claimErr)
+					return
+				}
 				if err := r.event(ctx, "ticket.started", "info", "Coder agent claimed ticket", stage.ID,
 					map[string]any{"ticket_key": current.ticket.Key, "depends_on": current.ticket.DependsOn, "owner": r.config.LeaseOwner}); err != nil {
 					current.err = err

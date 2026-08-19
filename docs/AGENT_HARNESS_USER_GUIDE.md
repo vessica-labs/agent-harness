@@ -273,17 +273,19 @@ Agent Harness supports two ways to execute a repository workflow.
 
 This difference is intentional and should be understood before choosing an execution mode.
 
-In **local execution**, Agent Harness creates or updates canonical comments and child issues, but it does not change Linear workflow-state fields. The user or team retains direct control of Todo, In Progress, and Done.
+In **local execution**, Agent Harness creates or updates canonical comments and child issues, but it does not change Linear workflow-state fields. The user or team retains direct control of Todo, In Progress, For Review, and Done.
 
 In **cloud execution**, Agent Harness uses the configured Linear team's real workflow-state IDs:
 
-- New child tickets begin in the team's Todo state.
-- A dependency wave moves its claimed children to In Progress.
+- A newly claimed parent immediately moves to Todo and receives an Agent Harness activity comment.
+- The first pipeline stage moves the parent to In Progress; every stage start, completion, and retry adds activity to the parent.
+- New child tickets are created directly in the team's Todo state.
+- A coder claim moves that child to In Progress.
 - A child moves to Done after its commit is integrated.
-- The parent moves to In Progress after the ticket plan is published.
-- The parent moves to Done only after the run completes and every durable child ticket is complete.
+- A completed pipeline with its pull request moves the parent to For Review.
+- A signed GitHub pull-request merge webhook moves the parent to Done.
 
-`agent-harness cloud runs reconcile <run-id>` can restore those states from durable run truth if provider state drifts.
+`agent-harness cloud runs reconcile <run-id>` can restore those states and missing stage activity from durable run truth if provider state drifts.
 
 ## 4. Prerequisites and permissions
 
@@ -536,6 +538,8 @@ The manifest requests only:
 - Metadata: read.
 - Contents: write.
 - Pull requests: write.
+
+It also configures the control plane's signed `/webhooks/github` endpoint and subscribes the app to pull-request events so a merged PR can close the Linear lifecycle. The generated webhook secret is encrypted with the private key in the control plane.
 
 Install the app only on repositories Agent Harness is allowed to modify. Record the installation ID for registration. The generated private key is sent directly to the authenticated control plane and is not written as a local plaintext key by the manifest flow.
 
@@ -957,7 +961,7 @@ Cancellation is explicit and terminal. The scheduler destroys the sandbox and ma
 agent-harness cloud runs reconcile <run-id>
 ```
 
-Reconciliation re-applies Linear child and parent workflow states from durable ticket/run truth. It also restores known Notion hub and artifact pages that were archived. It does not rerun agent stages or create a new source claim.
+Reconciliation re-applies Linear child and parent workflow states and stage activity from durable ticket/run truth. It also restores known Notion hub and artifact pages that were archived. It does not rerun agent stages or create a new source claim.
 
 ### Export the run journal
 
@@ -1292,6 +1296,7 @@ The control plane exposes only these routes without a member access token:
 | `GET /healthz` | Unauthenticated process liveness |
 | `GET /readyz` | Unauthenticated readiness, including Postgres reachability |
 | `POST /webhooks/linear` | Linear signature and recent timestamp; duplicate deliveries are persisted and deduplicated |
+| `POST /webhooks/github` | GitHub App HMAC signature; merged managed pull requests move their source Linear issues to Done |
 | `GET /join` | Inert, no-referrer landing page; the invitation secret stays in the URL fragment |
 | `POST /auth/v1/initialize` | One-time bootstrap bearer; creates the owner and first device session |
 | `POST /auth/v1/invitations/redeem` | Single-use invitation secret; creates a member and device session |
@@ -1386,13 +1391,13 @@ agent-harness cloud logout [--profile NAME]
 agent-harness cloud auth status
 agent-harness cloud auth codex add [--slots 3] [--verify-parallel 3]
 agent-harness cloud auth github --manifest-owner OWNER [--name NAME]
-agent-harness cloud auth github --app-id ID --private-key-file FILE
+GITHUB_WEBHOOK_SECRET=... agent-harness cloud auth github --app-id ID --private-key-file FILE
 agent-harness cloud auth linear manifest --url HTTPS_URL
 agent-harness cloud auth linear --client-id ID --client-secret SECRET --webhook-secret SECRET
 agent-harness cloud auth notion
 ```
 
-The direct Linear token-import path also accepts `LINEAR_ACCESS_TOKEN`, `LINEAR_REFRESH_TOKEN`, `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET`, `LINEAR_EXPIRES_AT`, and `LINEAR_WEBHOOK_SECRET`. Prefer the guided app-actor OAuth flow for new installations.
+Direct GitHub credential import requires `GITHUB_WEBHOOK_SECRET` and an existing GitHub App webhook configured for `<control-plane>/webhooks/github` with pull-request events. The direct Linear token-import path also accepts `LINEAR_ACCESS_TOKEN`, `LINEAR_REFRESH_TOKEN`, `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET`, `LINEAR_EXPIRES_AT`, and `LINEAR_WEBHOOK_SECRET`. Prefer the guided manifest and app-actor OAuth flows for new installations.
 
 `cloud auth notion` reads `NOTION_TOKEN` from the environment. Use a temporary sealed variable and remove it after transfer.
 
@@ -1752,6 +1757,12 @@ Verify:
 - `/webhooks/linear` is reachable publicly over HTTPS.
 
 Ignored and duplicate deliveries are recorded with a reason.
+
+Repository registration also verifies that the Linear team has Todo, In Progress, For Review (or In Review/Review), and Done workflow states.
+
+### A merged PR does not move Linear to Done
+
+Verify that the GitHub App webhook is active at `<control-plane>/webhooks/github`, is subscribed to pull-request events, and uses the webhook secret stored with the control-plane GitHub App credential. Apps imported directly must provide `GITHUB_WEBHOOK_SECRET`; older apps created before merge tracking must be updated or recreated with the manifest flow.
 
 ### A run remains queued
 

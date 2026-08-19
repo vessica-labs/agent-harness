@@ -98,19 +98,19 @@ func (s *Server) synchronize(ctx context.Context, runID string, input syncReques
 	for _, ticket := range input.Tickets {
 		marker := fmt.Sprintf("<!-- agent-harness:child:%s:%s -->", runID, ticket.Key)
 		previous, _ := s.store.GetExternalSync(ctx, runID, "ticket:"+ticket.Key, "linear")
-		child, err := linearClient.UpsertChild(ctx, run.SourceIssueID, repository.LinearTeamID, previous.ExternalID, marker, ticket)
-		if err != nil {
-			return result, s.recordSyncFailure(ctx, runID, "ticket:"+ticket.Key, "linear", marker, err)
-		}
-		result.Tickets[ticket.Key] = externalIdentity{ID: child.ID, Key: child.Identifier, URL: child.URL}
 		state := "planned"
 		if previousTicket, ok := ticketByKey(ctx, s, runID, ticket.Key); ok {
 			state = previousTicket.State
 		}
+		target := workflowStateForTicket(state, lifecycle)
+		child, err := linearClient.UpsertChild(ctx, run.SourceIssueID, repository.LinearTeamID, previous.ExternalID, marker, ticket, target)
+		if err != nil {
+			return result, s.recordSyncFailure(ctx, runID, "ticket:"+ticket.Key, "linear", marker, err)
+		}
+		result.Tickets[ticket.Key] = externalIdentity{ID: child.ID, Key: child.Identifier, URL: child.URL}
 		_ = s.store.PutTicket(ctx, model.TicketState{RunID: runID, LogicalKey: ticket.Key,
 			ProviderIssueID: child.ID, ProviderIssueKey: child.Identifier, State: state, Dependencies: ticket.DependsOn})
 		_ = s.store.PutExternalSync(ctx, model.ExternalSync{RunID: runID, LogicalKey: "ticket:" + ticket.Key, Provider: "linear", State: "synced", Marker: marker, ExternalID: child.ID, ExternalURL: child.URL})
-		target := workflowStateForTicket(state, lifecycle)
 		if err := s.setLinearIssueState(ctx, linearClient, runID, "ticket-state:"+ticket.Key, child.ID, target, false); err != nil {
 			return result, err
 		}
@@ -118,15 +118,17 @@ func (s *Server) synchronize(ctx context.Context, runID string, input syncReques
 		progress := progressMarker + "\n\n## Agent Harness ticket `" + ticket.Key + "`\n\n- Run: `" + runID + "`\n- Status: planned\n- Depends on: " + emptyJoin(ticket.DependsOn) + "\n"
 		_, _ = linearClient.UpsertComment(ctx, child.ID, progressMarker, progress)
 	}
-	if len(input.Tickets) > 0 {
-		if err := s.setLinearIssueState(ctx, linearClient, runID, "parent-state", run.SourceIssueID, lifecycle.InProgress, false); err != nil {
-			return result, err
-		}
-	}
 	for _, progress := range input.TicketProgress {
+		_ = s.store.PutTicket(ctx, model.TicketState{RunID: runID, LogicalKey: progress.Key,
+			ProviderIssueID: progress.ProviderID, ProviderIssueKey: progress.ProviderKey, State: progress.State,
+			Owner: progress.Owner, CommitSHA: progress.Commit, Dependencies: progress.DependsOn})
 		synced, err := s.store.GetExternalSync(ctx, runID, "ticket:"+progress.Key, "linear")
 		if err != nil || synced.ExternalID == "" {
 			return result, s.recordSyncFailure(ctx, runID, "ticket-progress:"+progress.Key, "linear", progress.Key, errors.New("ticket child identity is missing"))
+		}
+		if err := s.setLinearIssueState(ctx, linearClient, runID, "ticket-state:"+progress.Key,
+			synced.ExternalID, workflowStateForTicket(progress.State, lifecycle), false); err != nil {
+			return result, err
 		}
 		marker := fmt.Sprintf("<!-- agent-harness:ticket:%s:%s -->", runID, progress.Key)
 		body := marker + "\n\n## Agent Harness ticket `" + progress.Key + "`\n\n- Run: `" + runID + "`\n- Status: " + progress.State +
@@ -137,10 +139,6 @@ func (s *Server) synchronize(ctx context.Context, runID string, input syncReques
 		}
 		_ = s.store.PutExternalSync(ctx, model.ExternalSync{RunID: runID, LogicalKey: "ticket-progress:" + progress.Key,
 			Provider: "linear", State: "synced", Marker: marker, ExternalID: comment.ID})
-		if err := s.setLinearIssueState(ctx, linearClient, runID, "ticket-state:"+progress.Key,
-			synced.ExternalID, workflowStateForTicket(progress.State, lifecycle), false); err != nil {
-			return result, err
-		}
 	}
 	if input.Summary != "" {
 		marker := "<!-- agent-harness:summary:" + runID + " -->"
@@ -150,7 +148,11 @@ func (s *Server) synchronize(ctx context.Context, runID string, input syncReques
 		}
 		_ = s.store.PutExternalSync(ctx, model.ExternalSync{RunID: runID, LogicalKey: "summary", Provider: "linear", State: "synced", Marker: marker, ExternalID: comment.ID})
 		if allTicketsCompleted(ctx, s, runID) {
-			if err := s.setLinearIssueState(ctx, linearClient, runID, "parent-state", run.SourceIssueID, lifecycle.Done, false); err != nil {
+			parentState := lifecycle.ForReview
+			if pullRequestMerged(ctx, s, runID) {
+				parentState = lifecycle.Done
+			}
+			if err := s.setLinearIssueState(ctx, linearClient, runID, "parent-state", run.SourceIssueID, parentState, false); err != nil {
 				return result, err
 			}
 		}
@@ -225,10 +227,131 @@ func allTicketsCompleted(ctx context.Context, s *Server, runID string) bool {
 	return true
 }
 
+func pullRequestMerged(ctx context.Context, s *Server, runID string) bool {
+	values, err := s.store.ListEvents(ctx, model.EventFilter{RunID: runID, Limit: 1000})
+	if err != nil {
+		return false
+	}
+	for _, value := range values {
+		if value.Type == "pr.merged" {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) upsertLinearActivity(ctx context.Context, client *linearapi.Client, run model.Run, logicalKey, marker, body string) error {
+	if previous, err := s.store.GetExternalSync(ctx, run.ID, logicalKey, "linear"); err == nil && previous.State == "synced" {
+		return nil
+	}
+	if err := s.store.PutExternalSync(ctx, model.ExternalSync{RunID: run.ID, LogicalKey: logicalKey,
+		Provider: "linear", State: "pending", Marker: marker, ExternalID: run.SourceIssueID}); err != nil {
+		return err
+	}
+	comment, err := client.UpsertComment(ctx, run.SourceIssueID, marker, body)
+	if err != nil {
+		return s.recordSyncFailure(ctx, run.ID, logicalKey, "linear", marker, err)
+	}
+	return s.store.PutExternalSync(ctx, model.ExternalSync{RunID: run.ID, LogicalKey: logicalKey,
+		Provider: "linear", State: "synced", Marker: marker, ExternalID: comment.ID, ExternalURL: run.SourceIssueURL})
+}
+
+func (s *Server) syncLinearLifecycleEvent(ctx context.Context, runID string, event model.Event) error {
+	run, err := s.store.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	repository, err := s.store.GetRepository(ctx, run.RepositoryID)
+	if err != nil {
+		return err
+	}
+	token, err := s.linearAccessToken(ctx)
+	if err != nil {
+		// Unit tests and incomplete onboarding can still persist the durable event.
+		// A configured cloud repository always has this credential.
+		if strings.Contains(err.Error(), "not configured") {
+			return nil
+		}
+		return err
+	}
+	client := s.linear(token)
+	lifecycle, err := client.LifecycleStates(ctx, repository.LinearTeamID)
+	if err != nil {
+		return fmt.Errorf("resolve Linear workflow states: %w", err)
+	}
+	var target *linearapi.WorkflowState
+	switch event.Type {
+	case "run.queued":
+		target = &lifecycle.Todo
+	case "stage.started":
+		if pullRequestMerged(ctx, s, run.ID) {
+			target = &lifecycle.Done
+		} else if run.State == "completed" {
+			target = &lifecycle.ForReview
+		} else {
+			target = &lifecycle.InProgress
+		}
+	case "run.completed":
+		if pullRequestMerged(ctx, s, run.ID) {
+			target = &lifecycle.Done
+		} else {
+			target = &lifecycle.ForReview
+		}
+	case "pr.merged":
+		target = &lifecycle.Done
+	}
+	if target != nil {
+		if err := s.setLinearIssueState(ctx, client, run.ID, "parent-state", run.SourceIssueID, *target, false); err != nil {
+			return err
+		}
+	}
+	logicalKey, marker, body, ok := linearActivity(run, event)
+	if !ok {
+		return nil
+	}
+	return s.upsertLinearActivity(ctx, client, run, logicalKey, marker, body)
+}
+
+func linearActivity(run model.Run, event model.Event) (string, string, string, bool) {
+	activityKind := ""
+	activityTitle := ""
+	switch event.Type {
+	case "run.queued":
+		activityKind, activityTitle = "run:queued", "Agent Harness picked up this issue"
+	case "stage.started":
+		activityKind, activityTitle = "stage:"+event.Stage+":started", "Pipeline stage started: "+event.Stage
+	case "stage.completed":
+		activityKind, activityTitle = "stage:"+event.Stage+":completed", "Pipeline stage completed: "+event.Stage
+	case "stage.retrying":
+		activityKind, activityTitle = "stage:"+event.Stage+":retrying", "Pipeline stage retrying: "+event.Stage
+	case "run.completed":
+		activityKind, activityTitle = "run:completed", "Pipeline completed; ready for review"
+	case "pr.merged":
+		activityKind, activityTitle = "pr:merged", "Pull request merged"
+	}
+	if activityKind == "" {
+		return "", "", "", false
+	}
+	marker := "<!-- agent-harness:activity:" + run.ID + ":" + activityKind + " -->"
+	body := marker + "\n\n## " + activityTitle + "\n\n- Run: `" + run.ID + "`"
+	if event.Stage != "" {
+		body += "\n- Stage: `" + event.Stage + "`"
+	}
+	if event.Message != "" {
+		body += "\n- Detail: " + event.Message
+	}
+	body += "\n"
+	return "activity:" + activityKind, marker, body, true
+}
+
 func (s *Server) setLinearIssueState(ctx context.Context, client *linearapi.Client, runID, logicalKey, issueID string, state linearapi.WorkflowState, force bool) error {
 	marker := "workflow-state:" + state.ID
 	if previous, err := s.store.GetExternalSync(ctx, runID, logicalKey, "linear"); !force && err == nil && previous.State == "synced" && previous.Marker == marker {
 		return nil
+	}
+	if err := s.store.PutExternalSync(ctx, model.ExternalSync{RunID: runID, LogicalKey: logicalKey, Provider: "linear",
+		State: "pending", Marker: marker, ExternalID: issueID}); err != nil {
+		return err
 	}
 	issue, err := client.SetIssueState(ctx, issueID, state)
 	if err != nil {
@@ -272,16 +395,34 @@ func (s *Server) reconcileRunProjections(ctx context.Context, runID string) (map
 		linearUpdated++
 	}
 	parentState := lifecycle.Todo
-	if len(tickets) > 0 {
+	if run.State == "running" || run.CurrentStage != "" || len(tickets) > 0 {
 		parentState = lifecycle.InProgress
 	}
 	if run.State == "completed" && allTicketsCompleted(ctx, s, runID) {
+		parentState = lifecycle.ForReview
+	}
+	if pullRequestMerged(ctx, s, runID) {
 		parentState = lifecycle.Done
 	}
 	if err := s.setLinearIssueState(ctx, linearClient, runID, "parent-state", run.SourceIssueID, parentState, true); err != nil {
 		return nil, err
 	}
 	linearUpdated++
+	linearActivities := 0
+	eventValues, err := s.store.ListEvents(ctx, model.EventFilter{RunID: runID, Limit: 1000})
+	if err != nil {
+		return nil, err
+	}
+	for _, event := range eventValues {
+		logicalKey, marker, body, ok := linearActivity(run, event)
+		if !ok {
+			continue
+		}
+		if err := s.upsertLinearActivity(ctx, linearClient, run, logicalKey, marker, body); err != nil {
+			return nil, err
+		}
+		linearActivities++
+	}
 
 	notionRestored := 0
 	if raw, credentialErr := s.credential(ctx, "notion"); credentialErr == nil {
@@ -308,7 +449,8 @@ func (s *Server) reconcileRunProjections(ctx context.Context, runID string) (map
 			notionRestored++
 		}
 	}
-	return map[string]any{"ok": true, "linear_issues_updated": linearUpdated, "notion_pages_restored": notionRestored}, nil
+	return map[string]any{"ok": true, "linear_issues_updated": linearUpdated,
+		"linear_activities_updated": linearActivities, "notion_pages_restored": notionRestored}, nil
 }
 
 func (s *Server) linearAccessToken(ctx context.Context) (string, error) {

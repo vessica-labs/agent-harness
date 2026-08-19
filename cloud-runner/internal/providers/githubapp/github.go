@@ -20,8 +20,9 @@ import (
 )
 
 type Credentials struct {
-	AppID      int64  `json:"app_id"`
-	PrivateKey string `json:"private_key"`
+	AppID         int64  `json:"app_id"`
+	PrivateKey    string `json:"private_key"`
+	WebhookSecret string `json:"webhook_secret,omitempty"`
 }
 
 type Token struct {

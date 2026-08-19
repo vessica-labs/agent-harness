@@ -36,10 +36,13 @@ func TestLocalUIKeepsBearerTokenServerSide(t *testing.T) {
 	if strings.Contains(root.Body.String(), token) {
 		t.Fatal("management token was exposed to browser HTML")
 	}
-	for _, expected := range []string{"Pipeline DAG · execution order", "Run history · newest first", "pipeline complete", "codex.", "external_syncs", "estimated_api_cost_usd", "run_id=", "scheduleRefresh()", `type="button" class="run`, `role="log"`, `aria-pressed=`, "activityCard", "activity-payload", "Ran command"} {
+	for _, expected := range []string{"Pipeline DAG · execution order", "Run history · newest first", "pipeline complete", "codex.", "external_syncs", "estimated_api_cost_usd", "run_id=", "scheduleRefresh()", `type="button" class="run`, `role="log"`, `aria-pressed=`, "activityCard", "activity-payload", "Ran command", `id="back-to-runs"`, "function enterRunDetail", "runsEl.hidden=true", "detailEl.hidden=false", "function showRunList", "backToRunsEl.onclick=showRunList", "const eventSummary=e=>", "e.type==='run.infrastructure.stage'", "e.type==='stage.started'", "e.type==='stage.completed'", "function coalesceEvents", "activityIndexes", "Live updates paused", "eventSource!==source", "eventSource===source"} {
 		if !strings.Contains(root.Body.String(), expected) {
 			t.Fatalf("runner UI is missing %q", expected)
 		}
+	}
+	if strings.Contains(root.Body.String(), "Reconnecting…") {
+		t.Fatal("routine event-stream retries should not be highlighted")
 	}
 	proxy := httptest.NewRecorder()
 	server.Handler().ServeHTTP(proxy, httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil))

@@ -57,8 +57,9 @@ func (r RailwayCLI) StartWorker(ctx context.Context, id string) (string, error) 
 	if worker == "" {
 		worker = "agent-harness"
 	}
+	bootstrap := workerBootstrap(worker)
 	output, err := r.run(ctx, "sandbox", "exec", "--project", r.Project, "--environment", r.Environment,
-		"--id", id, "--detach", "--", worker, "worker")
+		"--id", id, "--detach", "--", "bash", "-lc", bootstrap)
 	if err != nil {
 		return "", err
 	}
@@ -67,6 +68,28 @@ func (r RailwayCLI) StartWorker(ctx context.Context, id string) (string, error) 
 		return "", errors.New("Railway sandbox did not return a durable session")
 	}
 	return lines[len(lines)-1], nil
+}
+
+func workerBootstrap(fallback string) string {
+	return strings.Join([]string{
+		"set -euo pipefail",
+		"export HARNESS_BOOTSTRAP_STARTED_AT_MS=$(date +%s%3N)",
+		"report_bootstrap_failure() { code=$?; if test $code -ne 0; then curl -fsS -X POST -H \"Authorization: Bearer $HARNESS_RUN_CAPABILITY\" -H 'Content-Type: application/json' \"$HARNESS_CONTROL_URL/internal/v1/runs/$HARNESS_RUN_ID/events\" --data '{\"type\":\"run.failed\",\"level\":\"error\",\"message\":\"Sandbox worker bootstrap failed\",\"payload\":{\"phase\":\"worker_bootstrap\"}}' >/dev/null 2>&1 || true; fi; exit $code; }",
+		"trap report_bootstrap_failure EXIT",
+		"install -d -m 0755 /opt/agent-harness/bin",
+		"worker=/opt/agent-harness/bin/agent-harness",
+		"worker_url=\"$HARNESS_CONTROL_URL/internal/v1/runs/$HARNESS_RUN_ID/worker-binary\"",
+		"worker_digest=$(curl -fsSI -H \"Authorization: Bearer $HARNESS_RUN_CAPABILITY\" \"$worker_url\" | awk -F': ' 'tolower($1)==\"x-agent-harness-worker-sha256\" {gsub(/\\r/,\"\",$2); print $2}')",
+		"export HARNESS_WORKER_DOWNLOAD_STARTED_AT_MS=$(date +%s%3N)",
+		"if test -n \"$worker_digest\"; then if test -x \"$worker\" && test \"$(cat \"$worker.sha256\" 2>/dev/null || true)\" = \"$worker_digest\"; then export HARNESS_WORKER_CACHE_HIT=1; else export HARNESS_WORKER_CACHE_HIT=0; tmp=$(mktemp /tmp/agent-harness-worker.XXXXXX); curl -fsSL -H \"Authorization: Bearer $HARNESS_RUN_CAPABILITY\" \"$worker_url\" -o \"$tmp\"; echo \"$worker_digest  $tmp\" | sha256sum -c -; install -m 0755 \"$tmp\" \"$worker\"; printf '%s\\n' \"$worker_digest\" >\"$worker.sha256\"; rm -f \"$tmp\"; fi; else export HARNESS_WORKER_CACHE_HIT=0; worker=" + shellQuote(fallback) + "; fi",
+		"export HARNESS_WORKER_DOWNLOADED_AT_MS=$(date +%s%3N)",
+		"trap - EXIT",
+		"exec \"$worker\" worker",
+	}, "\n")
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }
 
 func (r RailwayCLI) waitForRunning(ctx context.Context, id string) error {

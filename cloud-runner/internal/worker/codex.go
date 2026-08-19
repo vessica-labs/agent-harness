@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -83,9 +84,13 @@ Work directly in the supplied repository. Do not edit pipeline state or provider
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64<<10), 16<<20)
 	activityStartedAt := map[string]time.Time{}
+	lastCodexError := ""
 	for scanner.Scan() {
 		line := append([]byte(nil), scanner.Bytes()...)
 		_, _ = logFile.Write(append(line, '\n'))
+		if message := codexErrorMessage(line); message != "" {
+			lastCodexError = message
+		}
 		if usage, ok := parseCodexUsage(line, r.config.CodexModel); ok {
 			if err := r.event(context.WithoutCancel(ctx), "codex.usage", "info", "Codex turn usage recorded", stage.ID, usage); err != nil {
 				_ = command.Process.Kill()
@@ -122,7 +127,7 @@ Work directly in the supplied repository. Do not edit pipeline state or provider
 	runErr := command.Wait()
 	closeErr := logFile.Close()
 	if runErr != nil {
-		return fmt.Errorf("Codex %s failed: %w: %s", stage.ID, runErr, tail(stderr.String(), 3000))
+		return fmt.Errorf("Codex %s failed: %w: %s", stage.ID, runErr, tail(codexFailureDetail(stderr.String(), lastCodexError), 3000))
 	}
 	if scanErr != nil {
 		return fmt.Errorf("read Codex %s event stream: %w", stage.ID, scanErr)
@@ -141,6 +146,38 @@ Work directly in the supplied repository. Do not edit pipeline state or provider
 		}
 	}
 	return nil
+}
+
+func codexErrorMessage(line []byte) string {
+	var event struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+		Error   struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(line, &event) != nil {
+		return ""
+	}
+	if event.Type == "turn.failed" {
+		return strings.TrimSpace(event.Error.Message)
+	}
+	if event.Type == "error" {
+		return strings.TrimSpace(event.Message)
+	}
+	return ""
+}
+
+func codexFailureDetail(stderr, structured string) string {
+	stderr = strings.TrimSpace(stderr)
+	structured = strings.TrimSpace(structured)
+	if stderr == "" {
+		return structured
+	}
+	if structured == "" || strings.Contains(stderr, structured) {
+		return stderr
+	}
+	return stderr + "\n" + structured
 }
 
 func replaceTicket(value, ticketKey string) string {

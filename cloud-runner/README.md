@@ -81,7 +81,7 @@ agent-harness cloud auth linear
 
 For the guided path, run `agent-harness cloud auth linear manifest --url https://<control-plane>` to open Linear's pre-filled application manifest, then run `agent-harness cloud auth linear --client-id ... --client-secret ... --webhook-secret ...`. The second command opens the app-actor OAuth consent flow on a loopback callback and stores the rotating token set directly in the control plane.
 
-Create the least-privilege GitHub App with `agent-harness cloud auth github --manifest-owner <organization>`. The local manifest callback requests only Metadata read, Contents write, and Pull Requests write, then encrypts the generated private key without writing it to disk. Install that app only on repositories the runner should operate and use the resulting installation ID during repository registration.
+Create the least-privilege GitHub App with `agent-harness cloud auth github --manifest-owner <organization>`. The local manifest callback requests only Metadata read, Contents write, and Pull Requests write, configures the signed `/webhooks/github` endpoint for pull-request events, then encrypts the generated private key and webhook secret without writing them to disk. Install that app only on repositories the runner should operate and use the resulting installation ID during repository registration.
 
 ## Repository and run commands
 
@@ -108,9 +108,9 @@ Selecting a run filters the SSE feed to that run; “Show all runs” reconnects
 
 Cloud workers cap Playwright at two workers by default. This preserves browser parallelism without allowing a repository's CPU-visible default to exhaust the sandbox process/thread budget. Repositories should read `HARNESS_PLAYWRIGHT_WORKERS` in Playwright configuration or pass it as `--workers`; every cloud agent is also instructed to apply the cap explicitly.
 
-Linear child issues start in the team's Todo workflow state, move to In Progress when their coder wave is claimed, and move to Done after their commit is integrated. The parent moves to In Progress when the ticket plan is published and to Done only after all durable child tickets complete. Workflow IDs are discovered from the configured team rather than hard-coded.
+Linear parents move to Todo when claimed and In Progress when the first pipeline stage starts. Every stage start, completion, and retry adds activity to the parent. Child issues are created directly in Todo, move to In Progress when a coder claims them, and move to Done after their commit is integrated. A completed pipeline moves the parent to For Review; the signed GitHub merge webhook moves it to Done. Workflow IDs are discovered from the configured team rather than hard-coded.
 
-The public surface is deliberately small: signed Linear webhook intake, health checks, the inert join page, invitation redemption, and token rotation. Management and SSE endpoints require a short-lived member access token and enforce viewer/operator/admin/owner roles. Worker endpoints require a separate short-lived capability scoped to one run. The localhost UI proxies device authentication server-side and never stores it in browser JavaScript.
+The public surface is deliberately small: signed Linear and GitHub webhook intake, health checks, the inert join page, invitation redemption, and token rotation. Management and SSE endpoints require a short-lived member access token and enforce viewer/operator/admin/owner roles. Worker endpoints require a separate short-lived capability scoped to one run. The localhost UI proxies device authentication server-side and never stores it in browser JavaScript.
 
 ## Required service variables
 
@@ -123,8 +123,18 @@ The public surface is deliberately small: signed Linear webhook intake, health c
 | `HARNESS_RAILWAY_PROJECT` | Sandbox project ID |
 | `HARNESS_RAILWAY_ENVIRONMENT` | Sandbox environment ID or name |
 | `HARNESS_SANDBOX_CHECKPOINT` | Versioned worker checkpoint |
+| `HARNESS_REPOSITORY_CHECKPOINTS` | Optional JSON map of repository ID to a warmed Railway checkpoint containing a clean checkout, dependencies, and package caches but no credentials |
 | `RAILWAY_API_TOKEN` | Workspace-scoped token used only by the control plane |
-| `HARNESS_CODEX_MODEL` | Explicit worker model; defaults to `gpt-5.3-codex` |
+| `HARNESS_CODEX_MODEL` | Explicit worker model; defaults to `gpt-5.6-sol` |
 | `HARNESS_PLAYWRIGHT_WORKERS` | Maximum browser-test workers per sandbox; defaults to `2` |
+
+Sandbox startup emits `run.infrastructure.stage` events for queueing, auth-slot
+lease, checkpoint restore, worker download/cache, filesystem preparation,
+repository checkout, journal restore, and total time to the first pipeline
+stage. The release checkpoint contains the pinned system and Codex toolchain.
+At launch, the sandbox verifies the exact worker binary exposed by the current
+control-plane deployment and reuses its snapshot-cached copy when the digest
+matches. Repository-specific checkpoints additionally keep clean source,
+installed dependencies, and package caches warm across runs.
 
 Provider credentials are encrypted in Postgres and never written to a repository. GitHub installation tokens are minted just in time and given only to controlled Git/CLI subprocesses. Linear and Notion credentials remain in the control plane.

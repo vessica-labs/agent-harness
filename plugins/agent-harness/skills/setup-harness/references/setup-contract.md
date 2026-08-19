@@ -53,8 +53,9 @@ If a provider exposes comment creation but not editing, report the capability mi
 
 The target repository contains:
 
+- `AGENTS.md`: the root Codex entry point and table of contents for repository guidance;
 - `.agents/*.md`: stable agent role contracts;
-- `.harness/*.md`: repository-specific guidance;
+- `.harness/*.md`: repository-specific guidance linked from root `AGENTS.md`;
 - `.harness/config.yaml`: non-secret provider and repository integration settings;
 - `.harness/pipeline.yaml`: editable deterministic agent DAG, file contracts, parallelism, results, and hooks;
 - `.harness/config.yaml` may include the non-secret Linear label trigger used by the Railway cloud runner;

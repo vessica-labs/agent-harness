@@ -67,7 +67,12 @@ def collect_files(plugin_root: Path, target: Path, config: bytes) -> list[tuple[
     files: list[tuple[Path, bytes]] = []
     for path in sorted(source.rglob("*")):
         if path.is_file():
-            files.append((target / path.relative_to(source), path.read_bytes()))
+            relative = path.relative_to(source)
+            # AGENTS.md is the repository entry point Codex discovers. Keep its
+            # canonical template beside the other guidance assets, but install
+            # it at the repository root.
+            destination = Path("AGENTS.md") if relative == Path(".harness/AGENTS.md") else relative
+            files.append((target / destination, path.read_bytes()))
     files.append((target / ".harness" / "config.yaml", config))
     files.append((target / ".harness" / "pipeline.yaml", (plugin_root / "pipelines" / "default.yaml").read_bytes()))
     return files

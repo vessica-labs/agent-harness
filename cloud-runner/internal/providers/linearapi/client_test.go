@@ -30,7 +30,7 @@ func TestUpsertChildUsesDurableExternalIdentity(t *testing.T) {
 	}))
 	defer host.Close()
 	client := &Client{token: "token", endpoint: host.URL, http: &http.Client{Timeout: time.Second}}
-	issue, err := client.UpsertChild(context.Background(), "parent", "team", "existing-child-id", "marker", Ticket{Key: "T01", Title: "Ticket"})
+	issue, err := client.UpsertChild(context.Background(), "parent", "team", "existing-child-id", "marker", Ticket{Key: "T01", Title: "Ticket"}, WorkflowState{ID: "todo"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestLifecycleStatesAndIssueTransitionUseTeamWorkflow(t *testing.T) {
 			if !strings.Contains(envelope.Query, "HarnessWorkflowStates") || envelope.Variables["teamId"] != "team-1" {
 				t.Fatalf("unexpected workflow request: %#v", envelope)
 			}
-			_, _ = w.Write([]byte(`{"data":{"workflowStates":{"nodes":[{"id":"done","name":"Done","type":"completed","position":4},{"id":"started","name":"In Progress","type":"started","position":2},{"id":"todo","name":"Todo","type":"unstarted","position":1}]}}}`))
+			_, _ = w.Write([]byte(`{"data":{"workflowStates":{"nodes":[{"id":"done","name":"Done","type":"completed","position":4},{"id":"review","name":"For Review","type":"started","position":3},{"id":"started","name":"In Progress","type":"started","position":2},{"id":"todo","name":"Todo","type":"unstarted","position":1}]}}}`))
 			return
 		}
 		if !strings.Contains(envelope.Query, "HarnessIssueState") || envelope.Variables["id"] != "issue-1" || envelope.Variables["stateId"] != "started" {
@@ -144,7 +144,34 @@ func TestLifecycleStatesAndIssueTransitionUseTeamWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if states.Todo.ID != "todo" || states.Done.ID != "done" || issue.State.ID != "started" {
+	if states.Todo.ID != "todo" || states.ForReview.ID != "review" || states.Done.ID != "done" || issue.State.ID != "started" {
 		t.Fatalf("states=%+v issue=%+v", states, issue)
+	}
+}
+
+func TestCreateChildIncludesTodoStateInCreationMutation(t *testing.T) {
+	requests := 0
+	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var envelope struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&envelope)
+		w.Header().Set("Content-Type", "application/json")
+		if requests == 1 {
+			_, _ = w.Write([]byte(`{"data":{"issue":{"id":"parent","children":{"nodes":[]}}}}`))
+			return
+		}
+		if !strings.Contains(envelope.Query, "stateId:$stateId") || envelope.Variables["stateId"] != "todo" {
+			t.Fatalf("Todo was not applied atomically: %#v", envelope)
+		}
+		_, _ = w.Write([]byte(`{"data":{"issueCreate":{"success":true,"issue":{"id":"child","identifier":"AGE-2","state":{"id":"todo"}}}}}`))
+	}))
+	defer host.Close()
+	client := &Client{token: "token", endpoint: host.URL, http: &http.Client{Timeout: time.Second}}
+	issue, err := client.UpsertChild(context.Background(), "parent", "team", "", "marker", Ticket{Key: "T01", Title: "Ticket"}, WorkflowState{ID: "todo"})
+	if err != nil || issue.State.ID != "todo" || requests != 2 {
+		t.Fatalf("issue=%+v requests=%d err=%v", issue, requests, err)
 	}
 }

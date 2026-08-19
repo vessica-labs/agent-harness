@@ -84,9 +84,9 @@ Send the returned magic link privately. Use `cloud team members`, `cloud team se
 ## 3. Connect GitHub
 
 1. Run `agent-harness cloud auth github --manifest-owner <owner>`.
-2. Ask the user to approve the manifest and install the app only on repositories the runner may modify.
-3. Record the installation ID without storing a private key locally.
-4. Run `agent-harness cloud auth status` and require `github_app` to be configured.
+2. Ask the user to approve the manifest and install the app only on repositories the runner may modify. Confirm that the manifest shows the `/webhooks/github` URL and pull-request event subscription.
+3. Record the installation ID without storing a private key or generated webhook secret locally.
+4. Run `agent-harness cloud auth status` and require `github_app` to be configured. Existing manually created apps must use the same webhook URL, subscribe to pull-request events, and import their secret through `GITHUB_WEBHOOK_SECRET`.
 
 ## 4. Connect Linear
 
@@ -99,6 +99,7 @@ Send the returned magic link privately. Use `cloud team members`, `cloud team se
 3. Have the user place the client ID, client secret, and webhook signing secret into temporary sealed Railway variables named `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET`, and `LINEAR_WEBHOOK_SECRET`.
 4. Run the app-actor OAuth flow through `agent-harness cloud auth linear`, wait for consent, and require both `linear_oauth` and `linear_webhook_secret` to be configured.
 5. Remove all three temporary Railway variables and verify the control plane redeploys successfully.
+6. Confirm the configured team has Todo, In Progress, For Review (or In Review/Review), and Done workflow states; repository registration rejects an incomplete lifecycle.
 
 ## 5. Connect Notion
 

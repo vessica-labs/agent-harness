@@ -584,7 +584,12 @@ func cloudAuth(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		value, _ := json.Marshal(map[string]any{"app_id": *appID, "private_key": string(key)})
+		webhookSecret := strings.TrimSpace(os.Getenv("GITHUB_WEBHOOK_SECRET"))
+		if webhookSecret == "" {
+			return errors.New("set GITHUB_WEBHOOK_SECRET to the GitHub App webhook secret for direct credential import")
+		}
+		value, _ := json.Marshal(map[string]any{"app_id": *appID, "private_key": string(key),
+			"webhook_secret": webhookSecret})
 		return putCredential(ctx, client, "github_app", string(value))
 	case "linear":
 		return linearAuth(ctx, client, args[1:])

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -95,8 +96,9 @@ func runServer(ctx context.Context) error {
 		schedule := scheduler.New(values, provider, box, broker, scheduler.Config{
 			Owner: envDefault("RAILWAY_REPLICA_ID", "control-plane"), ControlPlaneURL: config.PublicURL,
 			Checkpoint: os.Getenv("HARNESS_SANDBOX_CHECKPOINT"), MaxActiveRuns: envInt("HARNESS_MAX_ACTIVE_RUNS", 3),
-			CodexModel:        envDefault("HARNESS_CODEX_MODEL", "gpt-5.3-codex"),
-			PlaywrightWorkers: envInt("HARNESS_PLAYWRIGHT_WORKERS", 2),
+			RepositoryCheckpoints: envStringMap("HARNESS_REPOSITORY_CHECKPOINTS"),
+			CodexModel:            envDefault("HARNESS_CODEX_MODEL", "gpt-5.6-sol"),
+			PlaywrightWorkers:     envInt("HARNESS_PLAYWRIGHT_WORKERS", 2),
 		}, logger)
 		go schedule.Run(ctx)
 	}
@@ -166,6 +168,15 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func envStringMap(key string) map[string]string {
+	result := map[string]string{}
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" || json.Unmarshal([]byte(value), &result) != nil {
+		return map[string]string{}
+	}
+	return result
 }
 
 func usageError() error { return errors.New(usage()) }

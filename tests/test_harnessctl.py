@@ -339,6 +339,11 @@ class BootstrapAndStateTests(unittest.TestCase):
             self.assertEqual("preview", preview["mode"])
             self.assertTrue(all(item["action"] == "create" for item in preview["operations"]))
             self.bootstrap(target, apply=True)
+            self.assertTrue((target / "AGENTS.md").is_file())
+            self.assertFalse((target / ".harness" / "AGENTS.md").exists())
+            root_guide = (target / "AGENTS.md").read_text(encoding="utf-8")
+            for guidance in ("ARCHITECTURE.md", "DESIGN.md", "TESTING.md", "SECURITY.md", "DEPLOY.md", "adrs/"):
+                self.assertIn(f".harness/{guidance}", root_guide)
             self.assertTrue((target / ".agents" / "product.md").is_file())
             self.assertTrue((target / ".harness" / "pipeline.yaml").is_file())
             self.assertEqual(
