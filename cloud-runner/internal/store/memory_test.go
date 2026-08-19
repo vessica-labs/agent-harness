@@ -151,3 +151,32 @@ func TestUpdateRunInputRequiresPausedRun(t *testing.T) {
 		t.Fatalf("unexpected updated run: %+v", updated)
 	}
 }
+
+func TestTerminalRunStateCannotBeDowngraded(t *testing.T) {
+	ctx := context.Background()
+	memory := NewMemory()
+	repo := repository(t, memory)
+	result, err := memory.AcceptLinearDelivery(ctx, repo, model.LinearDelivery{
+		DeliveryID: "terminal-delivery", IssueID: "terminal-issue", IssueKey: "AGE-5",
+		IssueTitle: "Terminal run", ReceivedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.SetRunState(ctx, result.Run.ID, "completed", "pr", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.SetRunState(ctx, result.Run.ID, "paused", "pr", "late sandbox error"); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.RequeueRun(ctx, result.Run.ID, "late recovery"); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := memory.GetRun(ctx, result.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != "completed" || stored.Error != "" {
+		t.Fatalf("terminal run was downgraded: %+v", stored)
+	}
+}

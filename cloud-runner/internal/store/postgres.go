@@ -407,19 +407,24 @@ func (p *Postgres) SetRunState(ctx context.Context, id, state, stage, message st
 		completed = "now()"
 	}
 	command := `UPDATE runs SET state=$2, current_stage=$3, error=$4,
-updated_at=now(), completed_at=` + completed + ` WHERE id=$1`
+updated_at=now(), completed_at=` + completed + ` WHERE id=$1
+AND (state NOT IN ('completed','cancelled') OR state=$2)`
 	tag, err := p.pool.Exec(ctx, command, id, state, stage, message)
 	if err == nil && tag.RowsAffected() == 0 {
-		return ErrNotFound
+		if _, getErr := p.GetRun(ctx, id); getErr != nil {
+			return getErr
+		}
 	}
 	return err
 }
 
 func (p *Postgres) RequeueRun(ctx context.Context, id, reason string) error {
 	tag, err := p.pool.Exec(ctx, `UPDATE runs SET state='queued',queue_reason=$2,lease_owner='',
-lease_expires_at=NULL,updated_at=now() WHERE id=$1`, id, reason)
+lease_expires_at=NULL,updated_at=now() WHERE id=$1 AND state NOT IN ('completed','cancelled')`, id, reason)
 	if err == nil && tag.RowsAffected() == 0 {
-		return ErrNotFound
+		if _, getErr := p.GetRun(ctx, id); getErr != nil {
+			return getErr
+		}
 	}
 	return err
 }

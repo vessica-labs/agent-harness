@@ -133,6 +133,10 @@ func (s *Scheduler) launch(ctx context.Context, run model.Run) {
 		s.pause(ctx, run, "auth_slot_assignment_failed", err.Error())
 		return
 	}
+	if s.terminal(ctx, run.ID) {
+		s.releaseSlots(ctx, run.ID, slots, "")
+		return
+	}
 	type authSession struct {
 		ID   string `json:"id"`
 		Auth []byte `json:"auth"`
@@ -186,6 +190,11 @@ func (s *Scheduler) launch(ctx context.Context, run model.Run) {
 			return
 		}
 		s.pause(ctx, run, "sandbox_create_failed", err.Error())
+		return
+	}
+	if s.terminal(ctx, run.ID) {
+		s.sandbox.Destroy(context.WithoutCancel(ctx), instance.ID)
+		s.releaseSlots(ctx, run.ID, slots, "")
 		return
 	}
 	session, err := s.sandbox.StartWorker(ctx, instance.ID)
@@ -276,9 +285,19 @@ func (s *Scheduler) cleanupTerminal(ctx context.Context) {
 func (s *Scheduler) pause(ctx context.Context, run model.Run, eventType, message string) {
 	if err := s.store.SetRunState(ctx, run.ID, "paused", run.CurrentStage, message); err != nil {
 		s.logger.Error("pause run", "run_id", run.ID, "error", err)
+		return
+	}
+	current, err := s.store.GetRun(ctx, run.ID)
+	if err != nil || current.State != "paused" {
+		return
 	}
 	s.event(ctx, model.Event{RunID: run.ID, SourceIssueID: run.SourceIssueID,
 		Type: eventType, Level: "error", Message: message})
+}
+
+func (s *Scheduler) terminal(ctx context.Context, runID string) bool {
+	current, err := s.store.GetRun(ctx, runID)
+	return err == nil && (current.State == "completed" || current.State == "cancelled")
 }
 
 func (s *Scheduler) event(ctx context.Context, event model.Event) {

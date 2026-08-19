@@ -281,6 +281,9 @@ func (m *Memory) SetRunState(_ context.Context, id, state, stage, message string
 	if !ok {
 		return ErrNotFound
 	}
+	if (value.State == "completed" || value.State == "cancelled") && value.State != state {
+		return nil
+	}
 	now := time.Now().UTC()
 	value.State, value.CurrentStage, value.Error, value.UpdatedAt = state, stage, message, now
 	if state == "completed" || state == "cancelled" {
@@ -296,6 +299,9 @@ func (m *Memory) RequeueRun(_ context.Context, id, reason string) error {
 	value, ok := m.runs[id]
 	if !ok {
 		return ErrNotFound
+	}
+	if value.State == "completed" || value.State == "cancelled" {
+		return nil
 	}
 	value.State, value.QueueReason, value.LeaseOwner, value.LeaseExpiresAt = "queued", reason, "", nil
 	value.UpdatedAt = time.Now().UTC()
