@@ -1344,7 +1344,7 @@ Do not manually delete state, fabricate completed stages, reuse a fresh lease, o
 
 ## 22. CLI reference
 
-This section covers the operator-facing command surface. The complete REST API is intentionally documented on a separate MDX route.
+This section covers the operator-facing command surface. The public REST contract is checked in as `cloud-runner/openapi.yaml`; Section 24 explains its authentication, authorization, and event boundaries, and the website publishes that material on a dedicated API Reference route.
 
 ### Global commands
 
@@ -1724,7 +1724,7 @@ If the token is missing from Keychain or the protected fallback file, set the pr
 - `403` means the session is valid but its viewer or operator role does not authorize the action. Check `cloud whoami` and ask an administrator for the minimum necessary role.
 - If only one device should lose access, revoke its session. Revoking a member invalidates all sessions associated with that member.
 
-Use `cloud team audit` from an administrator session to distinguish expiration, logout, administrative revocation, replay detection, and denied authorization. Do not replace `HARNESS_MANAGEMENT_TOKEN`: it is only the initialization bootstrap and cannot restore ordinary member access.
+Use `cloud team audit` from an administrator session to inspect logout, administrative revocation, replay detection, and denied authorization; compare the session timestamps when checking expiration. Do not replace `HARNESS_MANAGEMENT_TOKEN`: it is only the initialization bootstrap and cannot restore ordinary member access.
 
 ### Railway Sandboxes are unavailable
 
@@ -1897,4 +1897,4 @@ Export refuses to overwrite `.harness/runs/<run-id>`. Inspect and preserve an ex
 - To change agent behavior, start with [Customize agent roles](#17-customize-agent-roles).
 - To change execution order or parallelism, see [Customize `.harness/pipeline.yaml`](#18-customize-harnesspipelineyaml).
 - For a paused run, follow [Reliability and recovery](#21-reliability-and-recovery).
-- For programmatic integration, use the separate API Reference MDX route.
+- For programmatic integration, review [API and events](#24-api-and-events); the website publishes the same material on a dedicated API Reference route.
