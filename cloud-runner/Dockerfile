@@ -3,12 +3,7 @@ FROM golang:${GO_VERSION}-bookworm AS build
 ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN --mount=type=secret,id=extra_ca,required=false \
-    if [ -s /run/secrets/extra_ca ]; then \
-      SSL_CERT_FILE=/run/secrets/extra_ca go mod download; \
-    else \
-      go mod download; \
-    fi
+RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath \
     -ldflags="-s -w -X github.com/vessica-labs/agent-harness/cloud-runner/internal/cli.Version=${VERSION}" \
