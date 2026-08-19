@@ -29,19 +29,22 @@ import (
 )
 
 type Server struct {
-	config   Config
-	store    store.Store
-	box      *secure.Box
-	broker   *events.Broker
-	logger   *slog.Logger
-	http     *http.Server
-	ready    atomic.Bool
-	linearMu sync.Mutex
-	linear   func(string) *linearapi.Client
+	config              Config
+	store               store.Store
+	box                 *secure.Box
+	broker              *events.Broker
+	logger              *slog.Logger
+	http                *http.Server
+	ready               atomic.Bool
+	linearMu            sync.Mutex
+	workflowMu          sync.Mutex
+	linear              func(string) *linearapi.Client
+	githubWebhookClient func(githubapp.Credentials) githubWebhookUpdater
 }
 
 func New(config Config, values store.Store, box *secure.Box, broker *events.Broker, logger *slog.Logger) *Server {
-	server := &Server{config: config, store: values, box: box, broker: broker, logger: logger, linear: linearapi.New}
+	server := &Server{config: config, store: values, box: box, broker: broker, logger: logger, linear: linearapi.New,
+		githubWebhookClient: func(credentials githubapp.Credentials) githubWebhookUpdater { return githubapp.New(credentials) }}
 	server.ready.Store(true)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", server.health)
@@ -199,6 +202,8 @@ func (s *Server) managementRoutes(w http.ResponseWriter, r *http.Request) {
 		s.streamEvents(w, r)
 	case r.URL.Path == "/v1/auth-slots":
 		s.authSlots(w, r)
+	case r.URL.Path == "/v1/auth/github/upgrade-webhook":
+		s.upgradeGitHubWebhook(w, r)
 	case strings.HasPrefix(r.URL.Path, "/v1/auth/"):
 		s.auth(w, r)
 	case strings.HasPrefix(r.URL.Path, "/v1/runs/"):
@@ -416,7 +421,7 @@ func (s *Server) validateRepositoryRegistration(ctx context.Context, value model
 	if err := linearClient.ValidateRegistration(ctx, value.LinearWorkspaceID, value.LinearTeamID, value.LinearProjectID); err != nil {
 		return fmt.Errorf("Linear registration: %w", err)
 	}
-	if _, err := linearClient.LifecycleStates(ctx, value.LinearTeamID); err != nil {
+	if _, err := s.ensureLinearLifecycleStates(ctx, linearClient, value.LinearTeamID); err != nil {
 		return fmt.Errorf("Linear workflow: %w", err)
 	}
 	notionToken, err := s.credential(ctx, "notion")

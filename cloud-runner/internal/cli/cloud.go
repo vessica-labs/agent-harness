@@ -567,6 +567,16 @@ func cloudAuth(ctx context.Context, args []string) error {
 		}
 		return nil
 	case "github":
+		if len(args) > 1 && args[1] == "upgrade-webhook" {
+			if len(args) != 2 {
+				return errors.New("usage: cloud auth github upgrade-webhook")
+			}
+			var result any
+			if err := client.do(ctx, http.MethodPost, "/v1/auth/github/upgrade-webhook", map[string]any{}, &result); err != nil {
+				return err
+			}
+			return printJSON(result)
+		}
 		flags := flag.NewFlagSet("cloud auth github", flag.ContinueOnError)
 		appID, keyFile := flags.Int64("app-id", 0, "GitHub App id"), flags.String("private-key-file", "", "GitHub App private key PEM")
 		manifestOwner := flags.String("manifest-owner", "", "GitHub organization; use @me for a personal app")

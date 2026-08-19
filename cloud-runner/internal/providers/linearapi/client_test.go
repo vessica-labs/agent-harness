@@ -126,7 +126,7 @@ func TestLifecycleStatesAndIssueTransitionUseTeamWorkflow(t *testing.T) {
 			if !strings.Contains(envelope.Query, "HarnessWorkflowStates") || envelope.Variables["teamId"] != "team-1" {
 				t.Fatalf("unexpected workflow request: %#v", envelope)
 			}
-			_, _ = w.Write([]byte(`{"data":{"workflowStates":{"nodes":[{"id":"done","name":"Done","type":"completed","position":4},{"id":"review","name":"For Review","type":"started","position":3},{"id":"started","name":"In Progress","type":"started","position":2},{"id":"todo","name":"Todo","type":"unstarted","position":1}]}}}`))
+			_, _ = w.Write([]byte(`{"data":{"workflowStates":{"nodes":[{"id":"done","name":"Done","type":"completed","position":5},{"id":"review","name":"For Review","type":"started","position":4},{"id":"input","name":"Needs Input","type":"started","position":3},{"id":"started","name":"In Progress","type":"started","position":2},{"id":"todo","name":"Todo","type":"unstarted","position":1}]}}}`))
 			return
 		}
 		if !strings.Contains(envelope.Query, "HarnessIssueState") || envelope.Variables["id"] != "issue-1" || envelope.Variables["stateId"] != "started" {
@@ -144,8 +144,51 @@ func TestLifecycleStatesAndIssueTransitionUseTeamWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if states.Todo.ID != "todo" || states.ForReview.ID != "review" || states.Done.ID != "done" || issue.State.ID != "started" {
+	if states.Todo.ID != "todo" || states.NeedsInput.ID != "input" || states.ForReview.ID != "review" || states.Done.ID != "done" || issue.State.ID != "started" {
 		t.Fatalf("states=%+v issue=%+v", states, issue)
+	}
+}
+
+func TestEnsureLifecycleStatesCreatesMissingHarnessStates(t *testing.T) {
+	requests := 0
+	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var envelope struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&envelope)
+		w.Header().Set("Content-Type", "application/json")
+		switch requests {
+		case 1:
+			_, _ = w.Write([]byte(`{"data":{"workflowStates":{"nodes":[{"id":"todo","name":"Todo","type":"unstarted","position":1},{"id":"progress","name":"In Progress","type":"started","position":2},{"id":"done","name":"Done","type":"completed","position":3}]}}}`))
+		case 2, 3:
+			if !strings.Contains(envelope.Query, "HarnessWorkflowStateCreate") {
+				t.Fatalf("expected workflow state creation, got %s", envelope.Query)
+			}
+			input, ok := envelope.Variables["input"].(map[string]any)
+			if !ok || input["teamId"] != "team-1" || input["type"] != "started" {
+				t.Fatalf("unexpected workflow input: %#v", envelope.Variables["input"])
+			}
+			name, _ := input["name"].(string)
+			if (requests == 2 && name != "Needs Input") || (requests == 3 && name != "For Review") {
+				t.Fatalf("unexpected creation order: %q", name)
+			}
+			_, _ = w.Write([]byte(`{"data":{"workflowStateCreate":{"success":true,"workflowState":{"id":"created","name":"created","type":"started","position":3}}}}`))
+		case 4:
+			_, _ = w.Write([]byte(`{"data":{"workflowStates":{"nodes":[{"id":"todo","name":"Todo","type":"unstarted","position":1},{"id":"progress","name":"In Progress","type":"started","position":2},{"id":"input","name":"Needs Input","type":"started","position":3},{"id":"review","name":"For Review","type":"started","position":4},{"id":"done","name":"Done","type":"completed","position":5}]}}}`))
+		default:
+			t.Fatalf("unexpected request %d", requests)
+		}
+	}))
+	defer host.Close()
+	client := &Client{token: "token", endpoint: host.URL, http: &http.Client{Timeout: time.Second}}
+	states, err := client.EnsureLifecycleStates(context.Background(), "team-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 4 || states.NeedsInput.ID != "input" || states.ForReview.ID != "review" {
+		t.Fatalf("requests=%d states=%+v", requests, states)
 	}
 }
 

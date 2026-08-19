@@ -285,6 +285,8 @@ In **cloud execution**, Agent Harness uses the configured Linear team's real wor
 - A completed pipeline with its pull request moves the parent to For Review.
 - A signed GitHub pull-request merge webhook moves the parent to Done.
 
+Cloud repository registration and lifecycle synchronization idempotently install **Needs Input** and **For Review** in the team's Started category when they are absent. An existing **In Review** or **Review** state is reused instead of creating a duplicate For Review state. The Linear member who authorizes the app must have permission to manage that team's workflow statuses.
+
 `agent-harness cloud runs reconcile <run-id>` can restore those states and missing stage activity from durable run truth if provider state drifts.
 
 ## 4. Prerequisites and permissions
@@ -542,6 +544,14 @@ The manifest requests only:
 It also configures the control plane's signed `/webhooks/github` endpoint and subscribes the app to pull-request events so a merged PR can close the Linear lifecycle. The generated webhook secret is encrypted with the private key in the control plane.
 
 Install the app only on repositories Agent Harness is allowed to modify. Record the installation ID for registration. The generated private key is sent directly to the authenticated control plane and is not written as a local plaintext key by the manifest flow.
+
+For an App created before signed merge tracking was added, preserve the existing App and its installations. After deploying the current control plane, run:
+
+```sh
+agent-harness cloud auth github upgrade-webhook
+```
+
+This command generates a new secret inside the control plane, updates the existing GitHub App webhook to `<control-plane>/webhooks/github`, and stores the matching secret with the encrypted App credential. It does not print the secret or change repository permissions. Finish in the GitHub App settings by enabling the webhook and subscribing to **Pull request** events.
 
 ### Step 3: Connect Linear
 
@@ -1391,6 +1401,7 @@ agent-harness cloud logout [--profile NAME]
 agent-harness cloud auth status
 agent-harness cloud auth codex add [--slots 3] [--verify-parallel 3]
 agent-harness cloud auth github --manifest-owner OWNER [--name NAME]
+agent-harness cloud auth github upgrade-webhook
 GITHUB_WEBHOOK_SECRET=... agent-harness cloud auth github --app-id ID --private-key-file FILE
 agent-harness cloud auth linear manifest --url HTTPS_URL
 agent-harness cloud auth linear --client-id ID --client-secret SECRET --webhook-secret SECRET
@@ -1758,11 +1769,11 @@ Verify:
 
 Ignored and duplicate deliveries are recorded with a reason.
 
-Repository registration also verifies that the Linear team has Todo, In Progress, For Review (or In Review/Review), and Done workflow states.
+Repository registration also verifies that the Linear team has Todo, In Progress, and Done workflow states. It idempotently creates Needs Input and For Review in the Started category when absent; an existing In Review or Review state is reused. The authorizing Linear member must have team workflow-management permission.
 
 ### A merged PR does not move Linear to Done
 
-Verify that the GitHub App webhook is active at `<control-plane>/webhooks/github`, is subscribed to pull-request events, and uses the webhook secret stored with the control-plane GitHub App credential. Apps imported directly must provide `GITHUB_WEBHOOK_SECRET`; older apps created before merge tracking must be updated or recreated with the manifest flow.
+Verify that the GitHub App webhook is active at `<control-plane>/webhooks/github`, is subscribed to pull-request events, and uses the webhook secret stored with the control-plane GitHub App credential. Apps imported directly must provide `GITHUB_WEBHOOK_SECRET`. Upgrade an older App in place with `agent-harness cloud auth github upgrade-webhook`; do not rerun the manifest unless you intentionally want a replacement App and new installations.
 
 ### A run remains queued
 

@@ -81,7 +81,7 @@ func (s *Server) synchronize(ctx context.Context, runID string, input syncReques
 		return syncResponse{}, err
 	}
 	linearClient := linearapi.New(linearToken)
-	lifecycle, err := linearClient.LifecycleStates(ctx, repository.LinearTeamID)
+	lifecycle, err := s.ensureLinearLifecycleStates(ctx, linearClient, repository.LinearTeamID)
 	if err != nil {
 		return syncResponse{}, fmt.Errorf("resolve Linear workflow states: %w", err)
 	}
@@ -275,7 +275,7 @@ func (s *Server) syncLinearLifecycleEvent(ctx context.Context, runID string, eve
 		return err
 	}
 	client := s.linear(token)
-	lifecycle, err := client.LifecycleStates(ctx, repository.LinearTeamID)
+	lifecycle, err := s.ensureLinearLifecycleStates(ctx, client, repository.LinearTeamID)
 	if err != nil {
 		return fmt.Errorf("resolve Linear workflow states: %w", err)
 	}
@@ -375,7 +375,7 @@ func (s *Server) reconcileRunProjections(ctx context.Context, runID string) (map
 		return nil, err
 	}
 	linearClient := linearapi.New(linearToken)
-	lifecycle, err := linearClient.LifecycleStates(ctx, repository.LinearTeamID)
+	lifecycle, err := s.ensureLinearLifecycleStates(ctx, linearClient, repository.LinearTeamID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve Linear workflow states: %w", err)
 	}
@@ -475,6 +475,12 @@ func (s *Server) linearAccessToken(ctx context.Context) (string, error) {
 		}
 	}
 	return credential.AccessToken, nil
+}
+
+func (s *Server) ensureLinearLifecycleStates(ctx context.Context, client *linearapi.Client, teamID string) (linearapi.LifecycleStates, error) {
+	s.workflowMu.Lock()
+	defer s.workflowMu.Unlock()
+	return client.EnsureLifecycleStates(ctx, teamID)
 }
 
 func (s *Server) recordSyncFailure(ctx context.Context, runID, key, provider, marker string, cause error) error {

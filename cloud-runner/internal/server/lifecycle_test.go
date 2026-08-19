@@ -29,7 +29,7 @@ func TestLinearParentLifecycleFollowsRunAndMergeEvents(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case strings.Contains(envelope.Query, "HarnessWorkflowStates"):
-			_, _ = io.WriteString(w, `{"data":{"workflowStates":{"nodes":[{"id":"todo","name":"Todo","type":"unstarted","position":1},{"id":"progress","name":"In Progress","type":"started","position":2},{"id":"review","name":"For Review","type":"started","position":3},{"id":"done","name":"Done","type":"completed","position":4}]}}}`)
+			_, _ = io.WriteString(w, `{"data":{"workflowStates":{"nodes":[{"id":"todo","name":"Todo","type":"unstarted","position":1},{"id":"progress","name":"In Progress","type":"started","position":2},{"id":"input","name":"Needs Input","type":"started","position":3},{"id":"review","name":"For Review","type":"started","position":4},{"id":"done","name":"Done","type":"completed","position":5}]}}}`)
 		case strings.Contains(envelope.Query, "HarnessIssueState"):
 			state := envelope.Variables["stateId"].(string)
 			transitions = append(transitions, state)

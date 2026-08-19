@@ -30,6 +30,12 @@ type Token struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+type WebhookConfig struct {
+	URL         string `json:"url"`
+	ContentType string `json:"content_type"`
+	InsecureSSL string `json:"insecure_ssl"`
+}
+
 type Client struct {
 	credentials Credentials
 	baseURL     string
@@ -40,6 +46,51 @@ type Client struct {
 func New(credentials Credentials) *Client {
 	return &Client{credentials: credentials, baseURL: "https://api.github.com",
 		http: &http.Client{Timeout: 20 * time.Second}, now: time.Now}
+}
+
+// UpdateWebhookConfig configures the webhook belonging to an existing GitHub
+// App. The caller is responsible for persisting the same secret only after
+// GitHub accepts it.
+func (c *Client) UpdateWebhookConfig(ctx context.Context, webhookURL, secret string) (WebhookConfig, error) {
+	if webhookURL == "" || secret == "" {
+		return WebhookConfig{}, errors.New("GitHub webhook URL and secret are required")
+	}
+	jwt, err := c.jwt()
+	if err != nil {
+		return WebhookConfig{}, err
+	}
+	body, _ := json.Marshal(map[string]string{
+		"url": webhookURL, "content_type": "json", "secret": secret, "insecure_ssl": "0",
+	})
+	request, err := http.NewRequestWithContext(ctx, http.MethodPatch, c.baseURL+"/app/hook/config", bytes.NewReader(body))
+	if err != nil {
+		return WebhookConfig{}, err
+	}
+	request.Header.Set("Authorization", "Bearer "+jwt)
+	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	request.Header.Set("User-Agent", "agent-harness-control-plane")
+	request.Header.Set("Content-Type", "application/json")
+	response, err := c.http.Do(request)
+	if err != nil {
+		return WebhookConfig{}, err
+	}
+	defer response.Body.Close()
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return WebhookConfig{}, err
+	}
+	if response.StatusCode != http.StatusOK {
+		return WebhookConfig{}, fmt.Errorf("GitHub App webhook update failed: status %d", response.StatusCode)
+	}
+	var result WebhookConfig
+	if err := json.Unmarshal(responseBody, &result); err != nil {
+		return WebhookConfig{}, err
+	}
+	if result.URL == "" {
+		return WebhookConfig{}, errors.New("GitHub returned an empty webhook URL")
+	}
+	return result, nil
 }
 
 func (c *Client) MintInstallationToken(ctx context.Context, installationID int64, owner, repo string) (Token, error) {

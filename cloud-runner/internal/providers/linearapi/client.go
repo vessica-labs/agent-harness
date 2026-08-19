@@ -44,6 +44,7 @@ type WorkflowState struct {
 type LifecycleStates struct {
 	Todo       WorkflowState
 	InProgress WorkflowState
+	NeedsInput WorkflowState
 	ForReview  WorkflowState
 	Done       WorkflowState
 }
@@ -166,9 +167,7 @@ func (c *Client) Issue(ctx context.Context, id string) (Issue, error) {
 	return result.Issue, err
 }
 
-// LifecycleStates resolves the repository team's own workflow instead of
-// assuming that status names or IDs are shared across Linear workspaces.
-func (c *Client) LifecycleStates(ctx context.Context, teamID string) (LifecycleStates, error) {
+func (c *Client) workflowStates(ctx context.Context, teamID string) ([]WorkflowState, error) {
 	var result struct {
 		WorkflowStates struct {
 			Nodes []WorkflowState `json:"nodes"`
@@ -176,11 +175,15 @@ func (c *Client) LifecycleStates(ctx context.Context, teamID string) (LifecycleS
 	}
 	query := `query HarnessWorkflowStates($teamId:ID!){workflowStates(filter:{team:{id:{eq:$teamId}}}){nodes{id name type position}}}`
 	if err := c.graphql(ctx, query, map[string]any{"teamId": teamID}, &result); err != nil {
-		return LifecycleStates{}, err
+		return nil, err
 	}
+	return result.WorkflowStates.Nodes, nil
+}
+
+func resolveLifecycleStates(nodes []WorkflowState) LifecycleStates {
 	choose := func(kind string, preferred ...string) WorkflowState {
 		var candidates []WorkflowState
-		for _, state := range result.WorkflowStates.Nodes {
+		for _, state := range nodes {
 			if strings.EqualFold(state.Type, kind) {
 				candidates = append(candidates, state)
 			}
@@ -200,17 +203,103 @@ func (c *Client) LifecycleStates(ctx context.Context, teamID string) (LifecycleS
 	}
 	states := LifecycleStates{
 		Todo: choose("unstarted", "Todo", "To Do"), InProgress: choose("started", "In Progress", "Doing"),
-		ForReview: choose("started", "For Review", "In Review", "Review"),
-		Done:      choose("completed", "Done", "Completed"),
+		NeedsInput: choose("started", "Needs Input"),
+		ForReview:  choose("started", "For Review", "In Review", "Review"),
+		Done:       choose("completed", "Done", "Completed"),
 	}
-	if states.ForReview.ID == states.InProgress.ID && !strings.EqualFold(strings.TrimSpace(states.ForReview.Name), "For Review") &&
+	if states.NeedsInput.ID != "" && !strings.EqualFold(strings.TrimSpace(states.NeedsInput.Name), "Needs Input") {
+		states.NeedsInput = WorkflowState{}
+	}
+	if states.ForReview.ID != "" && !strings.EqualFold(strings.TrimSpace(states.ForReview.Name), "For Review") &&
 		!strings.EqualFold(strings.TrimSpace(states.ForReview.Name), "In Review") && !strings.EqualFold(strings.TrimSpace(states.ForReview.Name), "Review") {
 		states.ForReview = WorkflowState{}
 	}
-	if states.Todo.ID == "" || states.InProgress.ID == "" || states.ForReview.ID == "" || states.Done.ID == "" {
-		return LifecycleStates{}, errors.New("Linear team must have Todo, In Progress, For Review, and Done workflow states")
+	return states
+}
+
+func validateLifecycleStates(states LifecycleStates) (LifecycleStates, error) {
+	if states.Todo.ID == "" || states.InProgress.ID == "" || states.NeedsInput.ID == "" || states.ForReview.ID == "" || states.Done.ID == "" {
+		return LifecycleStates{}, errors.New("Linear team must have Todo, In Progress, Needs Input, For Review, and Done workflow states")
 	}
 	return states, nil
+}
+
+// LifecycleStates resolves the repository team's own workflow instead of
+// assuming that status names or IDs are shared across Linear workspaces.
+func (c *Client) LifecycleStates(ctx context.Context, teamID string) (LifecycleStates, error) {
+	nodes, err := c.workflowStates(ctx, teamID)
+	if err != nil {
+		return LifecycleStates{}, err
+	}
+	return validateLifecycleStates(resolveLifecycleStates(nodes))
+}
+
+// EnsureLifecycleStates idempotently installs the two custom states managed by
+// Agent Harness. Linear's standard Todo, In Progress, and Done states remain
+// workspace-owned and are only validated here.
+func (c *Client) EnsureLifecycleStates(ctx context.Context, teamID string) (LifecycleStates, error) {
+	nodes, err := c.workflowStates(ctx, teamID)
+	if err != nil {
+		return LifecycleStates{}, err
+	}
+	states := resolveLifecycleStates(nodes)
+	created := false
+	maxStartedPosition := states.InProgress.Position
+	for _, state := range nodes {
+		if strings.EqualFold(state.Type, "started") && state.Position > maxStartedPosition {
+			maxStartedPosition = state.Position
+		}
+	}
+	if states.NeedsInput.ID == "" {
+		position := maxStartedPosition + 1
+		if states.ForReview.ID != "" && states.ForReview.Position > states.InProgress.Position {
+			position = (states.InProgress.Position + states.ForReview.Position) / 2
+		}
+		if _, err := c.createWorkflowState(ctx, teamID, "Needs Input", "#F2C94C",
+			"Agent Harness is waiting for additional user input before work can continue.", position); err != nil {
+			return LifecycleStates{}, fmt.Errorf("create Linear workflow state %q: %w", "Needs Input", err)
+		}
+		created = true
+		if position > maxStartedPosition {
+			maxStartedPosition = position
+		}
+	}
+	if states.ForReview.ID == "" {
+		if _, err := c.createWorkflowState(ctx, teamID, "For Review", "#5E6AD2",
+			"Agent Harness has opened a pull request that is ready for human review.", maxStartedPosition+1); err != nil {
+			return LifecycleStates{}, fmt.Errorf("create Linear workflow state %q: %w", "For Review", err)
+		}
+		created = true
+	}
+	if created {
+		nodes, err = c.workflowStates(ctx, teamID)
+		if err != nil {
+			return LifecycleStates{}, err
+		}
+	}
+	return validateLifecycleStates(resolveLifecycleStates(nodes))
+}
+
+func (c *Client) createWorkflowState(ctx context.Context, teamID, name, color, description string, position float64) (WorkflowState, error) {
+	if teamID == "" || name == "" {
+		return WorkflowState{}, errors.New("Linear team and workflow-state name are required")
+	}
+	var result struct {
+		WorkflowStateCreate struct {
+			Success       bool          `json:"success"`
+			WorkflowState WorkflowState `json:"workflowState"`
+		} `json:"workflowStateCreate"`
+	}
+	query := `mutation HarnessWorkflowStateCreate($input:WorkflowStateCreateInput!){workflowStateCreate(input:$input){success workflowState{id name type position}}}`
+	input := map[string]any{"teamId": teamID, "name": name, "type": "started", "color": color,
+		"description": description, "position": position}
+	if err := c.graphql(ctx, query, map[string]any{"input": input}, &result); err != nil {
+		return WorkflowState{}, err
+	}
+	if !result.WorkflowStateCreate.Success || result.WorkflowStateCreate.WorkflowState.ID == "" {
+		return WorkflowState{}, errors.New("Linear workflow-state creation did not succeed")
+	}
+	return result.WorkflowStateCreate.WorkflowState, nil
 }
 
 func (c *Client) SetIssueState(ctx context.Context, issueID string, state WorkflowState) (Issue, error) {

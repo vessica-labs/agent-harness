@@ -222,6 +222,14 @@ agent-harness cloud auth github --manifest-owner <github-owner>
 
 Approve the app and install it only on repositories the runner is allowed to modify. The app requests Metadata read, Contents write, and Pull Requests write, and configures a signed pull-request webhook at `/webhooks/github`. Record the installation ID for repository registration.
 
+To add merge tracking to an existing Agent Harness GitHub App without replacing its App ID, private key, or installations, deploy the current control plane and run:
+
+```sh
+agent-harness cloud auth github upgrade-webhook
+```
+
+The control plane generates and stores the webhook secret without printing it and updates the existing App's webhook URL. In the GitHub App settings, then enable the webhook and subscribe it to **Pull request** events.
+
 ### D. Connect Linear
 
 Open the pre-filled application form:
@@ -256,6 +264,8 @@ railway run --service control-plane --environment production -- \
 ```
 
 Approve the Linear OAuth page. Verify `linear_oauth` and `linear_webhook_secret` with `agent-harness cloud auth status`, then remove all three temporary variables. The durable access and refresh tokens remain encrypted in Postgres.
+
+Repository registration idempotently creates the team-specific **Needs Input** and **For Review** states in Linear's Started category when they are absent. Existing **In Review** or **Review** states satisfy the review-state requirement and are not duplicated. The authorizing Linear member must be allowed to manage the team's workflow statuses.
 
 ### E. Connect Notion
 
