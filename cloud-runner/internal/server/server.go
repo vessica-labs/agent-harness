@@ -150,6 +150,8 @@ func (s *Server) managementRoutes(w http.ResponseWriter, r *http.Request) {
 		s.putRepository(w, r)
 	case r.URL.Path == "/v1/providers/linear/context" && r.Method == http.MethodGet:
 		s.linearRegistrationContext(w, r)
+	case strings.HasPrefix(r.URL.Path, "/v1/repositories/") && strings.Contains(r.URL.Path, "/linear/issues"):
+		s.repositoryLinearIssue(w, r)
 	case strings.HasPrefix(r.URL.Path, "/v1/repositories/") && r.Method == http.MethodDelete:
 		id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/repositories/"), "/")
 		if id == "" {
@@ -174,6 +176,97 @@ func (s *Server) managementRoutes(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusNotFound, store.ErrNotFound)
 	}
+}
+
+func (s *Server) repositoryLinearIssue(w http.ResponseWriter, r *http.Request) {
+	segments := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/repositories/"), "/"), "/")
+	if len(segments) < 3 || segments[0] == "" || segments[1] != "linear" || segments[2] != "issues" {
+		writeError(w, http.StatusNotFound, store.ErrNotFound)
+		return
+	}
+	repository, err := s.store.GetRepository(r.Context(), segments[0])
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if !repository.Enabled {
+		writeError(w, http.StatusConflict, errors.New("repository automation is disabled"))
+		return
+	}
+	token, err := s.linearAccessToken(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	client := linearapi.New(token)
+	if len(segments) == 3 && r.Method == http.MethodPost {
+		var input struct {
+			Title       string `json:"title"`
+			Description string `json:"description"`
+		}
+		if err := decodeJSON(w, r, s.config.MaxRequestBytes, &input); err != nil {
+			return
+		}
+		issue, err := client.CreateRootIssue(r.Context(), repository.LinearTeamID, repository.LinearProjectID,
+			repository.TriggerLabel, input.Title, input.Description)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, fmt.Errorf("create Linear test issue: %w", err))
+			return
+		}
+		writeJSON(w, http.StatusCreated, issue)
+		return
+	}
+	if len(segments) == 5 && segments[4] == "archive" && r.Method == http.MethodPost {
+		var input struct {
+			Confirm bool `json:"confirm"`
+		}
+		if err := decodeJSON(w, r, s.config.MaxRequestBytes, &input); err != nil {
+			return
+		}
+		if !input.Confirm {
+			writeError(w, http.StatusBadRequest, errors.New("archive requires explicit confirmation"))
+			return
+		}
+		issue, err := client.Issue(r.Context(), segments[3])
+		if err != nil {
+			writeError(w, http.StatusBadGateway, fmt.Errorf("resolve Linear issue: %w", err))
+			return
+		}
+		if err := s.ensureLinearIssueIsNotCanonical(r.Context(), repository.ID, issue); err != nil {
+			writeError(w, http.StatusConflict, err)
+			return
+		}
+		archived, err := client.ArchiveIssue(r.Context(), issue.ID)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, fmt.Errorf("archive Linear issue: %w", err))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "issue": archived})
+		return
+	}
+	writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+}
+
+func (s *Server) ensureLinearIssueIsNotCanonical(ctx context.Context, repositoryID string, issue linearapi.Issue) error {
+	runs, err := s.store.ListRuns(ctx, model.RunFilter{RepositoryID: repositoryID, Limit: 500})
+	if err != nil {
+		return err
+	}
+	for _, run := range runs {
+		if run.SourceIssueID == issue.ID || run.SourceIssueKey == issue.Identifier {
+			return fmt.Errorf("refusing to archive canonical source issue %s for run %s", issue.Identifier, run.ID)
+		}
+		tickets, listErr := s.store.ListTickets(ctx, run.ID)
+		if listErr != nil {
+			return listErr
+		}
+		for _, ticket := range tickets {
+			if ticket.ProviderIssueID == issue.ID || ticket.ProviderIssueKey == issue.Identifier {
+				return fmt.Errorf("refusing to archive canonical child issue %s for run %s", issue.Identifier, run.ID)
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Server) linearRegistrationContext(w http.ResponseWriter, r *http.Request) {

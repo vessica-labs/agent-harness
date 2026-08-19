@@ -66,12 +66,17 @@ Create the least-privilege GitHub App with `agent-harness cloud auth github --ma
 agent-harness cloud repo add --name example --github-owner owner --github-repo repo \
   --github-installation 123 --linear-workspace org --linear-team team \
   --trigger-label agent-harness --notion-parent page --base-branch main
+agent-harness cloud repo issue create --repo <repository-id> --title "Test feature" \
+  --description-file feature-request.md
+agent-harness cloud repo issue archive --repo <repository-id> --issue AGE-123 --yes
 agent-harness cloud runs list
 agent-harness cloud runs watch --run <run-id>
 agent-harness cloud runs input <run-id> --file clarified-request.md
 agent-harness cloud runs export <run-id> --repo /path/to/repo
 agent-harness ui
 ```
+
+The issue commands use the control plane's encrypted Linear app credential; provider tokens never enter the local process. `issue create` applies the repository's configured trigger label so Linear's signed webhook remains the only run-claim path. `issue archive` refuses to archive a source issue or canonical child already mapped to a durable run.
 
 The UI binds only to `127.0.0.1`. Its backend injects the bearer token into proxied REST and SSE calls; browser JavaScript never receives the credential.
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,7 +53,7 @@ func cloudProfile(args []string) error {
 
 func cloudRepo(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("repo requires add, list, remove, or discover-linear")
+		return errors.New("repo requires add, list, remove, discover-linear, or issue")
 	}
 	client, err := newAPI("")
 	if err != nil {
@@ -82,8 +83,11 @@ func cloudRepo(ctx context.Context, args []string) error {
 		}
 		return printJSON(result)
 	}
+	if args[0] == "issue" {
+		return cloudRepoIssue(ctx, client, args[1:])
+	}
 	if args[0] != "add" {
-		return errors.New("repo supports add, list, remove, or discover-linear")
+		return errors.New("repo supports add, list, remove, discover-linear, or issue")
 	}
 	flags := flag.NewFlagSet("cloud repo add", flag.ContinueOnError)
 	value := model.Repository{Enabled: true, TriggerLabel: "agent-harness", BaseBranch: "main"}
@@ -106,6 +110,64 @@ func cloudRepo(ctx context.Context, args []string) error {
 		return err
 	}
 	return printJSON(result)
+}
+
+func cloudRepoIssue(ctx context.Context, client *apiClient, args []string) error {
+	if len(args) == 0 {
+		return errors.New("repo issue requires create or archive")
+	}
+	switch args[0] {
+	case "create":
+		flags := flag.NewFlagSet("cloud repo issue create", flag.ContinueOnError)
+		repositoryID := flags.String("repo", "", "registered repository id")
+		title := flags.String("title", "", "Linear issue title")
+		descriptionFile := flags.String("description-file", "", "Markdown description file, or - for stdin")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *repositoryID == "" || strings.TrimSpace(*title) == "" || *descriptionFile == "" {
+			return errors.New("repo issue create requires --repo, --title, and --description-file")
+		}
+		var body []byte
+		var err error
+		if *descriptionFile == "-" {
+			body, err = io.ReadAll(io.LimitReader(os.Stdin, 64<<10))
+		} else {
+			body, err = os.ReadFile(*descriptionFile)
+		}
+		if err != nil {
+			return err
+		}
+		description := strings.TrimSpace(string(body))
+		if description == "" || len(description) >= 64<<10 {
+			return errors.New("issue description must be between 1 byte and 64 KiB")
+		}
+		var result any
+		endpoint := "/v1/repositories/" + url.PathEscape(*repositoryID) + "/linear/issues"
+		if err := client.do(ctx, http.MethodPost, endpoint, map[string]string{"title": strings.TrimSpace(*title), "description": description}, &result); err != nil {
+			return err
+		}
+		return printJSON(result)
+	case "archive":
+		flags := flag.NewFlagSet("cloud repo issue archive", flag.ContinueOnError)
+		repositoryID := flags.String("repo", "", "registered repository id")
+		issueID := flags.String("issue", "", "Linear issue identifier or id")
+		confirm := flags.Bool("yes", false, "confirm archival")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *repositoryID == "" || *issueID == "" || !*confirm {
+			return errors.New("repo issue archive requires --repo, --issue, and --yes")
+		}
+		var result any
+		endpoint := "/v1/repositories/" + url.PathEscape(*repositoryID) + "/linear/issues/" + url.PathEscape(*issueID) + "/archive"
+		if err := client.do(ctx, http.MethodPost, endpoint, map[string]bool{"confirm": true}, &result); err != nil {
+			return err
+		}
+		return printJSON(result)
+	default:
+		return fmt.Errorf("unknown repo issue command %q", args[0])
+	}
 }
 
 func cloudRuns(ctx context.Context, args []string) error {

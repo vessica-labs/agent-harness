@@ -38,6 +38,42 @@ paths:
       parameters: [{name: repository_id, in: path, required: true, schema: {type: string}}]
       responses:
         "200": {description: Repository automation disabled}
+  /v1/repositories/{repository_id}/linear/issues:
+    post:
+      security: [{bearerAuth: []}]
+      description: Create a root Linear issue with the repository's configured trigger label
+      parameters: [{name: repository_id, in: path, required: true, schema: {type: string}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, description]
+              properties:
+                title: {type: string}
+                description: {type: string, maxLength: 65535}
+      responses:
+        "201": {description: Linear issue created; its webhook will claim the run}
+  /v1/repositories/{repository_id}/linear/issues/{issue_id}/archive:
+    post:
+      security: [{bearerAuth: []}]
+      description: Archive an explicitly confirmed non-canonical Linear issue
+      parameters:
+        - {name: repository_id, in: path, required: true, schema: {type: string}}
+        - {name: issue_id, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm]
+              properties:
+                confirm: {type: boolean, const: true}
+      responses:
+        "200": {description: Issue archived}
+        "409": {description: Issue is a canonical source or mapped child of a durable run}
   /v1/providers/linear/context:
     get:
       security: [{bearerAuth: []}]

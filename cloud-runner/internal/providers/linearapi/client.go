@@ -60,6 +60,11 @@ type Project struct {
 	TeamIDs []string `json:"team_ids"`
 }
 
+type IssueLabel struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type Ticket struct {
 	Key                string   `json:"key"`
 	Title              string   `json:"title"`
@@ -139,6 +144,71 @@ func (c *Client) Issue(ctx context.Context, id string) (Issue, error) {
 	}
 	err := c.graphql(ctx, `query HarnessIssue($id:String!){issue(id:$id){id identifier title url description comments{nodes{id body}} children{nodes{id identifier title url description}}}}`, map[string]any{"id": id}, &result)
 	return result.Issue, err
+}
+
+// CreateRootIssue creates an issue that can enter the webhook-driven harness.
+// The trigger label is resolved by name inside the configured team so callers
+// never need to handle provider label identifiers or credentials locally.
+func (c *Client) CreateRootIssue(ctx context.Context, teamID, projectID, labelName, title, description string) (Issue, error) {
+	if teamID == "" || labelName == "" || strings.TrimSpace(title) == "" {
+		return Issue{}, errors.New("Linear team, trigger label, and issue title are required")
+	}
+	var labels struct {
+		IssueLabels struct {
+			Nodes []IssueLabel `json:"nodes"`
+		} `json:"issueLabels"`
+	}
+	query := `query HarnessIssueLabel($teamId:ID!,$name:String!){issueLabels(filter:{team:{id:{eq:$teamId}},name:{eq:$name}}){nodes{id name}}}`
+	if err := c.graphql(ctx, query, map[string]any{"teamId": teamID, "name": labelName}, &labels); err != nil {
+		return Issue{}, err
+	}
+	if len(labels.IssueLabels.Nodes) != 1 {
+		return Issue{}, fmt.Errorf("Linear trigger label %q resolved to %d labels in the configured team", labelName, len(labels.IssueLabels.Nodes))
+	}
+	variables := map[string]any{"teamId": teamID, "labelIds": []string{labels.IssueLabels.Nodes[0].ID},
+		"title": strings.TrimSpace(title), "description": strings.TrimSpace(description)}
+	mutation := `mutation HarnessRootIssueCreate($teamId:String!,$labelIds:[String!]!,$title:String!,$description:String!){issueCreate(input:{teamId:$teamId,labelIds:$labelIds,title:$title,description:$description}){success issue{id identifier title url description}}}`
+	if projectID != "" {
+		variables["projectId"] = projectID
+		mutation = `mutation HarnessRootIssueCreate($teamId:String!,$projectId:String!,$labelIds:[String!]!,$title:String!,$description:String!){issueCreate(input:{teamId:$teamId,projectId:$projectId,labelIds:$labelIds,title:$title,description:$description}){success issue{id identifier title url description}}}`
+	}
+	var result struct {
+		IssueCreate struct {
+			Success bool  `json:"success"`
+			Issue   Issue `json:"issue"`
+		} `json:"issueCreate"`
+	}
+	if err := c.graphql(ctx, mutation, variables, &result); err != nil {
+		return Issue{}, err
+	}
+	if !result.IssueCreate.Success || result.IssueCreate.Issue.ID == "" {
+		return Issue{}, errors.New("Linear issue creation did not succeed")
+	}
+	return result.IssueCreate.Issue, nil
+}
+
+// ArchiveIssue resolves either an issue UUID or identifier and archives the
+// exact issue. It is intentionally separate from normal pipeline operations.
+func (c *Client) ArchiveIssue(ctx context.Context, id string) (Issue, error) {
+	issue, err := c.Issue(ctx, id)
+	if err != nil {
+		return Issue{}, err
+	}
+	if issue.ID == "" {
+		return Issue{}, fmt.Errorf("Linear issue %q was not found", id)
+	}
+	var result struct {
+		IssueArchive struct {
+			Success bool `json:"success"`
+		} `json:"issueArchive"`
+	}
+	if err := c.graphql(ctx, `mutation HarnessIssueArchive($id:String!){issueArchive(id:$id){success}}`, map[string]any{"id": issue.ID}, &result); err != nil {
+		return Issue{}, err
+	}
+	if !result.IssueArchive.Success {
+		return Issue{}, errors.New("Linear issue archive did not succeed")
+	}
+	return issue, nil
 }
 
 func (c *Client) UpsertComment(ctx context.Context, issueID, marker, body string) (Comment, error) {

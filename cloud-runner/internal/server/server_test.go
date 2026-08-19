@@ -18,6 +18,7 @@ import (
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/events"
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/linear"
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/model"
+	"github.com/vessica-labs/agent-harness/cloud-runner/internal/providers/linearapi"
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/secure"
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/store"
 )
@@ -118,6 +119,36 @@ func TestEmptyRunListEncodesAsArray(t *testing.T) {
 	}
 	if runs, ok := result["runs"].([]any); !ok || len(runs) != 0 {
 		t.Fatalf("empty run list must encode as []: %#v", result["runs"])
+	}
+}
+
+func TestArchiveGuardRejectsCanonicalIssuesAndAllowsUnmappedDuplicates(t *testing.T) {
+	ctx := context.Background()
+	memory := store.NewMemory()
+	repository, err := memory.PutRepository(ctx, model.Repository{ID: "repo-1", Name: "repo", GitHubOwner: "v", GitHubRepo: "r",
+		LinearWorkspaceID: "org", LinearTeamID: "team", TriggerLabel: "agent-harness", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivery := model.LinearDelivery{DeliveryID: "delivery", WorkspaceID: "org", TeamID: "team", IssueID: "source-id",
+		IssueKey: "AGE-5", IssueTitle: "Source", IssueURL: "https://linear.test/AGE-5", ReceivedAt: time.Now().UTC()}
+	claimed, err := memory.AcceptLinearDelivery(ctx, repository, delivery)
+	if err != nil || claimed.Run == nil {
+		t.Fatalf("claim: %v %+v", err, claimed)
+	}
+	if err := memory.PutTicket(ctx, model.TicketState{RunID: claimed.Run.ID, LogicalKey: "AGE-5-T01", ProviderIssueID: "child-id", ProviderIssueKey: "AGE-9"}); err != nil {
+		t.Fatal(err)
+	}
+	key, _ := secure.GenerateKey()
+	box, _ := secure.NewBox(key)
+	server := New(Config{}, memory, box, events.NewBroker(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	for _, issue := range []linearapi.Issue{{ID: "source-id", Identifier: "AGE-5"}, {ID: "child-id", Identifier: "AGE-9"}} {
+		if err := server.ensureLinearIssueIsNotCanonical(ctx, repository.ID, issue); err == nil {
+			t.Fatalf("canonical issue %s was allowed", issue.Identifier)
+		}
+	}
+	if err := server.ensureLinearIssueIsNotCanonical(ctx, repository.ID, linearapi.Issue{ID: "duplicate-id", Identifier: "AGE-6"}); err != nil {
+		t.Fatalf("unmapped duplicate rejected: %v", err)
 	}
 }
 
