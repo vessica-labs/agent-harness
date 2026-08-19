@@ -5,36 +5,36 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 )
 
-func TestRegistrationContextReturnsWorkspaceTeamsAndProjects(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer access-token" {
-			t.Fatal("missing Linear bearer token")
+func TestUpsertChildUsesDurableExternalIdentity(t *testing.T) {
+	requests := 0
+	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var envelope struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
 		}
-		var request struct {
-			Query string `json:"query"`
+		_ = json.NewDecoder(r.Body).Decode(&envelope)
+		if !strings.Contains(envelope.Query, "HarnessIssueUpdate") {
+			t.Errorf("expected direct issue update, got %s", envelope.Query)
 		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.Query == "" {
-			t.Fatal("missing GraphQL query")
+		if envelope.Variables["id"] != "existing-child-id" {
+			t.Errorf("existing id not used: %#v", envelope.Variables)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"organization":{"id":"workspace-1","name":"Vessica"},"teams":{"nodes":[{"id":"team-1","name":"Engineering","key":"ENG"}]},"projects":{"nodes":[{"id":"project-1","name":"Agent Harness","teams":{"nodes":[{"id":"team-1"}]}}]}}}`))
+		_, _ = w.Write([]byte(`{"data":{"issueUpdate":{"success":true,"issue":{"id":"existing-child-id","identifier":"AGE-6","url":"https://linear.test/AGE-6"}}}}`))
 	}))
-	defer server.Close()
-
-	client := New("access-token")
-	client.endpoint = server.URL
-	client.http = server.Client()
-	value, err := client.RegistrationContext(context.Background())
+	defer host.Close()
+	client := &Client{token: "token", endpoint: host.URL, http: &http.Client{Timeout: time.Second}}
+	issue, err := client.UpsertChild(context.Background(), "parent", "team", "existing-child-id", "marker", Ticket{Key: "T01", Title: "Ticket"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value.Workspace.ID != "workspace-1" || len(value.Teams) != 1 || value.Teams[0].Key != "ENG" {
-		t.Fatalf("unexpected Linear context: %+v", value)
-	}
-	if len(value.Projects) != 1 || len(value.Projects[0].TeamIDs) != 1 || value.Projects[0].TeamIDs[0] != "team-1" {
-		t.Fatalf("unexpected Linear projects: %+v", value.Projects)
+	if requests != 1 || issue.Identifier != "AGE-6" {
+		t.Fatalf("requests=%d issue=%+v", requests, issue)
 	}
 }

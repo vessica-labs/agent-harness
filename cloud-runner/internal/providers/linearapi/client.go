@@ -168,22 +168,18 @@ func (c *Client) UpsertComment(ctx context.Context, issueID, marker, body string
 	return result.CommentCreate.Comment, err
 }
 
-func (c *Client) UpsertChild(ctx context.Context, parentID, teamID, marker string, ticket Ticket) (Issue, error) {
+func (c *Client) UpsertChild(ctx context.Context, parentID, teamID, existingID, marker string, ticket Ticket) (Issue, error) {
+	description := ticketDescription(marker, ticket)
+	if existingID != "" {
+		return c.updateChild(ctx, existingID, ticket.Title, description)
+	}
 	parent, err := c.Issue(ctx, parentID)
 	if err != nil {
 		return Issue{}, err
 	}
-	description := ticketDescription(marker, ticket)
 	for _, child := range parent.Children.Nodes {
 		if strings.Contains(child.Description, marker) {
-			var result struct {
-				IssueUpdate struct {
-					Success bool  `json:"success"`
-					Issue   Issue `json:"issue"`
-				} `json:"issueUpdate"`
-			}
-			err := c.graphql(ctx, `mutation HarnessIssueUpdate($id:String!,$title:String!,$description:String!){issueUpdate(id:$id,input:{title:$title,description:$description}){success issue{id identifier title url description}}}`, map[string]any{"id": child.ID, "title": ticket.Title, "description": description}, &result)
-			return result.IssueUpdate.Issue, err
+			return c.updateChild(ctx, child.ID, ticket.Title, description)
 		}
 	}
 	var result struct {
@@ -194,6 +190,17 @@ func (c *Client) UpsertChild(ctx context.Context, parentID, teamID, marker strin
 	}
 	err = c.graphql(ctx, `mutation HarnessIssueCreate($teamId:String!,$parentId:String!,$title:String!,$description:String!){issueCreate(input:{teamId:$teamId,parentId:$parentId,title:$title,description:$description}){success issue{id identifier title url description}}}`, map[string]any{"teamId": teamID, "parentId": parentID, "title": ticket.Title, "description": description}, &result)
 	return result.IssueCreate.Issue, err
+}
+
+func (c *Client) updateChild(ctx context.Context, id, title, description string) (Issue, error) {
+	var result struct {
+		IssueUpdate struct {
+			Success bool  `json:"success"`
+			Issue   Issue `json:"issue"`
+		} `json:"issueUpdate"`
+	}
+	err := c.graphql(ctx, `mutation HarnessIssueUpdate($id:String!,$title:String!,$description:String!){issueUpdate(id:$id,input:{title:$title,description:$description}){success issue{id identifier title url description}}}`, map[string]any{"id": id, "title": title, "description": description}, &result)
+	return result.IssueUpdate.Issue, err
 }
 
 func ticketDescription(marker string, ticket Ticket) string {

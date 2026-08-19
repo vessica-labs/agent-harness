@@ -90,7 +90,8 @@ func (s *Server) synchronize(ctx context.Context, runID string, input syncReques
 	}
 	for _, ticket := range input.Tickets {
 		marker := fmt.Sprintf("<!-- agent-harness:child:%s:%s -->", runID, ticket.Key)
-		child, err := linearClient.UpsertChild(ctx, run.SourceIssueID, repository.LinearTeamID, marker, ticket)
+		previous, _ := s.store.GetExternalSync(ctx, runID, "ticket:"+ticket.Key, "linear")
+		child, err := linearClient.UpsertChild(ctx, run.SourceIssueID, repository.LinearTeamID, previous.ExternalID, marker, ticket)
 		if err != nil {
 			return result, s.recordSyncFailure(ctx, runID, "ticket:"+ticket.Key, "linear", marker, err)
 		}
