@@ -68,3 +68,56 @@ func TestRequestIncludesNotionErrorDetails(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestUpdateRestoresPageAndPreservesNestedArtifacts(t *testing.T) {
+	var deleted []string
+	var update map[string]any
+	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPatch && r.URL.Path == "/pages/hub":
+			_ = json.NewDecoder(r.Body).Decode(&update)
+			_, _ = w.Write([]byte(`{"id":"hub","url":"https://notion.test/hub"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/blocks/hub/children" && r.URL.Query().Get("start_cursor") == "":
+			_, _ = w.Write([]byte(`{"results":[{"id":"body-1","type":"paragraph"},{"id":"prd-page","type":"child_page"}],"has_more":true,"next_cursor":"next"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/blocks/hub/children" && r.URL.Query().Get("start_cursor") == "next":
+			_, _ = w.Write([]byte(`{"results":[{"id":"adr-page","type":"child_page"},{"id":"body-2","type":"heading_1"}],"has_more":false}`))
+		case r.Method == http.MethodDelete:
+			deleted = append(deleted, strings.TrimPrefix(r.URL.Path, "/blocks/"))
+			_, _ = w.Write([]byte(`{"in_trash":true}`))
+		case r.Method == http.MethodPatch && r.URL.Path == "/blocks/hub/children":
+			_, _ = w.Write([]byte(`{"results":[]}`))
+		default:
+			http.Error(w, fmt.Sprintf("unexpected %s %s", r.Method, r.URL.String()), http.StatusNotFound)
+		}
+	}))
+	defer host.Close()
+	client := &Client{token: "token", baseURL: host.URL, version: "test", http: &http.Client{Timeout: time.Second}}
+	if _, err := client.UpsertPage(context.Background(), "parent", "hub", "Issue hub", "# refreshed"); err != nil {
+		t.Fatal(err)
+	}
+	if update["in_trash"] != false {
+		t.Fatalf("existing page was not explicitly restored: %#v", update)
+	}
+	if fmt.Sprint(deleted) != "[body-1 body-2]" {
+		t.Fatalf("nested artifact pages must be preserved, deleted=%v", deleted)
+	}
+}
+
+func TestRestorePageOnlyChangesTrashState(t *testing.T) {
+	var input map[string]any
+	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&input)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"prd","url":"https://notion.test/prd"}`))
+	}))
+	defer host.Close()
+	client := &Client{token: "token", baseURL: host.URL, version: "test", http: &http.Client{Timeout: time.Second}}
+	page, err := client.RestorePage(context.Background(), "prd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.ID != "prd" || len(input) != 1 || input["in_trash"] != false {
+		t.Fatalf("page=%+v input=%#v", page, input)
+	}
+}

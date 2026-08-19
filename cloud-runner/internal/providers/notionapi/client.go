@@ -40,6 +40,15 @@ func (c *Client) ValidateParent(ctx context.Context, pageID string) error {
 	return nil
 }
 
+func (c *Client) RestorePage(ctx context.Context, pageID string) (Page, error) {
+	var page Page
+	if pageID == "" {
+		return page, errors.New("Notion page id is required")
+	}
+	err := c.request(ctx, http.MethodPatch, "/pages/"+pageID, map[string]any{"in_trash": false}, &page)
+	return page, err
+}
+
 func (c *Client) UpsertPage(ctx context.Context, parentID, existingID, title, markdown string) (Page, error) {
 	if existingID == "" {
 		if found, err := c.findChildPage(ctx, parentID, title); err == nil {
@@ -60,7 +69,9 @@ func (c *Client) UpsertPage(ctx context.Context, parentID, existingID, title, ma
 		return page, nil
 	}
 	var page Page
-	if err := c.request(ctx, http.MethodPatch, "/pages/"+existingID, map[string]any{"properties": titleProperties(title)}, &page); err != nil {
+	if err := c.request(ctx, http.MethodPatch, "/pages/"+existingID, map[string]any{
+		"in_trash": false, "properties": titleProperties(title),
+	}, &page); err != nil {
 		return page, err
 	}
 	if err := c.replaceChildren(ctx, existingID, markdownBlocks(markdown)); err != nil {
@@ -106,15 +117,38 @@ func (c *Client) findChildPage(ctx context.Context, parentID, title string) (Pag
 }
 
 func (c *Client) replaceChildren(ctx context.Context, pageID string, blocks []any) error {
-	var result struct {
-		Results []struct {
-			ID string `json:"id"`
-		} `json:"results"`
+	// A page's child_page blocks are identities, not body content. Deleting one
+	// moves the nested page to Notion trash. Collect the complete list first so
+	// pagination does not shift while mutable content blocks are removed.
+	type child struct {
+		ID   string `json:"id"`
+		Type string `json:"type"`
 	}
-	if err := c.request(ctx, http.MethodGet, "/blocks/"+pageID+"/children?page_size=100", nil, &result); err != nil {
-		return err
+	var children []child
+	var cursor string
+	for {
+		path := "/blocks/" + pageID + "/children?page_size=100"
+		if cursor != "" {
+			path += "&start_cursor=" + cursor
+		}
+		var result struct {
+			Results    []child `json:"results"`
+			HasMore    bool    `json:"has_more"`
+			NextCursor string  `json:"next_cursor"`
+		}
+		if err := c.request(ctx, http.MethodGet, path, nil, &result); err != nil {
+			return err
+		}
+		children = append(children, result.Results...)
+		if !result.HasMore {
+			break
+		}
+		cursor = result.NextCursor
 	}
-	for _, block := range result.Results {
+	for _, block := range children {
+		if block.Type == "child_page" || block.Type == "child_database" {
+			continue
+		}
 		if err := c.request(ctx, http.MethodDelete, "/blocks/"+block.ID, nil, &map[string]any{}); err != nil {
 			return err
 		}

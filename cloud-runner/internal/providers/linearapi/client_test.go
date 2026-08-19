@@ -111,3 +111,40 @@ func TestArchiveIssueResolvesIdentifierBeforeMutation(t *testing.T) {
 		t.Fatalf("requests=%d issue=%+v", requests, issue)
 	}
 }
+
+func TestLifecycleStatesAndIssueTransitionUseTeamWorkflow(t *testing.T) {
+	requests := 0
+	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var envelope struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&envelope)
+		w.Header().Set("Content-Type", "application/json")
+		if requests == 1 {
+			if !strings.Contains(envelope.Query, "HarnessWorkflowStates") || envelope.Variables["teamId"] != "team-1" {
+				t.Fatalf("unexpected workflow request: %#v", envelope)
+			}
+			_, _ = w.Write([]byte(`{"data":{"workflowStates":{"nodes":[{"id":"done","name":"Done","type":"completed","position":4},{"id":"started","name":"In Progress","type":"started","position":2},{"id":"todo","name":"Todo","type":"unstarted","position":1}]}}}`))
+			return
+		}
+		if !strings.Contains(envelope.Query, "HarnessIssueState") || envelope.Variables["id"] != "issue-1" || envelope.Variables["stateId"] != "started" {
+			t.Fatalf("unexpected state mutation: %#v", envelope)
+		}
+		_, _ = w.Write([]byte(`{"data":{"issueUpdate":{"success":true,"issue":{"id":"issue-1","identifier":"AGE-1","state":{"id":"started","name":"In Progress","type":"started"}}}}}`))
+	}))
+	defer host.Close()
+	client := &Client{token: "token", endpoint: host.URL, http: &http.Client{Timeout: time.Second}}
+	states, err := client.LifecycleStates(context.Background(), "team-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	issue, err := client.SetIssueState(context.Background(), "issue-1", states.InProgress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if states.Todo.ID != "todo" || states.Done.ID != "done" || issue.State.ID != "started" {
+		t.Fatalf("states=%+v issue=%+v", states, issue)
+	}
+}

@@ -507,6 +507,18 @@ func (s *Server) runRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		s.appendEvent(r.Context(), model.Event{RunID: runID, Type: "run.cancelled", Level: "warning", Message: "Run cancelled by operator"})
 		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+	case "reconcile":
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+			return
+		}
+		result, err := s.reconcileRunProjections(r.Context(), runID)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		s.appendEvent(r.Context(), model.Event{RunID: runID, Type: "external.reconciled", Level: "info", Message: "Linear and Notion projections reconciled"})
+		writeJSON(w, http.StatusOK, result)
 	default:
 		writeError(w, http.StatusNotFound, store.ErrNotFound)
 	}
@@ -682,6 +694,17 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
+	}
+	if value.Type == "codex.usage" {
+		var usage model.Usage
+		if json.Unmarshal(value.Payload, &usage) != nil || usage.Model == "" || usage.InputTokens < 0 || usage.CachedInputTokens < 0 || usage.OutputTokens < 0 {
+			writeError(w, http.StatusBadRequest, errors.New("invalid Codex usage payload"))
+			return
+		}
+		if err := s.store.AddRunUsage(r.Context(), runID, usage); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
 	if value.Type == "run.completed" {
 		_ = s.store.SetRunState(r.Context(), runID, "completed", value.Stage, "")

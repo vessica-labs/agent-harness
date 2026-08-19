@@ -172,7 +172,7 @@ func cloudRepoIssue(ctx context.Context, client *apiClient, args []string) error
 
 func cloudRuns(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("runs requires list, show, watch, input, resume, cancel, or export")
+		return errors.New("runs requires list, show, watch, input, resume, cancel, reconcile, or export")
 	}
 	client, err := newAPI("")
 	if err != nil {
@@ -235,7 +235,7 @@ func cloudRuns(ctx context.Context, args []string) error {
 			return err
 		}
 		return printJSON(result)
-	case "resume", "cancel":
+	case "resume", "cancel", "reconcile":
 		if len(args) != 2 {
 			return fmt.Errorf("runs %s requires a run id", args[0])
 		}

@@ -81,6 +81,10 @@ func (s *Server) synchronize(ctx context.Context, runID string, input syncReques
 		return syncResponse{}, err
 	}
 	linearClient := linearapi.New(linearToken)
+	lifecycle, err := linearClient.LifecycleStates(ctx, repository.LinearTeamID)
+	if err != nil {
+		return syncResponse{}, fmt.Errorf("resolve Linear workflow states: %w", err)
+	}
 	result := syncResponse{Tickets: map[string]externalIdentity{}, Artifacts: map[string]externalIdentity{}}
 	if input.ParentComment != "" {
 		marker := "<!-- agent-harness:run:" + runID + " -->"
@@ -99,12 +103,25 @@ func (s *Server) synchronize(ctx context.Context, runID string, input syncReques
 			return result, s.recordSyncFailure(ctx, runID, "ticket:"+ticket.Key, "linear", marker, err)
 		}
 		result.Tickets[ticket.Key] = externalIdentity{ID: child.ID, Key: child.Identifier, URL: child.URL}
+		state := "planned"
+		if previousTicket, ok := ticketByKey(ctx, s, runID, ticket.Key); ok {
+			state = previousTicket.State
+		}
 		_ = s.store.PutTicket(ctx, model.TicketState{RunID: runID, LogicalKey: ticket.Key,
-			ProviderIssueID: child.ID, ProviderIssueKey: child.Identifier, State: "planned", Dependencies: ticket.DependsOn})
+			ProviderIssueID: child.ID, ProviderIssueKey: child.Identifier, State: state, Dependencies: ticket.DependsOn})
 		_ = s.store.PutExternalSync(ctx, model.ExternalSync{RunID: runID, LogicalKey: "ticket:" + ticket.Key, Provider: "linear", State: "synced", Marker: marker, ExternalID: child.ID, ExternalURL: child.URL})
+		target := workflowStateForTicket(state, lifecycle)
+		if err := s.setLinearIssueState(ctx, linearClient, runID, "ticket-state:"+ticket.Key, child.ID, target, false); err != nil {
+			return result, err
+		}
 		progressMarker := fmt.Sprintf("<!-- agent-harness:ticket:%s:%s -->", runID, ticket.Key)
 		progress := progressMarker + "\n\n## Agent Harness ticket `" + ticket.Key + "`\n\n- Run: `" + runID + "`\n- Status: planned\n- Depends on: " + emptyJoin(ticket.DependsOn) + "\n"
 		_, _ = linearClient.UpsertComment(ctx, child.ID, progressMarker, progress)
+	}
+	if len(input.Tickets) > 0 {
+		if err := s.setLinearIssueState(ctx, linearClient, runID, "parent-state", run.SourceIssueID, lifecycle.InProgress, false); err != nil {
+			return result, err
+		}
 	}
 	for _, progress := range input.TicketProgress {
 		synced, err := s.store.GetExternalSync(ctx, runID, "ticket:"+progress.Key, "linear")
@@ -120,6 +137,10 @@ func (s *Server) synchronize(ctx context.Context, runID string, input syncReques
 		}
 		_ = s.store.PutExternalSync(ctx, model.ExternalSync{RunID: runID, LogicalKey: "ticket-progress:" + progress.Key,
 			Provider: "linear", State: "synced", Marker: marker, ExternalID: comment.ID})
+		if err := s.setLinearIssueState(ctx, linearClient, runID, "ticket-state:"+progress.Key,
+			synced.ExternalID, workflowStateForTicket(progress.State, lifecycle), false); err != nil {
+			return result, err
+		}
 	}
 	if input.Summary != "" {
 		marker := "<!-- agent-harness:summary:" + runID + " -->"
@@ -128,6 +149,11 @@ func (s *Server) synchronize(ctx context.Context, runID string, input syncReques
 			return result, s.recordSyncFailure(ctx, runID, "summary", "linear", marker, err)
 		}
 		_ = s.store.PutExternalSync(ctx, model.ExternalSync{RunID: runID, LogicalKey: "summary", Provider: "linear", State: "synced", Marker: marker, ExternalID: comment.ID})
+		if allTicketsCompleted(ctx, s, runID) {
+			if err := s.setLinearIssueState(ctx, linearClient, runID, "parent-state", run.SourceIssueID, lifecycle.Done, false); err != nil {
+				return result, err
+			}
+		}
 	}
 	if len(input.Artifacts) > 0 {
 		if repository.NotionParentID == "" {
@@ -160,6 +186,129 @@ func (s *Server) synchronize(ctx context.Context, runID string, input syncReques
 		}
 	}
 	return result, nil
+}
+
+func ticketByKey(ctx context.Context, s *Server, runID, key string) (model.TicketState, bool) {
+	values, err := s.store.ListTickets(ctx, runID)
+	if err != nil {
+		return model.TicketState{}, false
+	}
+	for _, value := range values {
+		if value.LogicalKey == key {
+			return value, true
+		}
+	}
+	return model.TicketState{}, false
+}
+
+func workflowStateForTicket(state string, lifecycle linearapi.LifecycleStates) linearapi.WorkflowState {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "running", "in_progress", "in progress", "claimed":
+		return lifecycle.InProgress
+	case "completed", "done":
+		return lifecycle.Done
+	default:
+		return lifecycle.Todo
+	}
+}
+
+func allTicketsCompleted(ctx context.Context, s *Server, runID string) bool {
+	values, err := s.store.ListTickets(ctx, runID)
+	if err != nil || len(values) == 0 {
+		return false
+	}
+	for _, value := range values {
+		if value.State != "completed" {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) setLinearIssueState(ctx context.Context, client *linearapi.Client, runID, logicalKey, issueID string, state linearapi.WorkflowState, force bool) error {
+	marker := "workflow-state:" + state.ID
+	if previous, err := s.store.GetExternalSync(ctx, runID, logicalKey, "linear"); !force && err == nil && previous.State == "synced" && previous.Marker == marker {
+		return nil
+	}
+	issue, err := client.SetIssueState(ctx, issueID, state)
+	if err != nil {
+		return s.recordSyncFailure(ctx, runID, logicalKey, "linear", marker, err)
+	}
+	return s.store.PutExternalSync(ctx, model.ExternalSync{RunID: runID, LogicalKey: logicalKey, Provider: "linear",
+		State: "synced", Marker: marker, ExternalID: issueID, ExternalURL: issue.URL})
+}
+
+func (s *Server) reconcileRunProjections(ctx context.Context, runID string) (map[string]any, error) {
+	run, err := s.store.GetRun(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	repository, err := s.store.GetRepository(ctx, run.RepositoryID)
+	if err != nil {
+		return nil, err
+	}
+	linearToken, err := s.linearAccessToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	linearClient := linearapi.New(linearToken)
+	lifecycle, err := linearClient.LifecycleStates(ctx, repository.LinearTeamID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Linear workflow states: %w", err)
+	}
+	tickets, err := s.store.ListTickets(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	linearUpdated := 0
+	for _, ticket := range tickets {
+		if ticket.ProviderIssueID == "" {
+			continue
+		}
+		if err := s.setLinearIssueState(ctx, linearClient, runID, "ticket-state:"+ticket.LogicalKey,
+			ticket.ProviderIssueID, workflowStateForTicket(ticket.State, lifecycle), true); err != nil {
+			return nil, err
+		}
+		linearUpdated++
+	}
+	parentState := lifecycle.Todo
+	if len(tickets) > 0 {
+		parentState = lifecycle.InProgress
+	}
+	if run.State == "completed" && allTicketsCompleted(ctx, s, runID) {
+		parentState = lifecycle.Done
+	}
+	if err := s.setLinearIssueState(ctx, linearClient, runID, "parent-state", run.SourceIssueID, parentState, true); err != nil {
+		return nil, err
+	}
+	linearUpdated++
+
+	notionRestored := 0
+	if raw, credentialErr := s.credential(ctx, "notion"); credentialErr == nil {
+		notionClient := notionapi.New(string(raw))
+		syncs, listErr := s.store.ListExternalSyncs(ctx, runID)
+		if listErr != nil {
+			return nil, listErr
+		}
+		for _, projection := range syncs {
+			if projection.Provider != "notion" || projection.ExternalID == "" ||
+				(projection.LogicalKey != "notion-hub" && !strings.HasPrefix(projection.LogicalKey, "artifact:")) {
+				continue
+			}
+			page, restoreErr := notionClient.RestorePage(ctx, projection.ExternalID)
+			if restoreErr != nil {
+				return nil, s.recordSyncFailure(ctx, runID, projection.LogicalKey, "notion", projection.Marker, restoreErr)
+			}
+			url := page.URL
+			if url == "" {
+				url = projection.ExternalURL
+			}
+			_ = s.store.PutExternalSync(ctx, model.ExternalSync{RunID: runID, LogicalKey: projection.LogicalKey,
+				Provider: "notion", State: "synced", Marker: projection.Marker, ExternalID: projection.ExternalID, ExternalURL: url})
+			notionRestored++
+		}
+	}
+	return map[string]any{"ok": true, "linear_issues_updated": linearUpdated, "notion_pages_restored": notionRestored}, nil
 }
 
 func (s *Server) linearAccessToken(ctx context.Context) (string, error) {

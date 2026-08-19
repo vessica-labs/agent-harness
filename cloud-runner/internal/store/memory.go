@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -247,6 +248,9 @@ func (m *Memory) ClaimNextRun(_ context.Context, owner string, maxActive int, le
 	value := candidates[0]
 	expires := now.Add(lease)
 	value.State, value.LeaseOwner, value.LeaseExpiresAt, value.HeartbeatAt = "running", owner, &expires, &now
+	if value.StartedAt == nil {
+		value.StartedAt = &now
+	}
 	value.QueueReason = ""
 	value.Attempt++
 	value.UpdatedAt = now
@@ -263,6 +267,7 @@ func (m *Memory) GetRun(_ context.Context, id string) (model.Run, error) {
 	if !ok {
 		return value, ErrNotFound
 	}
+	value.DeriveDuration(time.Now().UTC())
 	return value, nil
 }
 
@@ -280,6 +285,7 @@ func (m *Memory) ListRuns(_ context.Context, filter model.RunFilter) ([]model.Ru
 		if !filter.After.IsZero() && !value.UpdatedAt.After(filter.After) {
 			continue
 		}
+		value.DeriveDuration(time.Now().UTC())
 		result = append(result, value)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.After(result[j].CreatedAt) })
@@ -288,6 +294,29 @@ func (m *Memory) ListRuns(_ context.Context, filter model.RunFilter) ([]model.Ru
 		limit = len(result)
 	}
 	return result[:limit], nil
+}
+
+func (m *Memory) AddRunUsage(_ context.Context, runID string, usage model.Usage) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	value, ok := m.runs[runID]
+	if !ok {
+		return ErrNotFound
+	}
+	if value.CodexModel == "" {
+		value.CodexModel = usage.Model
+	} else if !strings.Contains(","+value.CodexModel+",", ","+usage.Model+",") {
+		value.CodexModel += "," + usage.Model
+	}
+	value.CodexCalls++
+	value.InputTokens += usage.InputTokens
+	value.CachedInputTokens += usage.CachedInputTokens
+	value.OutputTokens += usage.OutputTokens
+	value.ReasoningTokens += usage.ReasoningTokens
+	value.EstimatedCostUSD += usage.EstimatedCostUSD
+	value.UpdatedAt = time.Now().UTC()
+	m.runs[runID] = value
+	return nil
 }
 
 func (m *Memory) SetRunState(_ context.Context, id, state, stage, message string) error {

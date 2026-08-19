@@ -77,6 +77,23 @@ func TestSignedWebhookClaimsOnceAndManagementIsProtected(t *testing.T) {
 	if len(tickets) != 1 || tickets[0].CommitSHA != "abc123" || tickets[0].State != "completed" {
 		t.Fatalf("ticket event was not projected: %+v", tickets)
 	}
+	usageBody := bytes.NewBufferString(`{"stage":"coder","type":"codex.usage","level":"info","message":"usage","payload":{"model":"gpt-5.3-codex","input_tokens":120,"cached_input_tokens":20,"output_tokens":30,"reasoning_output_tokens":5,"estimated_api_cost_usd":0.001}}`)
+	usageRequest, _ := http.NewRequest(http.MethodPost, host.URL+"/internal/v1/runs/"+runs[0].ID+"/events", usageBody)
+	usageRequest.Header.Set("Authorization", "Bearer "+capability)
+	usageRequest.Header.Set("Content-Type", "application/json")
+	usageResponse, err := http.DefaultClient.Do(usageRequest)
+	if err != nil || usageResponse.StatusCode != http.StatusCreated {
+		var responseBody []byte
+		if usageResponse != nil {
+			responseBody, _ = io.ReadAll(usageResponse.Body)
+		}
+		t.Fatalf("usage projection failed: %v status=%v body=%s", err, usageResponse.StatusCode, responseBody)
+	}
+	usageResponse.Body.Close()
+	measured, _ := memory.GetRun(ctx, runs[0].ID)
+	if measured.CodexModel != "gpt-5.3-codex" || measured.InputTokens != 120 || measured.EstimatedCostUSD != 0.001 {
+		t.Fatalf("usage event was not projected: %+v", measured)
+	}
 	response, err := http.Get(host.URL + "/v1/runs")
 	if err != nil {
 		t.Fatal(err)

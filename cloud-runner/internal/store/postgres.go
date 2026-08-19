@@ -148,7 +148,9 @@ AND (linear_project_id='' OR linear_project_id=$3) ORDER BY (linear_project_id=$
 const runColumns = `id, repository_id, provider, source_issue_id, source_issue_key,
 source_issue_url, source_issue_title, feature_request, state, current_stage, queue_reason,
 attempt, sandbox_id, sandbox_session, auth_slot_id, lease_owner, lease_expires_at,
-heartbeat_at, branch, pull_request_url, error, metadata, created_at, updated_at, completed_at`
+heartbeat_at, branch, pull_request_url, error, metadata, codex_model, codex_calls,
+input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens, estimated_api_cost_usd,
+started_at, created_at, updated_at, completed_at`
 
 func scanRun(row rowScanner) (model.Run, error) {
 	var value model.Run
@@ -157,9 +159,26 @@ func scanRun(row rowScanner) (model.Run, error) {
 		&value.FeatureRequest, &value.State, &value.CurrentStage, &value.QueueReason,
 		&value.Attempt, &value.SandboxID, &value.SandboxSession, &value.AuthSlotID,
 		&value.LeaseOwner, &value.LeaseExpiresAt, &value.HeartbeatAt, &value.Branch,
-		&value.PullRequestURL, &value.Error, &value.Metadata, &value.CreatedAt,
+		&value.PullRequestURL, &value.Error, &value.Metadata, &value.CodexModel, &value.CodexCalls,
+		&value.InputTokens, &value.CachedInputTokens, &value.OutputTokens, &value.ReasoningTokens,
+		&value.EstimatedCostUSD, &value.StartedAt, &value.CreatedAt,
 		&value.UpdatedAt, &value.CompletedAt)
+	value.DeriveDuration(time.Now().UTC())
 	return value, err
+}
+
+func (p *Postgres) AddRunUsage(ctx context.Context, runID string, usage model.Usage) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE runs SET
+codex_model=CASE WHEN codex_model='' THEN $2 WHEN codex_model=$2 THEN codex_model
+  WHEN position(','||$2||',' in ','||codex_model||',')>0 THEN codex_model ELSE codex_model||','||$2 END,
+codex_calls=codex_calls+1,input_tokens=input_tokens+$3,cached_input_tokens=cached_input_tokens+$4,
+output_tokens=output_tokens+$5,reasoning_output_tokens=reasoning_output_tokens+$6,
+estimated_api_cost_usd=estimated_api_cost_usd+$7,updated_at=now() WHERE id=$1`, runID, usage.Model,
+		usage.InputTokens, usage.CachedInputTokens, usage.OutputTokens, usage.ReasoningTokens, usage.EstimatedCostUSD)
+	if err == nil && tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return err
 }
 
 func (p *Postgres) PutStage(ctx context.Context, value model.StageState) error {
@@ -348,13 +367,15 @@ ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`))
 	}
 	if err := tx.QueryRow(ctx, `UPDATE runs SET state='running', attempt=attempt+1,
 lease_owner=$2, lease_expires_at=now()+$3::interval, heartbeat_at=now(), queue_reason='',
-updated_at=now() WHERE id=$1 RETURNING `+runColumns, run.ID, owner, interval(lease)).Scan(
+started_at=COALESCE(started_at,now()),updated_at=now() WHERE id=$1 RETURNING `+runColumns, run.ID, owner, interval(lease)).Scan(
 		&run.ID, &run.RepositoryID, &run.Provider, &run.SourceIssueID, &run.SourceIssueKey,
 		&run.SourceIssueURL, &run.SourceIssueTitle, &run.FeatureRequest, &run.State,
 		&run.CurrentStage, &run.QueueReason, &run.Attempt, &run.SandboxID,
 		&run.SandboxSession, &run.AuthSlotID, &run.LeaseOwner, &run.LeaseExpiresAt,
 		&run.HeartbeatAt, &run.Branch, &run.PullRequestURL, &run.Error, &run.Metadata,
-		&run.CreatedAt, &run.UpdatedAt, &run.CompletedAt); err != nil {
+		&run.CodexModel, &run.CodexCalls, &run.InputTokens, &run.CachedInputTokens,
+		&run.OutputTokens, &run.ReasoningTokens, &run.EstimatedCostUSD,
+		&run.StartedAt, &run.CreatedAt, &run.UpdatedAt, &run.CompletedAt); err != nil {
 		return model.Run{}, err
 	}
 	if _, err := appendEventTx(ctx, tx, model.Event{RunID: run.ID, SourceIssueID: run.SourceIssueID,

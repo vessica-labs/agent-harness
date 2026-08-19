@@ -50,6 +50,7 @@ func sanitizedEnvironment(codexHome string) []string {
 		"SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "NODE_EXTRA_CA_CERTS": true,
 		"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true,
 		"PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": true, "PLAYWRIGHT_BROWSERS_PATH": true,
+		"HARNESS_PLAYWRIGHT_WORKERS": true, "PLAYWRIGHT_WORKERS": true,
 	}
 	var result []string
 	for _, pair := range os.Environ() {

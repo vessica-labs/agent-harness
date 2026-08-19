@@ -61,11 +61,14 @@ func TestEventRedactionRemovesKnownSecretsAndSensitiveFields(t *testing.T) {
 	if strings.Contains(message, secret) || strings.Contains(message, "abcdefghijklmnop") || strings.Contains(message, "ghp_") {
 		t.Fatalf("message retained a secret: %s", message)
 	}
-	payload := RedactJSON(json.RawMessage(`{"ticket_key":"T01","access_token":"opaque-token","nested":{"password":"bad","note":"management-secret-value"}}`), secret)
+	payload := RedactJSON(json.RawMessage(`{"ticket_key":"T01","access_token":"opaque-token","input_tokens":120,"nested":{"password":"bad","note":"management-secret-value"}}`), secret)
 	if strings.Contains(string(payload), "opaque-token") || strings.Contains(string(payload), "bad") || strings.Contains(string(payload), secret) {
 		t.Fatalf("payload retained a secret: %s", payload)
 	}
 	if !strings.Contains(string(payload), `"ticket_key":"T01"`) {
 		t.Fatalf("payload lost non-sensitive evidence: %s", payload)
+	}
+	if !strings.Contains(string(payload), `"input_tokens":120`) {
+		t.Fatalf("payload lost safe token-count metric: %s", payload)
 	}
 }

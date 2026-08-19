@@ -49,6 +49,46 @@ func (r *Runner) recordTicketCompletion(ctx context.Context, completed ticket, c
 	return err
 }
 
+func (r *Runner) recordTicketWaveStarted(ctx context.Context, wave []ticket) error {
+	body, err := os.ReadFile(filepath.Join(r.runDir, "state.json"))
+	if err != nil {
+		return err
+	}
+	var state struct {
+		Tickets []map[string]any `json:"tickets"`
+	}
+	if err := json.Unmarshal(body, &state); err != nil {
+		return err
+	}
+	ready := map[string]bool{}
+	for _, item := range wave {
+		ready[item.Key] = true
+	}
+	for _, value := range state.Tickets {
+		if key, _ := value["key"].(string); ready[key] {
+			value["status"] = "running"
+			value["owner"] = r.config.LeaseOwner
+		}
+	}
+	_, err = r.harness(ctx, r.repo, "checkpoint", "--run-dir", r.runDir, "--patch-json",
+		string(mustJSON(map[string]any{"tickets": state.Tickets})), "--event", "tickets.started")
+	return err
+}
+
+func (r *Runner) syncTicketProgress(ctx context.Context, stageID string) error {
+	body, err := os.ReadFile(filepath.Join(r.runDir, "state.json"))
+	if err != nil {
+		return err
+	}
+	var state struct {
+		Tickets []map[string]any `json:"tickets"`
+	}
+	if err := json.Unmarshal(body, &state); err != nil {
+		return err
+	}
+	return r.client.sync(ctx, map[string]any{"stage": stageID, "ticket_progress": state.Tickets}, &map[string]any{})
+}
+
 func (r *Runner) syncStage(ctx context.Context, stage Stage) error {
 	parent, err := r.harness(ctx, r.repo, "render-comment", "--run-dir", r.runDir, "--kind", "parent")
 	if err != nil {

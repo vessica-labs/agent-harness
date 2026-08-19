@@ -311,6 +311,7 @@ agent-harness cloud runs list
 agent-harness cloud runs show <run-id>
 agent-harness cloud runs watch --run <run-id>
 agent-harness cloud runs input <run-id> --file clarified-request.md
+agent-harness cloud runs reconcile <run-id>
 ```
 
 Open the local read-only dashboard:
@@ -320,6 +321,7 @@ agent-harness ui
 ```
 
 The UI binds to `127.0.0.1` and streams authenticated events without exposing the management token to browser JavaScript.
+Selecting a pipeline run filters the event stream to that run. Run details include duration, model, token counts, and estimated API-equivalent token cost; Playwright execution in Railway sandboxes is resource-capped without reducing the number of independent ticket pipelines.
 
 Resume, cancel, or export a run:
 

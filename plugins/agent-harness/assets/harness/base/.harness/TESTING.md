@@ -38,6 +38,8 @@ If a section does not apply, retain it and state why.
 
 <!-- Define isolation, retry limits, prohibited nondeterminism, and how flaky tests are handled. -->
 
+For Playwright, make the worker count configurable through `HARNESS_PLAYWRIGHT_WORKERS`; cloud sandboxes set this value to a resource-safe parallel limit. Do not hard-code a higher worker count in the Playwright configuration or package scripts.
+
 ## CI Gates
 
 <!-- List required merge checks and identify which failures block completion. -->

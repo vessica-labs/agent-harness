@@ -95,6 +95,8 @@ func runServer(ctx context.Context) error {
 		schedule := scheduler.New(values, provider, box, broker, scheduler.Config{
 			Owner: envDefault("RAILWAY_REPLICA_ID", "control-plane"), ControlPlaneURL: config.PublicURL,
 			Checkpoint: os.Getenv("HARNESS_SANDBOX_CHECKPOINT"), MaxActiveRuns: envInt("HARNESS_MAX_ACTIVE_RUNS", 3),
+			CodexModel:        envDefault("HARNESS_CODEX_MODEL", "gpt-5.3-codex"),
+			PlaywrightWorkers: envInt("HARNESS_PLAYWRIGHT_WORKERS", 2),
 		}, logger)
 		go schedule.Run(ctx)
 	}

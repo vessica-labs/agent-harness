@@ -72,6 +72,7 @@ agent-harness cloud repo issue archive --repo <repository-id> --issue AGE-123 --
 agent-harness cloud runs list
 agent-harness cloud runs watch --run <run-id>
 agent-harness cloud runs input <run-id> --file clarified-request.md
+agent-harness cloud runs reconcile <run-id>
 agent-harness cloud runs export <run-id> --repo /path/to/repo
 agent-harness ui
 ```
@@ -79,6 +80,12 @@ agent-harness ui
 The issue commands use the control plane's encrypted Linear app credential; provider tokens never enter the local process. `issue create` applies the repository's configured trigger label so Linear's signed webhook remains the only run-claim path. `issue archive` refuses to archive a source issue or canonical child already mapped to a durable run.
 
 The UI binds only to `127.0.0.1`. Its backend injects the bearer token into proxied REST and SSE calls; browser JavaScript never receives the credential.
+
+Selecting a run filters the SSE feed to that run; “Show all runs” reconnects to the global feed. Each run reports execution duration, explicit Codex model, model calls, input/cached-input/output/reasoning token counts, and an estimated API-equivalent cost. The estimate uses the checked-in pricing table for the selected model; ChatGPT-based Codex authentication may be billed through a plan rather than as API token charges.
+
+Cloud workers cap Playwright at two workers by default. This preserves browser parallelism without allowing a repository's CPU-visible default to exhaust the sandbox process/thread budget. Repositories should read `HARNESS_PLAYWRIGHT_WORKERS` in Playwright configuration or pass it as `--workers`; every cloud agent is also instructed to apply the cap explicitly.
+
+Linear child issues start in the team's Todo workflow state, move to In Progress when their coder wave is claimed, and move to Done after their commit is integrated. The parent moves to In Progress when the ticket plan is published and to Done only after all durable child tickets complete. Workflow IDs are discovered from the configured team rather than hard-coded.
 
 The public surface is deliberately small: signed Linear webhook intake and health checks. Management and SSE endpoints require the generated bearer token. Worker endpoints require a short-lived capability scoped to one run. The localhost UI proxies that token server-side and never stores it in browser JavaScript.
 
@@ -94,5 +101,7 @@ The public surface is deliberately small: signed Linear webhook intake and healt
 | `HARNESS_RAILWAY_ENVIRONMENT` | Sandbox environment ID or name |
 | `HARNESS_SANDBOX_CHECKPOINT` | Versioned worker checkpoint |
 | `RAILWAY_API_TOKEN` | Workspace-scoped token used only by the control plane |
+| `HARNESS_CODEX_MODEL` | Explicit worker model; defaults to `gpt-5.3-codex` |
+| `HARNESS_PLAYWRIGHT_WORKERS` | Maximum browser-test workers per sandbox; defaults to `2` |
 
 Provider credentials are encrypted in Postgres and never written to a repository. GitHub installation tokens are minted just in time and given only to controlled Git/CLI subprocesses. Linear and Notion credentials remain in the control plane.

@@ -44,6 +44,7 @@ type Store interface {
 	ListStages(context.Context, string) ([]model.StageState, error)
 	PutTicket(context.Context, model.TicketState) error
 	ListTickets(context.Context, string) ([]model.TicketState, error)
+	AddRunUsage(context.Context, string, model.Usage) error
 
 	AppendEvent(context.Context, model.Event) (model.Event, error)
 	ListEvents(context.Context, model.EventFilter) ([]model.Event, error)

@@ -1,0 +1,10 @@
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS codex_model text NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS codex_calls bigint NOT NULL DEFAULT 0;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS input_tokens bigint NOT NULL DEFAULT 0;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS cached_input_tokens bigint NOT NULL DEFAULT 0;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS output_tokens bigint NOT NULL DEFAULT 0;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS reasoning_output_tokens bigint NOT NULL DEFAULT 0;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS estimated_api_cost_usd double precision NOT NULL DEFAULT 0;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS started_at timestamptz;
+
+INSERT INTO schema_migrations(version) VALUES (2) ON CONFLICT DO NOTHING;

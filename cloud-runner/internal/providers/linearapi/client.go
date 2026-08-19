@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -19,17 +20,31 @@ type Client struct {
 }
 
 type Issue struct {
-	ID          string `json:"id"`
-	Identifier  string `json:"identifier"`
-	Title       string `json:"title"`
-	URL         string `json:"url"`
-	Description string `json:"description"`
+	ID          string        `json:"id"`
+	Identifier  string        `json:"identifier"`
+	Title       string        `json:"title"`
+	URL         string        `json:"url"`
+	Description string        `json:"description"`
+	State       WorkflowState `json:"state"`
 	Comments    struct {
 		Nodes []Comment `json:"nodes"`
 	} `json:"comments"`
 	Children struct {
 		Nodes []Issue `json:"nodes"`
 	} `json:"children"`
+}
+
+type WorkflowState struct {
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Type     string  `json:"type"`
+	Position float64 `json:"position"`
+}
+
+type LifecycleStates struct {
+	Todo       WorkflowState
+	InProgress WorkflowState
+	Done       WorkflowState
 }
 
 type Comment struct {
@@ -142,8 +157,70 @@ func (c *Client) Issue(ctx context.Context, id string) (Issue, error) {
 	var result struct {
 		Issue Issue `json:"issue"`
 	}
-	err := c.graphql(ctx, `query HarnessIssue($id:String!){issue(id:$id){id identifier title url description comments{nodes{id body}} children{nodes{id identifier title url description}}}}`, map[string]any{"id": id}, &result)
+	err := c.graphql(ctx, `query HarnessIssue($id:String!){issue(id:$id){id identifier title url description state{id name type position} comments{nodes{id body}} children{nodes{id identifier title url description state{id name type position}}}}}`, map[string]any{"id": id}, &result)
 	return result.Issue, err
+}
+
+// LifecycleStates resolves the repository team's own workflow instead of
+// assuming that status names or IDs are shared across Linear workspaces.
+func (c *Client) LifecycleStates(ctx context.Context, teamID string) (LifecycleStates, error) {
+	var result struct {
+		WorkflowStates struct {
+			Nodes []WorkflowState `json:"nodes"`
+		} `json:"workflowStates"`
+	}
+	query := `query HarnessWorkflowStates($teamId:ID!){workflowStates(filter:{team:{id:{eq:$teamId}}}){nodes{id name type position}}}`
+	if err := c.graphql(ctx, query, map[string]any{"teamId": teamID}, &result); err != nil {
+		return LifecycleStates{}, err
+	}
+	choose := func(kind string, preferred ...string) WorkflowState {
+		var candidates []WorkflowState
+		for _, state := range result.WorkflowStates.Nodes {
+			if strings.EqualFold(state.Type, kind) {
+				candidates = append(candidates, state)
+			}
+		}
+		sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].Position < candidates[j].Position })
+		for _, name := range preferred {
+			for _, state := range candidates {
+				if strings.EqualFold(strings.TrimSpace(state.Name), name) {
+					return state
+				}
+			}
+		}
+		if len(candidates) > 0 {
+			return candidates[0]
+		}
+		return WorkflowState{}
+	}
+	states := LifecycleStates{
+		Todo: choose("unstarted", "Todo", "To Do"), InProgress: choose("started", "In Progress", "Doing"),
+		Done: choose("completed", "Done", "Completed"),
+	}
+	if states.Todo.ID == "" || states.InProgress.ID == "" || states.Done.ID == "" {
+		return LifecycleStates{}, errors.New("Linear team must have unstarted, started, and completed workflow states")
+	}
+	return states, nil
+}
+
+func (c *Client) SetIssueState(ctx context.Context, issueID string, state WorkflowState) (Issue, error) {
+	if issueID == "" || state.ID == "" {
+		return Issue{}, errors.New("Linear issue and workflow state are required")
+	}
+	var result struct {
+		IssueUpdate struct {
+			Success bool  `json:"success"`
+			Issue   Issue `json:"issue"`
+		} `json:"issueUpdate"`
+	}
+	query := `mutation HarnessIssueState($id:String!,$stateId:String!){issueUpdate(id:$id,input:{stateId:$stateId}){success issue{id identifier url state{id name type position}}}}`
+	if err := c.graphql(ctx, query, map[string]any{"id": issueID, "stateId": state.ID}, &result); err != nil {
+		return Issue{}, err
+	}
+	if !result.IssueUpdate.Success {
+		return Issue{}, errors.New("Linear issue state update did not succeed")
+	}
+	return result.IssueUpdate.Issue, nil
 }
 
 // CreateRootIssue creates an issue that can enter the webhook-driven harness.

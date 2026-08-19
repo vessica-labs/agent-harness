@@ -46,7 +46,8 @@ Execution context:
 - Required result JSON file: %s
 
 Work directly in the supplied repository. Do not edit pipeline state or provider credentials. Write the exact JSON output contract to the required result file. %s`,
-		stage.ID, string(role), repo, runDir, strings.Join(inputs, "\n"), resultPath, extra)
+		stage.ID, string(role), repo, runDir, strings.Join(inputs, "\n"), resultPath,
+		extra+fmt.Sprintf(" In this Railway sandbox, every Playwright invocation must explicitly use at most %d workers (for example: npm run test:e2e -- --workers=%d). HARNESS_PLAYWRIGHT_WORKERS contains this limit.", r.config.PlaywrightWorkers, r.config.PlaywrightWorkers))
 	if err := os.MkdirAll(filepath.Dir(resultPath), 0o700); err != nil {
 		return err
 	}
@@ -58,7 +59,7 @@ Work directly in the supplied repository. Do not edit pipeline state or provider
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		return err
 	}
-	command := exec.CommandContext(ctx, r.config.CodexBinary, "exec", "--json",
+	command := exec.CommandContext(ctx, r.config.CodexBinary, "exec", "--json", "--model", r.config.CodexModel,
 		"--dangerously-bypass-approvals-and-sandbox", "--ignore-user-config", "-C", repo,
 		"--output-last-message", lastMessage, "-")
 	command.Env = sanitizedEnvironment(codexHome)
@@ -83,6 +84,14 @@ Work directly in the supplied repository. Do not edit pipeline state or provider
 	for scanner.Scan() {
 		line := append([]byte(nil), scanner.Bytes()...)
 		_, _ = logFile.Write(append(line, '\n'))
+		if usage, ok := parseCodexUsage(line, r.config.CodexModel); ok {
+			if err := r.event(context.WithoutCancel(ctx), "codex.usage", "info", "Codex turn usage recorded", stage.ID, usage); err != nil {
+				_ = command.Process.Kill()
+				_ = command.Wait()
+				_ = logFile.Close()
+				return fmt.Errorf("record Codex usage: %w", err)
+			}
+		}
 		if activity, ok := parseCodexActivity(line, repo); ok {
 			payload := map[string]any{"action": activity.Action, "item_id": activity.ItemID}
 			if ticketKey != "" {

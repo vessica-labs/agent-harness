@@ -405,6 +405,12 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 		return err
 	}
 	for _, wave := range waves {
+		if err := r.recordTicketWaveStarted(ctx, wave); err != nil {
+			return err
+		}
+		if err := r.syncTicketProgress(ctx, stage.ID); err != nil {
+			return fmt.Errorf("sync started ticket wave: %w", err)
+		}
 		runs := make([]*ticketRun, 0, len(wave))
 		for _, item := range wave {
 			worktree := filepath.Join(r.config.Workspace, "worktrees", safeName(item.Key))
@@ -497,6 +503,9 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 			}
 			if err := r.recordTicketCompletion(ctx, current.ticket, current.commit); err != nil {
 				return err
+			}
+			if err := r.syncTicketProgress(ctx, stage.ID); err != nil {
+				return fmt.Errorf("sync completed ticket %s: %w", current.ticket.Key, err)
 			}
 			_ = r.event(ctx, "ticket.completed", "info", "Ticket commit integrated", stage.ID,
 				map[string]any{"ticket_key": current.ticket.Key, "depends_on": current.ticket.DependsOn,

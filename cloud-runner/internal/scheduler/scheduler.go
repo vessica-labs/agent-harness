@@ -29,6 +29,8 @@ type Config struct {
 	PollInterval      time.Duration
 	HeartbeatInterval time.Duration
 	IdleTimeout       int
+	CodexModel        string
+	PlaywrightWorkers int
 }
 
 type Scheduler struct {
@@ -62,6 +64,12 @@ func New(values store.Store, provider sandbox.Provider, box *secure.Box, broker 
 	}
 	if config.Owner == "" {
 		config.Owner = "control-plane"
+	}
+	if config.CodexModel == "" {
+		config.CodexModel = "gpt-5.3-codex"
+	}
+	if config.PlaywrightWorkers <= 0 {
+		config.PlaywrightWorkers = 2
 	}
 	return &Scheduler{store: values, sandbox: provider, box: box, broker: broker, config: config, logger: logger}
 }
@@ -175,6 +183,9 @@ func (s *Scheduler) launch(ctx context.Context, run model.Run) {
 		"HARNESS_CODEX_AUTH_B64":      base64.StdEncoding.EncodeToString(sessions[0].Auth),
 		"HARNESS_CODEX_AUTH_SLOT":     sessions[0].ID, "HARNESS_ATTEMPT": strconv.Itoa(run.Attempt),
 		"HARNESS_CODEX_PARALLEL_SAFE":         strconv.FormatBool(parallelSafe),
+		"HARNESS_CODEX_MODEL":                 s.config.CodexModel,
+		"HARNESS_PLAYWRIGHT_WORKERS":          strconv.Itoa(s.config.PlaywrightWorkers),
+		"PLAYWRIGHT_WORKERS":                  strconv.Itoa(s.config.PlaywrightWorkers),
 		"PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": "/usr/bin/chromium",
 		"CI":                                  "true",
 	}

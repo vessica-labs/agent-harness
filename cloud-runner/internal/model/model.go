@@ -25,31 +25,63 @@ type Repository struct {
 }
 
 type Run struct {
-	ID               string          `json:"id"`
-	RepositoryID     string          `json:"repository_id"`
-	Provider         string          `json:"provider"`
-	SourceIssueID    string          `json:"source_issue_id"`
-	SourceIssueKey   string          `json:"source_issue_key"`
-	SourceIssueURL   string          `json:"source_issue_url,omitempty"`
-	SourceIssueTitle string          `json:"source_issue_title"`
-	FeatureRequest   string          `json:"feature_request,omitempty"`
-	State            string          `json:"state"`
-	CurrentStage     string          `json:"current_stage,omitempty"`
-	QueueReason      string          `json:"queue_reason,omitempty"`
-	Attempt          int             `json:"attempt"`
-	SandboxID        string          `json:"sandbox_id,omitempty"`
-	SandboxSession   string          `json:"sandbox_session,omitempty"`
-	AuthSlotID       string          `json:"auth_slot_id,omitempty"`
-	LeaseOwner       string          `json:"lease_owner,omitempty"`
-	LeaseExpiresAt   *time.Time      `json:"lease_expires_at,omitempty"`
-	HeartbeatAt      *time.Time      `json:"heartbeat_at,omitempty"`
-	Branch           string          `json:"branch,omitempty"`
-	PullRequestURL   string          `json:"pull_request_url,omitempty"`
-	Error            string          `json:"error,omitempty"`
-	Metadata         json.RawMessage `json:"metadata,omitempty"`
-	CreatedAt        time.Time       `json:"created_at"`
-	UpdatedAt        time.Time       `json:"updated_at"`
-	CompletedAt      *time.Time      `json:"completed_at,omitempty"`
+	ID                string          `json:"id"`
+	RepositoryID      string          `json:"repository_id"`
+	Provider          string          `json:"provider"`
+	SourceIssueID     string          `json:"source_issue_id"`
+	SourceIssueKey    string          `json:"source_issue_key"`
+	SourceIssueURL    string          `json:"source_issue_url,omitempty"`
+	SourceIssueTitle  string          `json:"source_issue_title"`
+	FeatureRequest    string          `json:"feature_request,omitempty"`
+	State             string          `json:"state"`
+	CurrentStage      string          `json:"current_stage,omitempty"`
+	QueueReason       string          `json:"queue_reason,omitempty"`
+	Attempt           int             `json:"attempt"`
+	SandboxID         string          `json:"sandbox_id,omitempty"`
+	SandboxSession    string          `json:"sandbox_session,omitempty"`
+	AuthSlotID        string          `json:"auth_slot_id,omitempty"`
+	LeaseOwner        string          `json:"lease_owner,omitempty"`
+	LeaseExpiresAt    *time.Time      `json:"lease_expires_at,omitempty"`
+	HeartbeatAt       *time.Time      `json:"heartbeat_at,omitempty"`
+	Branch            string          `json:"branch,omitempty"`
+	PullRequestURL    string          `json:"pull_request_url,omitempty"`
+	Error             string          `json:"error,omitempty"`
+	Metadata          json.RawMessage `json:"metadata,omitempty"`
+	CodexModel        string          `json:"codex_model,omitempty"`
+	CodexCalls        int64           `json:"codex_calls"`
+	InputTokens       int64           `json:"input_tokens"`
+	CachedInputTokens int64           `json:"cached_input_tokens"`
+	OutputTokens      int64           `json:"output_tokens"`
+	ReasoningTokens   int64           `json:"reasoning_output_tokens"`
+	EstimatedCostUSD  float64         `json:"estimated_api_cost_usd"`
+	DurationMS        int64           `json:"duration_ms"`
+	StartedAt         *time.Time      `json:"started_at,omitempty"`
+	CreatedAt         time.Time       `json:"created_at"`
+	UpdatedAt         time.Time       `json:"updated_at"`
+	CompletedAt       *time.Time      `json:"completed_at,omitempty"`
+}
+
+type Usage struct {
+	Model             string  `json:"model"`
+	InputTokens       int64   `json:"input_tokens"`
+	CachedInputTokens int64   `json:"cached_input_tokens"`
+	OutputTokens      int64   `json:"output_tokens"`
+	ReasoningTokens   int64   `json:"reasoning_output_tokens"`
+	EstimatedCostUSD  float64 `json:"estimated_api_cost_usd"`
+}
+
+func (r *Run) DeriveDuration(now time.Time) {
+	end := now
+	if r.CompletedAt != nil {
+		end = *r.CompletedAt
+	}
+	start := r.CreatedAt
+	if r.StartedAt != nil {
+		start = *r.StartedAt
+	}
+	if !start.IsZero() && end.After(start) {
+		r.DurationMS = end.Sub(start).Milliseconds()
+	}
 }
 
 type Event struct {

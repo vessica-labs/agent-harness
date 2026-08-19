@@ -180,3 +180,30 @@ func TestTerminalRunStateCannotBeDowngraded(t *testing.T) {
 		t.Fatalf("terminal run was downgraded: %+v", stored)
 	}
 }
+
+func TestRunUsageIsAccumulatedAndReported(t *testing.T) {
+	ctx := context.Background()
+	memory := NewMemory()
+	repo := repository(t, memory)
+	result, err := memory.AcceptLinearDelivery(ctx, repo, model.LinearDelivery{
+		DeliveryID: "usage-delivery", IssueID: "usage-issue", IssueKey: "AGE-8", IssueTitle: "Usage", ReceivedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, usage := range []model.Usage{
+		{Model: "gpt-5.3-codex", InputTokens: 100, CachedInputTokens: 20, OutputTokens: 10, ReasoningTokens: 3, EstimatedCostUSD: .01},
+		{Model: "gpt-5.3-codex", InputTokens: 200, CachedInputTokens: 50, OutputTokens: 20, ReasoningTokens: 4, EstimatedCostUSD: .02},
+	} {
+		if err := memory.AddRunUsage(ctx, result.Run.ID, usage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stored, err := memory.GetRun(ctx, result.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.CodexModel != "gpt-5.3-codex" || stored.CodexCalls != 2 || stored.InputTokens != 300 || stored.OutputTokens != 30 || stored.EstimatedCostUSD != .03 {
+		t.Fatalf("usage was not accumulated: %+v", stored)
+	}
+}

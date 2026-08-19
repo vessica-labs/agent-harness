@@ -174,7 +174,7 @@ func redactValue(value any, secrets []string) any {
 	switch current := value.(type) {
 	case map[string]any:
 		for key, child := range current {
-			if sensitiveKey(key) {
+			if sensitiveKey(key) && !safeMetricKey(key) {
 				current[key] = "[REDACTED]"
 				continue
 			}
@@ -190,6 +190,16 @@ func redactValue(value any, secrets []string) any {
 		return Redact(current, secrets...)
 	default:
 		return current
+	}
+}
+
+func safeMetricKey(key string) bool {
+	key = strings.ToLower(strings.ReplaceAll(key, "-", "_"))
+	switch key {
+	case "input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens":
+		return true
+	default:
+		return false
 	}
 }
 

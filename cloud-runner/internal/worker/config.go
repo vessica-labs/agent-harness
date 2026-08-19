@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -28,6 +29,8 @@ type Config struct {
 	Workspace         string
 	Harnessctl        string
 	CodexBinary       string
+	CodexModel        string
+	PlaywrightWorkers int
 }
 
 type CodexSession struct {
@@ -66,6 +69,8 @@ func ConfigFromEnv() (Config, error) {
 		Workspace:         envDefault("HARNESS_WORKSPACE", "/workspace"),
 		Harnessctl:        envDefault("HARNESS_HARNESSCTL", "/opt/agent-harness/harnessctl.py"),
 		CodexBinary:       envDefault("HARNESS_CODEX_BINARY", "codex"),
+		CodexModel:        envDefault("HARNESS_CODEX_MODEL", "gpt-5.3-codex"),
+		PlaywrightWorkers: envPositiveInt("HARNESS_PLAYWRIGHT_WORKERS", 2),
 	}
 	for name, value := range map[string]string{"run id": config.RunID, "issue key": config.IssueKey,
 		"control URL": config.ControlURL, "run capability": config.Capability,
@@ -77,6 +82,14 @@ func ConfigFromEnv() (Config, error) {
 	}
 	config.Workspace = filepath.Clean(config.Workspace)
 	return config, nil
+}
+
+func envPositiveInt(key string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(key)))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 func envDefault(key, fallback string) string {
