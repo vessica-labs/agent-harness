@@ -97,7 +97,12 @@ func (c *apiClient) watch(ctx context.Context, runID string, after int64, output
 		return err
 	}
 	request.Header.Set("Authorization", "Bearer "+c.token)
-	response, err := c.http.Do(request)
+	// SSE subscriptions are intentionally long lived. Preserve the configured
+	// transport and redirect policy, but do not apply the ordinary API request
+	// deadline to the stream. The caller's context owns cancellation.
+	watchHTTP := *c.http
+	watchHTTP.Timeout = 0
+	response, err := watchHTTP.Do(request)
 	if err != nil {
 		return err
 	}
