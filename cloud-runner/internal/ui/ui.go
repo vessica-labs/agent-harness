@@ -2,7 +2,7 @@ package ui
 
 import (
 	"context"
-	_ "embed"
+	"embed"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,6 +15,9 @@ import (
 
 //go:embed index.html
 var indexHTML []byte
+
+//go:embed assets/*.svg
+var assetFS embed.FS
 
 type Server struct {
 	http   *http.Server
@@ -57,9 +60,10 @@ func New(address, cloudURL, token string, logger *slog.Logger) (*Server, error) 
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'")
 		w.Write(indexHTML)
 	})
+	mux.Handle("GET /assets/", http.FileServer(http.FS(assetFS)))
 	mux.Handle("GET /api/", proxy)
 	mux.Handle("GET /events", proxy)
 	return &Server{logger: logger, http: &http.Server{Addr: address, Handler: mux,

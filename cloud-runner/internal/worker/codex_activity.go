@@ -18,6 +18,7 @@ type codexActivity struct {
 	Message  string
 	Action   string
 	ItemID   string
+	Command  string
 	Paths    []string
 	ExitCode *int
 }
@@ -46,7 +47,7 @@ func parseCodexActivity(line []byte, repo string) (codexActivity, bool) {
 			command = "repository command"
 		}
 		activity := codexActivity{Type: "codex.command.started", Level: "info", Message: "Running command: " + command,
-			Action: "command", ItemID: envelope.Item.ID, ExitCode: envelope.Item.ExitCode}
+			Action: "command", ItemID: envelope.Item.ID, Command: command, ExitCode: envelope.Item.ExitCode}
 		if envelope.Type == "item.completed" {
 			activity.Type, activity.Message = "codex.command.completed", "Ran command: "+command
 			if envelope.Item.ExitCode != nil && *envelope.Item.ExitCode != 0 {
@@ -85,8 +86,8 @@ func safeCommandSummary(value string) string {
 	value = commandSecret.ReplaceAllString(value, "$1[REDACTED]")
 	value = strings.Join(strings.Fields(value), " ")
 	runes := []rune(value)
-	if len(runes) > 240 {
-		value = string(runes[:237]) + "…"
+	if len(runes) > 1000 {
+		value = string(runes[:997]) + "…"
 	}
 	return value
 }

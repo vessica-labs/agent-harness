@@ -5,7 +5,7 @@ import "testing"
 func TestParseCodexCommandActivityWithoutOutput(t *testing.T) {
 	line := []byte(`{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc npm test","aggregated_output":"secret repository output","exit_code":0,"status":"completed"}}`)
 	activity, ok := parseCodexActivity(line, "/workspace/repo")
-	if !ok || activity.Type != "codex.command.completed" || activity.Message != "Ran command: npm test" {
+	if !ok || activity.Type != "codex.command.completed" || activity.Message != "Ran command: npm test" || activity.Command != "npm test" {
 		t.Fatalf("unexpected activity: %+v ok=%v", activity, ok)
 	}
 	if activity.ExitCode == nil || *activity.ExitCode != 0 {

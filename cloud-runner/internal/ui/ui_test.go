@@ -36,7 +36,7 @@ func TestLocalUIKeepsBearerTokenServerSide(t *testing.T) {
 	if strings.Contains(root.Body.String(), token) {
 		t.Fatal("management token was exposed to browser HTML")
 	}
-	for _, expected := range []string{"Pipeline DAG · execution order", "Run history · newest first", "pipeline complete", "codex.", "external_syncs", "estimated_api_cost_usd", "run_id=", "scheduleRefresh()", `type="button" class="run`, `role="log"`, `aria-pressed=`} {
+	for _, expected := range []string{"Pipeline DAG · execution order", "Run history · newest first", "pipeline complete", "codex.", "external_syncs", "estimated_api_cost_usd", "run_id=", "scheduleRefresh()", `type="button" class="run`, `role="log"`, `aria-pressed=`, "activityCard", "activity-payload", "Ran command"} {
 		if !strings.Contains(root.Body.String(), expected) {
 			t.Fatalf("runner UI is missing %q", expected)
 		}
@@ -46,6 +46,11 @@ func TestLocalUIKeepsBearerTokenServerSide(t *testing.T) {
 	if proxy.Code != http.StatusOK {
 		body, _ := io.ReadAll(proxy.Result().Body)
 		t.Fatalf("proxy failed: %d %s", proxy.Code, body)
+	}
+	icon := httptest.NewRecorder()
+	server.Handler().ServeHTTP(icon, httptest.NewRequest(http.MethodGet, "/assets/terminal-16.svg", nil))
+	if icon.Code != http.StatusOK || !strings.Contains(icon.Header().Get("Content-Type"), "image/svg+xml") {
+		t.Fatalf("terminal icon failed: status=%d content-type=%q", icon.Code, icon.Header().Get("Content-Type"))
 	}
 }
 

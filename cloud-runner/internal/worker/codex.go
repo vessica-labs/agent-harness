@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func (r *Runner) runCodex(ctx context.Context, repo string, stage Stage, ticketKey, resultPath string, extra string) error {
@@ -81,6 +82,7 @@ Work directly in the supplied repository. Do not edit pipeline state or provider
 	}
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64<<10), 16<<20)
+	activityStartedAt := map[string]time.Time{}
 	for scanner.Scan() {
 		line := append([]byte(nil), scanner.Bytes()...)
 		_, _ = logFile.Write(append(line, '\n'))
@@ -94,8 +96,18 @@ Work directly in the supplied repository. Do not edit pipeline state or provider
 		}
 		if activity, ok := parseCodexActivity(line, repo); ok {
 			payload := map[string]any{"action": activity.Action, "item_id": activity.ItemID}
+			now := time.Now()
+			if strings.HasSuffix(activity.Type, ".started") {
+				activityStartedAt[activity.ItemID] = now
+			} else if startedAt, exists := activityStartedAt[activity.ItemID]; exists {
+				payload["duration_ms"] = max(now.Sub(startedAt).Milliseconds(), 0)
+				delete(activityStartedAt, activity.ItemID)
+			}
 			if ticketKey != "" {
 				payload["ticket_key"] = ticketKey
+			}
+			if activity.Command != "" {
+				payload["command"] = activity.Command
 			}
 			if len(activity.Paths) > 0 {
 				payload["paths"] = activity.Paths
