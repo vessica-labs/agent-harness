@@ -95,9 +95,9 @@ func (r *Runner) Run(ctx context.Context) (runErr error) {
 	heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)
 	defer stopHeartbeat()
 	go r.heartbeat(heartbeatCtx)
-	for _, stage := range r.pipeline.Stages {
+	for order, stage := range r.pipeline.Stages {
 		if err := r.event(ctx, "pipeline.stage", "info", "Pipeline stage registered", stage.ID,
-			map[string]any{"needs": stage.Needs, "mode": stage.Mode, "parallelism": stage.Parallelism, "agent": stage.Agent}); err != nil {
+			map[string]any{"order": order, "needs": stage.Needs, "mode": stage.Mode, "parallelism": stage.Parallelism, "agent": stage.Agent}); err != nil {
 			return err
 		}
 	}

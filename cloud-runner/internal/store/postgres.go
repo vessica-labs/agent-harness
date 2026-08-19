@@ -623,6 +623,25 @@ external_url,error,updated_at FROM external_sync WHERE run_id=$1 AND logical_key
 	return value, err
 }
 
+func (p *Postgres) ListExternalSyncs(ctx context.Context, runID string) ([]model.ExternalSync, error) {
+	rows, err := p.pool.Query(ctx, `SELECT run_id,logical_key,provider,state,marker,external_id,
+external_url,error,updated_at FROM external_sync WHERE run_id=$1 ORDER BY provider,logical_key`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]model.ExternalSync, 0)
+	for rows.Next() {
+		var value model.ExternalSync
+		if err := rows.Scan(&value.RunID, &value.LogicalKey, &value.Provider, &value.State,
+			&value.Marker, &value.ExternalID, &value.ExternalURL, &value.Error, &value.UpdatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, value)
+	}
+	return result, rows.Err()
+}
+
 func (p *Postgres) PutExternalSync(ctx context.Context, value model.ExternalSync) error {
 	_, err := p.pool.Exec(ctx, `INSERT INTO external_sync(run_id,logical_key,provider,state,marker,
 external_id,external_url,error) VALUES($1,$2,$3,$4,$5,$6,$7,$8)

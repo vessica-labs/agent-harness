@@ -39,6 +39,11 @@ func NewMemory() *Memory {
 func (m *Memory) PutStage(_ context.Context, value model.StageState) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if previous, ok := m.stages[value.RunID+":"+value.Stage]; ok {
+		if value.StartedAt == nil {
+			value.StartedAt = previous.StartedAt
+		}
+	}
 	value.UpdatedAt = time.Now().UTC()
 	m.stages[value.RunID+":"+value.Stage] = value
 	return nil
@@ -60,6 +65,17 @@ func (m *Memory) ListStages(_ context.Context, runID string) ([]model.StageState
 func (m *Memory) PutTicket(_ context.Context, value model.TicketState) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if previous, ok := m.tickets[value.RunID+":"+value.LogicalKey]; ok {
+		if value.ProviderIssueID == "" {
+			value.ProviderIssueID = previous.ProviderIssueID
+		}
+		if value.ProviderIssueKey == "" {
+			value.ProviderIssueKey = previous.ProviderIssueKey
+		}
+		if value.CommitSHA == "" {
+			value.CommitSHA = previous.CommitSHA
+		}
+	}
 	value.UpdatedAt = time.Now().UTC()
 	m.tickets[value.RunID+":"+value.LogicalKey] = value
 	return nil
@@ -497,6 +513,24 @@ func (m *Memory) GetExternalSync(_ context.Context, runID, logicalKey, provider 
 		return value, ErrNotFound
 	}
 	return value, nil
+}
+
+func (m *Memory) ListExternalSyncs(_ context.Context, runID string) ([]model.ExternalSync, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]model.ExternalSync, 0)
+	for _, value := range m.externalSync {
+		if value.RunID == runID {
+			result = append(result, value)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Provider == result[j].Provider {
+			return result[i].LogicalKey < result[j].LogicalKey
+		}
+		return result[i].Provider < result[j].Provider
+	})
+	return result, nil
 }
 
 func (m *Memory) PutExternalSync(_ context.Context, value model.ExternalSync) error {

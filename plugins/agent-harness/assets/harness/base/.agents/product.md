@@ -16,9 +16,10 @@ Turn one Jira or Linear issue into an implementation-ready PRD and an acyclic ti
 2. Define the user problem, intended outcome, scope, requirements, and observable acceptance criteria.
 3. Apply the product and UI conventions in .harness/DESIGN.md. Specify the intended journey, component reuse, interaction states, responsive behavior, and accessibility requirements without inventing a new design system.
 4. Write the PRD using the exact template below. Give requirements stable R identifiers and acceptance criteria stable AC identifiers.
-5. Decompose implementation into the fewest independently verifiable tickets that create sensible commit boundaries.
-6. Give every ticket precise owned paths, focused checks, and direct dependencies. Tickets that may run in parallel must not have overlapping owned paths.
-7. Verify that every requirement and acceptance criterion is covered, all dependency keys exist, and the graph is acyclic. Do not assign waves; the pipeline computes them.
+5. Decompose implementation into the fewest independently verifiable tickets that create sensible commit boundaries while maximizing safe parallel work.
+6. Partition tickets by non-overlapping subsystem or path ownership. Add a dependency only for a true implementation prerequisite, not because tickets appear in the PRD in that order. When shared root files would serialize otherwise independent work, give final integration of those files to a later dependent ticket.
+7. When the feature has enough independent work, make at least as many tickets immediately ready as the configured coder parallelism. Never manufacture low-value tickets merely to fill capacity.
+8. Give every ticket precise owned paths and focused checks. Verify that every requirement and acceptance criterion is covered, all dependency keys exist, parallel tickets have disjoint paths, and the graph is acyclic. Do not assign waves; the pipeline computes them.
 
 ## Boundaries
 
@@ -26,6 +27,7 @@ Turn one Jira or Linear issue into an implementation-ready PRD and an acyclic ti
 - Do not invent repository facts, commands, UI conventions, or optional scope.
 - A material unresolved product question makes the result blocked; do not hide it as an assumption.
 - Each ticket must be completable as one scoped commit. Documentation and final QA work belong to their dedicated pipeline agents.
+- Prefer a wide, shallow ticket DAG. A serial chain is valid only when each edge represents a concrete code or artifact prerequisite.
 
 ## Exact PRD Template
 

@@ -328,13 +328,18 @@ func (s *Server) runRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		stages, stageErr := s.store.ListStages(r.Context(), runID)
+		if stageErr == nil {
+			stages = s.hydrateStageDefinitions(r.Context(), runID, stages)
+		}
 		tickets, ticketErr := s.store.ListTickets(r.Context(), runID)
 		artifacts, artifactErr := s.store.ListArtifacts(r.Context(), runID)
-		if stageErr != nil || ticketErr != nil || artifactErr != nil {
-			writeError(w, http.StatusInternalServerError, errors.Join(stageErr, ticketErr, artifactErr))
+		externalSyncs, syncErr := s.store.ListExternalSyncs(r.Context(), runID)
+		if stageErr != nil || ticketErr != nil || artifactErr != nil || syncErr != nil {
+			writeError(w, http.StatusInternalServerError, errors.Join(stageErr, ticketErr, artifactErr, syncErr))
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"run": run, "stages": stages, "tickets": tickets, "artifacts": artifacts})
+		writeJSON(w, http.StatusOK, map[string]any{"run": run, "stages": stages, "tickets": tickets,
+			"artifacts": artifacts, "external_syncs": externalSyncs})
 		return
 	}
 	if len(segments) != 2 {
@@ -591,7 +596,11 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 		_ = s.store.SetRunState(r.Context(), runID, "paused", value.Stage, value.Message)
 	} else if value.Type == "pipeline.stage" || value.Type == "stage.started" || value.Type == "stage.completed" || value.Type == "stage.retrying" {
 		state := map[string]string{"pipeline.stage": "pending", "stage.started": "running", "stage.completed": "completed", "stage.retrying": "pending"}[value.Type]
-		stage := model.StageState{RunID: runID, Stage: value.Stage, State: state, Details: value.Payload}
+		details := value.Payload
+		if value.Type != "pipeline.stage" {
+			details = s.mergeStageDetails(r.Context(), runID, value.Stage, value.Payload)
+		}
+		stage := model.StageState{RunID: runID, Stage: value.Stage, State: state, Details: details}
 		if value.Type == "stage.started" {
 			stage.StartedAt = &stored.CreatedAt
 			_ = s.store.SetRunState(r.Context(), runID, "running", value.Stage, "")
@@ -622,6 +631,60 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 		}
 	}
 	writeJSON(w, http.StatusCreated, stored)
+}
+
+func (s *Server) mergeStageDetails(ctx context.Context, runID, stage string, incoming json.RawMessage) json.RawMessage {
+	merged := map[string]any{}
+	if values, err := s.store.ListStages(ctx, runID); err == nil {
+		for _, value := range values {
+			if value.Stage == stage {
+				_ = json.Unmarshal(value.Details, &merged)
+				break
+			}
+		}
+	}
+	var update map[string]any
+	if json.Unmarshal(incoming, &update) == nil {
+		for key, value := range update {
+			merged[key] = value
+		}
+	}
+	result, _ := json.Marshal(merged)
+	return result
+}
+
+func (s *Server) hydrateStageDefinitions(ctx context.Context, runID string, stages []model.StageState) []model.StageState {
+	events, err := s.store.ListEvents(ctx, model.EventFilter{RunID: runID, Limit: 1000})
+	if err != nil {
+		return stages
+	}
+	definitions := map[string]json.RawMessage{}
+	order := 0
+	for _, event := range events {
+		if event.Type == "pipeline.stage" && event.Stage != "" {
+			var definition map[string]any
+			_ = json.Unmarshal(event.Payload, &definition)
+			if _, exists := definition["order"]; !exists {
+				definition["order"] = order
+			}
+			definitions[event.Stage], _ = json.Marshal(definition)
+			order++
+		}
+	}
+	for index := range stages {
+		definition, ok := definitions[stages[index].Stage]
+		if !ok {
+			continue
+		}
+		var base, current map[string]any
+		_ = json.Unmarshal(definition, &base)
+		_ = json.Unmarshal(stages[index].Details, &current)
+		for key, value := range current {
+			base[key] = value
+		}
+		stages[index].Details, _ = json.Marshal(base)
+	}
+	return stages
 }
 
 func (s *Server) internalJournal(w http.ResponseWriter, r *http.Request, runID string) {

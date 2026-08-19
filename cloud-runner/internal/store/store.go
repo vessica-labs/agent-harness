@@ -52,6 +52,7 @@ type Store interface {
 	GetArtifact(context.Context, string, string) (model.Artifact, error)
 	ListArtifacts(context.Context, string) ([]model.Artifact, error)
 	GetExternalSync(context.Context, string, string, string) (model.ExternalSync, error)
+	ListExternalSyncs(context.Context, string) ([]model.ExternalSync, error)
 	PutExternalSync(context.Context, model.ExternalSync) error
 
 	PutCredential(context.Context, model.Credential) error

@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -67,11 +68,43 @@ Work directly in the supplied repository. Do not edit pipeline state or provider
 	if err != nil {
 		return err
 	}
-	command.Stdout, command.Stderr = logFile, &stderr
-	runErr := command.Run()
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		_ = logFile.Close()
+		return err
+	}
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		_ = logFile.Close()
+		return err
+	}
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 64<<10), 16<<20)
+	for scanner.Scan() {
+		line := append([]byte(nil), scanner.Bytes()...)
+		_, _ = logFile.Write(append(line, '\n'))
+		if activity, ok := parseCodexActivity(line, repo); ok {
+			payload := map[string]any{"action": activity.Action, "item_id": activity.ItemID}
+			if ticketKey != "" {
+				payload["ticket_key"] = ticketKey
+			}
+			if len(activity.Paths) > 0 {
+				payload["paths"] = activity.Paths
+			}
+			if activity.ExitCode != nil {
+				payload["exit_code"] = *activity.ExitCode
+			}
+			_ = r.event(context.WithoutCancel(ctx), activity.Type, activity.Level, activity.Message, stage.ID, payload)
+		}
+	}
+	scanErr := scanner.Err()
+	runErr := command.Wait()
 	closeErr := logFile.Close()
 	if runErr != nil {
 		return fmt.Errorf("Codex %s failed: %w: %s", stage.ID, runErr, tail(stderr.String(), 3000))
+	}
+	if scanErr != nil {
+		return fmt.Errorf("read Codex %s event stream: %w", stage.ID, scanErr)
 	}
 	if closeErr != nil {
 		return closeErr
