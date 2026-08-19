@@ -47,9 +47,17 @@ func (c *Client) UpsertPage(ctx context.Context, parentID, existingID, title, ma
 		}
 	}
 	if existingID == "" {
-		payload := map[string]any{"parent": map[string]string{"page_id": parentID}, "properties": titleProperties(title), "children": markdownBlocks(markdown)}
+		// Notion limits block mutation requests to 100 children. Create the
+		// identity first, then use the same chunked replacement path as updates.
+		payload := map[string]any{"parent": map[string]string{"page_id": parentID}, "properties": titleProperties(title)}
 		var page Page
-		return page, c.request(ctx, http.MethodPost, "/pages", payload, &page)
+		if err := c.request(ctx, http.MethodPost, "/pages", payload, &page); err != nil {
+			return page, err
+		}
+		if err := c.replaceChildren(ctx, page.ID, markdownBlocks(markdown)); err != nil {
+			return page, err
+		}
+		return page, nil
 	}
 	var page Page
 	if err := c.request(ctx, http.MethodPatch, "/pages/"+existingID, map[string]any{"properties": titleProperties(title)}, &page); err != nil {
@@ -189,6 +197,18 @@ func (c *Client) request(ctx context.Context, method, path string, input, output
 		return err
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		var apiError struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(responseBody, &apiError)
+		message := strings.TrimSpace(apiError.Message)
+		if len(message) > 500 {
+			message = message[:500]
+		}
+		if message != "" {
+			return fmt.Errorf("Notion API returned %d (%s): %s", response.StatusCode, apiError.Code, message)
+		}
 		return fmt.Errorf("Notion API returned %d", response.StatusCode)
 	}
 	if output == nil || len(responseBody) == 0 {
