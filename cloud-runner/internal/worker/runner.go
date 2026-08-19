@@ -323,6 +323,9 @@ func (r *Runner) runSingleStage(ctx context.Context, stage Stage) error {
 	}
 	resultPath := filepath.Join(r.runDir, filepath.FromSlash(stage.Result.File))
 	extra := ""
+	if stage.ID == "arch" {
+		extra = "The orchestrator will merge every required_owned_paths and additional_dependencies entry from a ready result into the product ticket plan and validate the revised DAG. Treat those declared additions as applied. The downstream docs stage owns documentation artifacts and the downstream QA stage owns Playwright acceptance evidence, so do not block solely because coder tickets omit those paths."
+	}
 	if stage.ID == "pr" {
 		_, fetchErr := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), "git", "fetch", "origin", r.config.BaseBranch)
 		if fetchErr != nil {
@@ -337,6 +340,11 @@ func (r *Runner) runSingleStage(ctx context.Context, stage Stage) error {
 	}
 	if err := r.runCodex(ctx, r.repo, stage, "", resultPath, extra); err != nil {
 		return err
+	}
+	if stage.ID == "arch" {
+		if err := r.reconcileArchitecture(ctx, resultPath); err != nil {
+			return err
+		}
 	}
 	if stage.ID == "pr" {
 		if err := r.finalizePullRequest(ctx, resultPath); err != nil {

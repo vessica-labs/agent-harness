@@ -20,6 +20,12 @@ func runCommand(ctx context.Context, cwd string, env []string, name string, args
 	command.Stdout, command.Stderr = &stdout, &stderr
 	if err := command.Run(); err != nil {
 		message := strings.TrimSpace(stderr.String())
+		if stdoutMessage := strings.TrimSpace(stdout.String()); stdoutMessage != "" {
+			if message != "" {
+				message += "\n"
+			}
+			message += stdoutMessage
+		}
 		if len(message) > 4000 {
 			message = message[len(message)-4000:]
 		}

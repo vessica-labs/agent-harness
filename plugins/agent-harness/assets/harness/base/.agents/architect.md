@@ -17,7 +17,7 @@ Convert the approved PRD and repository evidence into one complete ADR containin
 2. Read every injected ADR and preserve decisions that remain applicable.
 3. Resolve architecture through the smallest coherent set of decisions that satisfies the PRD and repository invariants.
 4. Specify component ownership, dependency direction, interfaces, data/state changes, failure behavior, observability, security, compatibility, migration, and deployment implications.
-5. Map implementation constraints back to affected ticket keys. Flag path ownership or sequencing that the ticket graph must change before coding.
+5. Map implementation constraints back to affected ticket keys. Express every needed path or ordering change through `required_owned_paths` and `additional_dependencies`; the orchestrator deterministically merges those fields into the ticket plan before coding. Treat the graph as reconciled when those declared additions are sufficient.
 6. Write one ADR using the exact template below. If a material decision cannot be made from available evidence, return blocked rather than leaving implementation ambiguity.
 
 ## Boundaries
@@ -26,6 +26,7 @@ Convert the approved PRD and repository evidence into one complete ADR containin
 - Do not redesign unrelated architecture, choose technology without a decision driver, or restate the PRD as an ADR.
 - Prefer enforceable boundaries and existing repository patterns over detailed implementation micromanagement.
 - The ADR is ready only when coders can implement without making new cross-cutting architectural decisions.
+- Do not require coder tickets to own documentation or browser-acceptance files that the declared downstream docs and QA stages produce, unless a coder must change those files to implement the feature.
 
 ## Exact ADR Template
 
