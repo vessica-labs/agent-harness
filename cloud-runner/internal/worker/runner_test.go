@@ -33,6 +33,13 @@ func TestIntegrationBranchFitsRailwaySandboxPushPolicy(t *testing.T) {
 	if got, want := runner.branchName(), "sandbox/agent-harness-age-5-a7c890803e3b"; got != want {
 		t.Fatalf("branchName() = %q, want %q", got, want)
 	}
+	runner.deliveryBranch = "sandbox/agent-harness-age-5-a7c890803e3b-pr-0123456789ab"
+	if got := runner.branchName(); got != runner.deliveryBranch {
+		t.Fatalf("delivery branchName() = %q, want %q", got, runner.deliveryBranch)
+	}
+	if got := runner.baseRunBranchName(); got != "sandbox/agent-harness-age-5-a7c890803e3b" {
+		t.Fatalf("baseRunBranchName() = %q", got)
+	}
 }
 
 func TestTicketWavesResumeCompletedTickets(t *testing.T) {

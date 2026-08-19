@@ -29,6 +29,7 @@ type Runner struct {
 	localLease      string
 	githubToken     string
 	branchPublished bool
+	deliveryBranch  string
 }
 
 type runtimeCodexSession struct {
@@ -513,6 +514,17 @@ func (r *Runner) finalizePullRequest(ctx context.Context, resultPath string) err
 		return errors.New("PR worktree is not clean after verification")
 	}
 	wasPublished := r.branchPublished
+	if wasPublished {
+		head, err := runCommand(ctx, r.repo, sanitizedEnvironment(""), "git", "rev-parse", "--short=12", "HEAD")
+		if err != nil {
+			return err
+		}
+		r.deliveryBranch = r.baseRunBranchName() + "-pr-" + strings.TrimSpace(string(head))
+		if _, err := runCommand(ctx, r.repo, sanitizedEnvironment(""), "git", "checkout", "-B", r.deliveryBranch); err != nil {
+			return err
+		}
+		r.branchPublished = false
+	}
 	if err := r.pushBranch(ctx); err != nil {
 		return err
 	}
@@ -550,7 +562,7 @@ func (r *Runner) finalizePullRequest(ctx context.Context, resultPath string) err
 	output["status"], output["blocker"] = "created", nil
 	mode := "normal"
 	if wasPublished {
-		mode = "force-with-lease"
+		mode = "delivery-branch"
 	}
 	output["push"] = map[string]any{"status": "PASS", "mode": mode}
 	output["pull_request"] = canonical
@@ -568,9 +580,6 @@ func (r *Runner) finalizePullRequest(ctx context.Context, resultPath string) err
 
 func (r *Runner) pushBranch(ctx context.Context) error {
 	args := []string{"push", "--set-upstream", "origin", r.branchName()}
-	if r.branchPublished {
-		args = []string{"push", "--force-with-lease", "--set-upstream", "origin", r.branchName()}
-	}
 	_, err := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), "git", args...)
 	if err == nil {
 		r.branchPublished = true
@@ -702,6 +711,13 @@ func (r *Runner) state() (journalState, error) {
 }
 
 func (r *Runner) branchName() string {
+	if r.deliveryBranch != "" {
+		return r.deliveryBranch
+	}
+	return r.baseRunBranchName()
+}
+
+func (r *Runner) baseRunBranchName() string {
 	suffix := r.config.RunID
 	if len(suffix) > 12 {
 		suffix = suffix[len(suffix)-12:]
