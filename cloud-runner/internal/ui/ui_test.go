@@ -36,7 +36,7 @@ func TestLocalUIKeepsBearerTokenServerSide(t *testing.T) {
 	if strings.Contains(root.Body.String(), token) {
 		t.Fatal("management token was exposed to browser HTML")
 	}
-	for _, expected := range []string{"Pipeline DAG · execution order", "Run history · newest first", "codex.", "external_syncs"} {
+	for _, expected := range []string{"Pipeline DAG · execution order", "Run history · newest first", "pipeline complete", "codex.", "external_syncs"} {
 		if !strings.Contains(root.Body.String(), expected) {
 			t.Fatalf("runner UI is missing %q", expected)
 		}
