@@ -25,7 +25,13 @@ class PluginPackageTests(unittest.TestCase):
     def test_skills_have_no_placeholders(self) -> None:
         skills = sorted((PLUGIN / "skills").glob("*/SKILL.md"))
         self.assertEqual(
-            {"inspect-harness", "onboard-cloud-runner", "run-harness", "setup-harness"},
+            {
+                "inspect-harness",
+                "onboard-cloud-runner",
+                "run-harness",
+                "setup-harness",
+                "test-control-plane-ui",
+            },
             {skill.parent.name for skill in skills},
         )
         for skill in skills:
