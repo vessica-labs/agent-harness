@@ -194,6 +194,10 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				sameSite = http.SameSiteNoneMode
 			}
 			http.SetCookie(w, &http.Cookie{Name: CookieName, Value: token, Path: "/", HttpOnly: true, Secure: secure, SameSite: sameSite, MaxAge: 3600})
+			clean := *r.URL
+			clean.RawQuery = query.Encode()
+			http.Redirect(w, r, clean.String(), http.StatusSeeOther)
+			return
 		} else if cookie, err := r.Cookie(CookieName); err == nil {
 			token = cookie.Value
 			resolved, valid := b.touch(token)

@@ -41,15 +41,26 @@ func TestCapabilityFlowInjectsOverlayAndSetsCookie(t *testing.T) {
 	}
 	recorder := httptest.NewRecorder()
 	broker.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/previews/run-1/?cap="+token, nil))
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d", recorder.Code)
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303 redirect stripping the capability", recorder.Code)
 	}
-	if !strings.Contains(recorder.Body.String(), "harness-preview-panel") {
-		t.Fatal("overlay was not injected into the HTML response")
+	location := recorder.Header().Get("Location")
+	if location != "/previews/run-1/" || strings.Contains(location, "cap=") {
+		t.Fatalf("redirect location = %q", location)
 	}
 	cookie := recorder.Result().Cookies()
 	if len(cookie) != 1 || cookie[0].Name != CookieName || cookie[0].Value != token || !cookie[0].HttpOnly {
 		t.Fatalf("expected an http-only preview cookie, got %+v", cookie)
+	}
+	followUp := httptest.NewRequest(http.MethodGet, location, nil)
+	followUp.AddCookie(&http.Cookie{Name: CookieName, Value: token})
+	recorder = httptest.NewRecorder()
+	broker.ServeHTTP(recorder, followUp)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("clean URL status = %d", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "harness-preview-panel") {
+		t.Fatal("overlay was not injected into the HTML response")
 	}
 }
 
