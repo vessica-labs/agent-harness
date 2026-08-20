@@ -289,6 +289,19 @@ def validate_config(config: Any) -> list[str]:
                     errors.append("automation.trigger must use the linear label trigger")
                 if not isinstance(trigger.get("label"), str) or not trigger["label"].strip():
                     errors.append("automation.trigger.label must be a non-empty string")
+    preview = config.get("preview")
+    if preview is not None:
+        if not isinstance(preview, dict):
+            errors.append("preview must be a mapping")
+        else:
+            if not isinstance(preview.get("command"), str) or not preview["command"].strip():
+                errors.append("preview.command must be a non-empty string")
+            port = preview.get("port")
+            if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
+                errors.append("preview.port must be an integer between 1 and 65535")
+            healthcheck = preview.get("healthcheck")
+            if healthcheck is not None and (not isinstance(healthcheck, str) or not healthcheck.startswith("/")):
+                errors.append("preview.healthcheck must be an absolute path such as /healthz")
     return errors
 
 

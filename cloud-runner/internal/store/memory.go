@@ -533,6 +533,19 @@ func (m *Memory) SetDelivery(_ context.Context, id, branch, pullRequestURL strin
 	return nil
 }
 
+func (m *Memory) SetPreview(_ context.Context, id, state, url string, port int, expiresAt *time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	value, ok := m.runs[id]
+	if !ok {
+		return ErrNotFound
+	}
+	value.PreviewState, value.PreviewURL, value.PreviewPort, value.PreviewExpiresAt = state, url, port, expiresAt
+	value.UpdatedAt = time.Now().UTC()
+	m.runs[id] = value
+	return nil
+}
+
 func (m *Memory) Heartbeat(_ context.Context, id, owner string, lease time.Duration) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -187,6 +187,7 @@ func (r *Runner) Run(ctx context.Context) (runErr error) {
 	if err := r.checkpoint(ctx); err != nil {
 		return err
 	}
+	r.startPreview(ctx)
 	return r.event(ctx, "run.completed", "info", "Pipeline completed and produced a draft pull request", "", nil)
 }
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/events"
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/model"
+	"github.com/vessica-labs/agent-harness/cloud-runner/internal/preview"
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/sandbox"
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/secure"
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/store"
@@ -42,6 +43,13 @@ type Scheduler struct {
 	config      Config
 	logger      *slog.Logger
 	authRetryAt atomic.Int64
+	preview     *preview.Manager
+}
+
+// SetPreviewManager lets the cleanup loop retain completed-run sandboxes
+// while their previews are alive and tear them down at expiry.
+func (s *Scheduler) SetPreviewManager(manager *preview.Manager) {
+	s.preview = manager
 }
 
 func New(values store.Store, provider sandbox.Provider, box *secure.Box, broker *events.Broker, config Config, logger *slog.Logger) *Scheduler {
@@ -354,6 +362,9 @@ func (s *Scheduler) cleanupTerminal(ctx context.Context) {
 			if run.SandboxID == "" || (state != "cancelled" && time.Since(run.UpdatedAt) < grace) {
 				continue
 			}
+			if state == "completed" && s.previewAlive(ctx, run) {
+				continue
+			}
 			if err := s.sandbox.Destroy(ctx, run.SandboxID); err != nil {
 				s.logger.Warn("destroy terminal sandbox", "run_id", run.ID, "error", err)
 				continue
@@ -371,6 +382,32 @@ func (s *Scheduler) cleanupTerminal(ctx context.Context) {
 			s.event(ctx, model.Event{RunID: run.ID, SourceIssueID: run.SourceIssueID, SandboxID: run.SandboxID, Type: "sandbox.destroyed", Level: "info", Message: message})
 		}
 	}
+}
+
+// previewAlive keeps a completed run's sandbox running while its preview has
+// not expired. Expired previews are torn down here so the sandbox destroy
+// below proceeds on this same pass.
+func (s *Scheduler) previewAlive(ctx context.Context, run model.Run) bool {
+	switch run.PreviewState {
+	case "ready":
+		// The worker reported a preview but the control plane has not published
+		// it yet; give publication a chance before destroying the sandbox.
+		return time.Since(run.UpdatedAt) < 5*time.Minute
+	case "published":
+		if run.PreviewExpiresAt != nil && time.Now().Before(*run.PreviewExpiresAt) {
+			if err := s.sandbox.Heartbeat(ctx, run.SandboxID); err != nil {
+				s.logger.Warn("preview sandbox heartbeat failed", "run_id", run.ID, "sandbox_id", run.SandboxID, "error", err)
+			}
+			return true
+		}
+		if s.preview != nil {
+			s.preview.Expire(ctx, run)
+			s.event(ctx, model.Event{RunID: run.ID, SourceIssueID: run.SourceIssueID, SandboxID: run.SandboxID,
+				Type: "preview.expired", Level: "info", Message: "Preview expired"})
+		}
+		return false
+	}
+	return false
 }
 
 func (s *Scheduler) pause(ctx context.Context, run model.Run, eventType, message string) {

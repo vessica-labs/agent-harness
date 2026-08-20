@@ -110,6 +110,59 @@ class YamlAndPipelineTests(unittest.TestCase):
         )
 
 
+class PreviewConfigTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.harnessctl = load_harnessctl()
+
+    def base_config(self) -> dict:
+        return {
+            "version": 1,
+            "tracker": {"provider": "linear", "workspace": "acme", "project": "web"},
+            "notion": {"parent_page_id": "abc123"},
+            "git": {"remote": "origin", "base_branch": "main"},
+        }
+
+    def test_config_without_preview_is_valid(self) -> None:
+        self.assertEqual([], self.harnessctl.validate_config(self.base_config()))
+
+    def test_valid_preview_section(self) -> None:
+        config = self.base_config()
+        config["preview"] = {"command": "npm run start", "port": 3000, "healthcheck": "/healthz"}
+        self.assertEqual([], self.harnessctl.validate_config(config))
+
+    def test_preview_healthcheck_is_optional(self) -> None:
+        config = self.base_config()
+        config["preview"] = {"command": "npm run start", "port": 3000}
+        self.assertEqual([], self.harnessctl.validate_config(config))
+
+    def test_preview_requires_command_and_valid_port(self) -> None:
+        config = self.base_config()
+        config["preview"] = {"command": "  ", "port": 70000}
+        errors = self.harnessctl.validate_config(config)
+        self.assertTrue(any("preview.command" in error for error in errors))
+        self.assertTrue(any("preview.port" in error for error in errors))
+
+    def test_preview_port_rejects_boolean_and_string(self) -> None:
+        for port in (True, "3000"):
+            config = self.base_config()
+            config["preview"] = {"command": "npm run start", "port": port}
+            errors = self.harnessctl.validate_config(config)
+            self.assertTrue(any("preview.port" in error for error in errors))
+
+    def test_preview_healthcheck_must_be_absolute(self) -> None:
+        config = self.base_config()
+        config["preview"] = {"command": "npm run start", "port": 3000, "healthcheck": "healthz"}
+        errors = self.harnessctl.validate_config(config)
+        self.assertTrue(any("preview.healthcheck" in error for error in errors))
+
+    def test_preview_must_be_mapping(self) -> None:
+        config = self.base_config()
+        config["preview"] = "npm run start"
+        errors = self.harnessctl.validate_config(config)
+        self.assertTrue(any("preview must be a mapping" in error for error in errors))
+
+
 class AgentOutputTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

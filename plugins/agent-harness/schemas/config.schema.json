@@ -39,6 +39,16 @@
         "base_branch": {"type": "string", "minLength": 1}
       }
     },
+    "preview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "port"],
+      "properties": {
+        "command": {"type": "string", "minLength": 1},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "healthcheck": {"type": "string", "pattern": "^/"}
+      }
+    },
     "automation": {
       "type": "object",
       "additionalProperties": false,
