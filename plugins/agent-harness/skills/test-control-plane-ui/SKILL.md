@@ -49,6 +49,8 @@ Unused `/api/v1/team/*` routes returning 404 is fine — the Team view just show
   `animationName` for the numeric claim (e.g. hover-speedup overrides).
 - Page zoom via `ctrl+equal` (xdotool's `ctrl+plus` may not register) makes small widgets like
   the corner mascot legible in screenshots.
+- The mascot bubble auto-hides after 9s, so `getBoundingClientRect()` reads must happen right
+  after the click; measuring late returns a 0-width box.
 - Timed UI (auto-hide bubbles, periodic timers) can mask each other: the mascot re-quips every
   60s, so measure a 9s auto-hide inside a window that avoids the interval tick.
 
