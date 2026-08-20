@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+const codexTerminalExitGrace = time.Second
+
 func (r *Runner) runCodex(ctx context.Context, repo string, stage Stage, ticketKey, resultPath string, extra string) error {
 	codexHome := r.codexHome
 	var leased runtimeCodexSession
@@ -66,18 +68,27 @@ Work directly in the supplied repository. Do not edit pipeline state or provider
 		"--output-last-message", lastMessage, "-")
 	command.Env = sanitizedEnvironment(codexHome)
 	command.Stdin = strings.NewReader(prompt)
-	var stderr bytes.Buffer
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	stdout, err := command.StdoutPipe()
+	stderrPath := strings.TrimSuffix(logPath, ".jsonl") + "-stderr.txt"
+	stderrFile, err := os.OpenFile(stderrPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		_ = logFile.Close()
 		return err
 	}
-	command.Stderr = &stderr
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		_ = stderrFile.Close()
+		_ = logFile.Close()
+		return err
+	}
+	// Use a file rather than an os/exec-managed pipe so a leaked descendant
+	// cannot keep command.Wait blocked after the Codex process exits.
+	command.Stderr = stderrFile
 	if err := command.Start(); err != nil {
+		_ = stderrFile.Close()
 		_ = logFile.Close()
 		return err
 	}
@@ -85,6 +96,9 @@ Work directly in the supplied repository. Do not edit pipeline state or provider
 	scanner.Buffer(make([]byte, 64<<10), 16<<20)
 	activityStartedAt := map[string]time.Time{}
 	lastCodexError := ""
+	terminalCompleted := false
+	terminalForced := make(chan struct{}, 1)
+	var terminalTimer *time.Timer
 	for scanner.Scan() {
 		line := append([]byte(nil), scanner.Bytes()...)
 		_, _ = logFile.Write(append(line, '\n'))
@@ -92,9 +106,27 @@ Work directly in the supplied repository. Do not edit pipeline state or provider
 			lastCodexError = message
 		}
 		if usage, ok := parseCodexUsage(line, r.config.CodexModel); ok {
+			terminalCompleted = true
+			if terminalTimer == nil {
+				terminalTimer = time.AfterFunc(codexTerminalExitGrace, func() {
+					select {
+					case terminalForced <- struct{}{}:
+					default:
+					}
+					_ = stdout.Close()
+					if command.Process != nil {
+						_ = command.Process.Kill()
+					}
+				})
+			}
 			if err := r.event(context.WithoutCancel(ctx), "codex.usage", "info", "Codex turn usage recorded", stage.ID, usage); err != nil {
 				_ = command.Process.Kill()
+				_ = stdout.Close()
 				_ = command.Wait()
+				if terminalTimer != nil {
+					terminalTimer.Stop()
+				}
+				_ = stderrFile.Close()
 				_ = logFile.Close()
 				return fmt.Errorf("record Codex usage: %w", err)
 			}
@@ -125,12 +157,26 @@ Work directly in the supplied repository. Do not edit pipeline state or provider
 	}
 	scanErr := scanner.Err()
 	runErr := command.Wait()
-	closeErr := logFile.Close()
-	if runErr != nil {
-		return fmt.Errorf("Codex %s failed: %w: %s", stage.ID, runErr, tail(codexFailureDetail(stderr.String(), lastCodexError), 3000))
+	if terminalTimer != nil {
+		terminalTimer.Stop()
 	}
-	if scanErr != nil {
+	forcedAfterTerminal := false
+	select {
+	case <-terminalForced:
+		forcedAfterTerminal = true
+	default:
+	}
+	stderrCloseErr := stderrFile.Close()
+	closeErr := logFile.Close()
+	stderrBody, _ := os.ReadFile(stderrPath)
+	if runErr != nil && !(terminalCompleted && forcedAfterTerminal) {
+		return fmt.Errorf("Codex %s failed: %w: %s", stage.ID, runErr, tail(codexFailureDetail(string(stderrBody), lastCodexError), 3000))
+	}
+	if scanErr != nil && !(terminalCompleted && forcedAfterTerminal) {
 		return fmt.Errorf("read Codex %s event stream: %w", stage.ID, scanErr)
+	}
+	if stderrCloseErr != nil {
+		return stderrCloseErr
 	}
 	if closeErr != nil {
 		return closeErr
