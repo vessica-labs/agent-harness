@@ -1,0 +1,4 @@
+interface:
+  display_name: "Test Control Plane UI"
+  short_description: "Manually test the control plane dashboard locally"
+  default_prompt: "Use $test-control-plane-ui to verify the dashboard changes in a browser."
