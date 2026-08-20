@@ -11,25 +11,28 @@ import (
 )
 
 type Memory struct {
-	mu             sync.Mutex
-	repositories   map[string]model.Repository
-	deliveries     map[string]model.DeliveryResult
-	claims         map[string]string
-	runs           map[string]model.Run
-	events         []model.Event
-	artifacts      map[string]model.Artifact
-	credentials    map[string]model.Credential
-	authSlots      map[string]model.AuthSlot
-	externalSync   map[string]model.ExternalSync
-	stages         map[string]model.StageState
-	tickets        map[string]model.TicketState
-	installation   model.InstallationState
-	members        map[string]model.Member
-	invitations    map[string]model.Invitation
-	memberSessions map[string]model.MemberSession
-	authAudit      []model.AuthAudit
-	auditSeq       int64
-	seq            int64
+	mu              sync.Mutex
+	repositories    map[string]model.Repository
+	deliveries      map[string]model.DeliveryResult
+	claims          map[string]string
+	runs            map[string]model.Run
+	events          []model.Event
+	artifacts       map[string]model.Artifact
+	credentials     map[string]model.Credential
+	authSlots       map[string]model.AuthSlot
+	externalSync    map[string]model.ExternalSync
+	inputRequests   map[string]model.InputRequest
+	inputResponses  map[string][]model.InputResponse
+	inputDeliveries map[string]model.InputDelivery
+	stages          map[string]model.StageState
+	tickets         map[string]model.TicketState
+	installation    model.InstallationState
+	members         map[string]model.Member
+	invitations     map[string]model.Invitation
+	memberSessions  map[string]model.MemberSession
+	authAudit       []model.AuthAudit
+	auditSeq        int64
+	seq             int64
 }
 
 func NewMemory() *Memory {
@@ -38,8 +41,10 @@ func NewMemory() *Memory {
 		deliveries:   make(map[string]model.DeliveryResult), claims: make(map[string]string),
 		runs: make(map[string]model.Run), artifacts: make(map[string]model.Artifact),
 		credentials: make(map[string]model.Credential), authSlots: make(map[string]model.AuthSlot),
-		externalSync: make(map[string]model.ExternalSync),
-		stages:       make(map[string]model.StageState), tickets: make(map[string]model.TicketState),
+		externalSync:  make(map[string]model.ExternalSync),
+		inputRequests: make(map[string]model.InputRequest), inputResponses: make(map[string][]model.InputResponse),
+		inputDeliveries: make(map[string]model.InputDelivery),
+		stages:          make(map[string]model.StageState), tickets: make(map[string]model.TicketState),
 		members: make(map[string]model.Member), invitations: make(map[string]model.Invitation),
 		memberSessions: make(map[string]model.MemberSession),
 	}
@@ -202,7 +207,7 @@ func (m *Memory) AcceptLinearDelivery(_ context.Context, repo model.Repository, 
 	value := model.Run{ID: newID("run"), RepositoryID: repo.ID, Provider: "linear",
 		SourceIssueID: delivery.IssueID, SourceIssueKey: delivery.IssueKey,
 		SourceIssueURL: delivery.IssueURL, SourceIssueTitle: delivery.IssueTitle,
-		FeatureRequest: delivery.FeatureRequest, State: "queued", CreatedAt: now, UpdatedAt: now}
+		FeatureRequest: delivery.FeatureRequest, Metadata: delivery.SourceContext, State: "queued", CreatedAt: now, UpdatedAt: now}
 	m.runs[value.ID] = value
 	m.claims[claimKey] = value.ID
 	m.appendEventLocked(model.Event{RunID: value.ID, SourceIssueID: value.SourceIssueID,
@@ -327,6 +332,136 @@ func (m *Memory) AddRunUsage(_ context.Context, runID string, usage model.Usage)
 	return nil
 }
 
+func (m *Memory) CreateInputRequest(_ context.Context, value model.InputRequest) (model.InputRequest, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	run, ok := m.runs[value.RunID]
+	if !ok {
+		return value, ErrNotFound
+	}
+	if run.State != "running" {
+		return value, ErrConflict
+	}
+	for _, existing := range m.inputRequests {
+		if existing.RunID == value.RunID && existing.Stage == value.Stage && existing.Round == value.Round {
+			return existing, ErrConflict
+		}
+	}
+	if value.ID == "" {
+		value.ID = newID("input")
+	}
+	now := time.Now().UTC()
+	value.Status, value.CreatedAt, value.UpdatedAt = "open", now, now
+	m.inputRequests[value.ID] = value
+	run.State, run.CurrentStage, run.QueueReason, run.Error = "awaiting_input", value.Stage, "human_input", ""
+	run.LeaseOwner, run.LeaseExpiresAt, run.UpdatedAt = "", nil, now
+	m.runs[run.ID] = run
+	return value, nil
+}
+
+func (m *Memory) GetInputRequest(_ context.Context, id string) (model.InputRequest, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	value, ok := m.inputRequests[id]
+	if !ok {
+		return value, ErrNotFound
+	}
+	return value, nil
+}
+
+func (m *Memory) ListInputRequests(_ context.Context, filter model.InputRequestFilter) ([]model.InputRequest, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	values := make([]model.InputRequest, 0)
+	for _, value := range m.inputRequests {
+		if filter.RunID != "" && value.RunID != filter.RunID {
+			continue
+		}
+		if filter.Status != "" && value.Status != filter.Status {
+			continue
+		}
+		values = append(values, value)
+	}
+	sort.Slice(values, func(i, j int) bool { return values[i].UpdatedAt.After(values[j].UpdatedAt) })
+	if filter.Limit > 0 && len(values) > filter.Limit {
+		values = values[:filter.Limit]
+	}
+	return values, nil
+}
+
+func (m *Memory) ListInputResponses(_ context.Context, requestID string) ([]model.InputResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	values := append([]model.InputResponse(nil), m.inputResponses[requestID]...)
+	sort.Slice(values, func(i, j int) bool { return values[i].CreatedAt.Before(values[j].CreatedAt) })
+	return values, nil
+}
+
+func (m *Memory) ResolveInputRequest(_ context.Context, id string, response model.InputResponse) (model.InputRequest, model.InputResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	request, ok := m.inputRequests[id]
+	if !ok {
+		return request, response, ErrNotFound
+	}
+	if request.Status != "open" {
+		return request, response, ErrConflict
+	}
+	for _, existing := range m.inputResponses[id] {
+		if response.ExternalID != "" && existing.Channel == response.Channel && existing.ExternalID == response.ExternalID {
+			return request, existing, ErrConflict
+		}
+	}
+	now := time.Now().UTC()
+	if response.ID == "" {
+		response.ID = newID("response")
+	}
+	response.RequestID, response.RunID, response.Accepted, response.CreatedAt = request.ID, request.RunID, true, now
+	m.inputResponses[id] = append(m.inputResponses[id], response)
+	request.Status, request.AnsweredAt, request.UpdatedAt = "answered", &now, now
+	m.inputRequests[id] = request
+	run := m.runs[request.RunID]
+	run.State, run.QueueReason, run.Error, run.LeaseOwner = "queued", "human_input_answered", "", ""
+	run.LeaseExpiresAt, run.UpdatedAt = nil, now
+	m.runs[run.ID] = run
+	return request, response, nil
+}
+
+func (m *Memory) PutInputDelivery(_ context.Context, value model.InputDelivery) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.inputRequests[value.RequestID]; !ok {
+		return ErrNotFound
+	}
+	value.UpdatedAt = time.Now().UTC()
+	m.inputDeliveries[value.RequestID+":"+value.Provider] = value
+	return nil
+}
+
+func (m *Memory) ListInputDeliveries(_ context.Context, requestID string) ([]model.InputDelivery, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	values := make([]model.InputDelivery, 0)
+	for _, value := range m.inputDeliveries {
+		if value.RequestID == requestID {
+			values = append(values, value)
+		}
+	}
+	sort.Slice(values, func(i, j int) bool { return values[i].Provider < values[j].Provider })
+	return values, nil
+}
+
+func (m *Memory) FindInputRequestByDelivery(_ context.Context, provider, externalID string) (model.InputRequest, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, delivery := range m.inputDeliveries {
+		if delivery.Provider == provider && delivery.ExternalID == externalID {
+			return m.inputRequests[delivery.RequestID], nil
+		}
+	}
+	return model.InputRequest{}, ErrNotFound
+}
+
 func (m *Memory) SetRunState(_ context.Context, id, state, stage, message string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -449,6 +584,12 @@ func (m *Memory) CancelRun(_ context.Context, id string) error {
 	now := time.Now().UTC()
 	value.State, value.LeaseOwner, value.LeaseExpiresAt, value.CompletedAt, value.UpdatedAt = "cancelled", "", nil, &now, now
 	m.runs[id] = value
+	for requestID, request := range m.inputRequests {
+		if request.RunID == id && request.Status == "open" {
+			request.Status, request.UpdatedAt = "cancelled", now
+			m.inputRequests[requestID] = request
+		}
+	}
 	return nil
 }
 

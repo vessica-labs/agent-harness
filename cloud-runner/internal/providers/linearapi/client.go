@@ -29,6 +29,9 @@ type Issue struct {
 	Comments    struct {
 		Nodes []Comment `json:"nodes"`
 	} `json:"comments"`
+	Attachments struct {
+		Nodes []Attachment `json:"nodes"`
+	} `json:"attachments"`
 	Children struct {
 		Nodes []Issue `json:"nodes"`
 	} `json:"children"`
@@ -50,8 +53,28 @@ type LifecycleStates struct {
 }
 
 type Comment struct {
-	ID   string `json:"id"`
-	Body string `json:"body"`
+	ID        string    `json:"id"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"createdAt"`
+	User      *struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"user,omitempty"`
+	Parent *struct {
+		ID string `json:"id"`
+	} `json:"parent,omitempty"`
+	Issue *struct {
+		ID string `json:"id"`
+	} `json:"issue,omitempty"`
+	Children struct {
+		Nodes []Comment `json:"nodes"`
+	} `json:"children,omitempty"`
+}
+
+type Attachment struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	URL   string `json:"url"`
 }
 
 type RegistrationContext struct {
@@ -163,8 +186,24 @@ func (c *Client) Issue(ctx context.Context, id string) (Issue, error) {
 	var result struct {
 		Issue Issue `json:"issue"`
 	}
-	err := c.graphql(ctx, `query HarnessIssue($id:String!){issue(id:$id){id identifier title url description state{id name type position} comments{nodes{id body}} children{nodes{id identifier title url description state{id name type position}}}}}`, map[string]any{"id": id}, &result)
+	err := c.graphql(ctx, `query HarnessIssue($id:String!){issue(id:$id){id identifier title url description state{id name type position} comments{nodes{id body createdAt user{id name}}} children{nodes{id identifier title url description state{id name type position}}}}}`, map[string]any{"id": id}, &result)
 	return result.Issue, err
+}
+
+func (c *Client) IssueContext(ctx context.Context, id string) (Issue, error) {
+	var result struct {
+		Issue Issue `json:"issue"`
+	}
+	err := c.graphql(ctx, `query HarnessIssueContext($id:String!){issue(id:$id){id identifier title url description comments{nodes{id body createdAt user{id name} children{nodes{id body createdAt user{id name}}}}} attachments{nodes{id title url}}}}`, map[string]any{"id": id}, &result)
+	return result.Issue, err
+}
+
+func (c *Client) Comment(ctx context.Context, id string) (Comment, error) {
+	var result struct {
+		Comment Comment `json:"comment"`
+	}
+	err := c.graphql(ctx, `query HarnessComment($id:String!){comment(id:$id){id body createdAt parent{id} issue{id} user{id name}}}`, map[string]any{"id": id}, &result)
+	return result.Comment, err
 }
 
 func (c *Client) workflowStates(ctx context.Context, teamID string) ([]WorkflowState, error) {

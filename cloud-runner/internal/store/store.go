@@ -45,6 +45,14 @@ type Store interface {
 	PutTicket(context.Context, model.TicketState) error
 	ListTickets(context.Context, string) ([]model.TicketState, error)
 	AddRunUsage(context.Context, string, model.Usage) error
+	CreateInputRequest(context.Context, model.InputRequest) (model.InputRequest, error)
+	GetInputRequest(context.Context, string) (model.InputRequest, error)
+	ListInputRequests(context.Context, model.InputRequestFilter) ([]model.InputRequest, error)
+	ListInputResponses(context.Context, string) ([]model.InputResponse, error)
+	ResolveInputRequest(context.Context, string, model.InputResponse) (model.InputRequest, model.InputResponse, error)
+	PutInputDelivery(context.Context, model.InputDelivery) error
+	ListInputDeliveries(context.Context, string) ([]model.InputDelivery, error)
+	FindInputRequestByDelivery(context.Context, string, string) (model.InputRequest, error)
 
 	AppendEvent(context.Context, model.Event) (model.Event, error)
 	ListEvents(context.Context, model.EventFilter) ([]model.Event, error)

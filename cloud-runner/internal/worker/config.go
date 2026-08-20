@@ -14,6 +14,8 @@ type Config struct {
 	RunID             string
 	IssueKey          string
 	IssueID           string
+	IssueURL          string
+	IssueTitle        string
 	ControlURL        string
 	Capability        string
 	LeaseOwner        string
@@ -22,6 +24,8 @@ type Config struct {
 	GitHubRepo        string
 	BaseBranch        string
 	FeatureRequest    string
+	HumanInput        []byte
+	SourceIssue       []byte
 	CodexAuth         []byte
 	CodexSlot         string
 	CodexSessions     []CodexSession
@@ -43,6 +47,14 @@ func ConfigFromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, errors.New("invalid HARNESS_FEATURE_REQUEST_B64")
 	}
+	humanInput, err := base64.StdEncoding.DecodeString(os.Getenv("HARNESS_HUMAN_INPUT_B64"))
+	if err != nil {
+		return Config{}, errors.New("invalid HARNESS_HUMAN_INPUT_B64")
+	}
+	sourceIssue, err := base64.StdEncoding.DecodeString(os.Getenv("HARNESS_SOURCE_ISSUE_B64"))
+	if err != nil {
+		return Config{}, errors.New("invalid HARNESS_SOURCE_ISSUE_B64")
+	}
 	auth, err := base64.StdEncoding.DecodeString(os.Getenv("HARNESS_CODEX_AUTH_B64"))
 	if err != nil {
 		return Config{}, errors.New("invalid HARNESS_CODEX_AUTH_B64")
@@ -59,11 +71,11 @@ func ConfigFromEnv() (Config, error) {
 	}
 	config := Config{
 		RunID: os.Getenv("HARNESS_RUN_ID"), IssueKey: os.Getenv("HARNESS_ISSUE_KEY"),
-		IssueID: os.Getenv("HARNESS_ISSUE_ID"), ControlURL: strings.TrimRight(os.Getenv("HARNESS_CONTROL_URL"), "/"),
+		IssueID: os.Getenv("HARNESS_ISSUE_ID"), IssueURL: os.Getenv("HARNESS_ISSUE_URL"), IssueTitle: os.Getenv("HARNESS_ISSUE_TITLE"), ControlURL: strings.TrimRight(os.Getenv("HARNESS_CONTROL_URL"), "/"),
 		Capability: os.Getenv("HARNESS_RUN_CAPABILITY"), LeaseOwner: os.Getenv("HARNESS_LEASE_OWNER"),
 		RepositoryID: os.Getenv("HARNESS_REPOSITORY_ID"), GitHubOwner: os.Getenv("HARNESS_GITHUB_OWNER"),
 		GitHubRepo: os.Getenv("HARNESS_GITHUB_REPO"), BaseBranch: os.Getenv("HARNESS_BASE_BRANCH"),
-		FeatureRequest: string(feature), CodexAuth: auth, CodexSlot: os.Getenv("HARNESS_CODEX_AUTH_SLOT"),
+		FeatureRequest: string(feature), HumanInput: humanInput, SourceIssue: sourceIssue, CodexAuth: auth, CodexSlot: os.Getenv("HARNESS_CODEX_AUTH_SLOT"),
 		CodexSessions:     sessions,
 		CodexParallelSafe: strings.EqualFold(os.Getenv("HARNESS_CODEX_PARALLEL_SAFE"), "true"),
 		Workspace:         envDefault("HARNESS_WORKSPACE", "/workspace"),

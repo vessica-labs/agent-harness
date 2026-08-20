@@ -207,3 +207,40 @@ func TestRunUsageIsAccumulatedAndReported(t *testing.T) {
 		t.Fatalf("usage was not accumulated: %+v", stored)
 	}
 }
+
+func TestHumanInputRequestAtomicallyWaitsAndResumesRun(t *testing.T) {
+	ctx := context.Background()
+	memory := NewMemory()
+	repo := repository(t, memory)
+	result, err := memory.AcceptLinearDelivery(ctx, repo, model.LinearDelivery{
+		DeliveryID: "input-request-delivery", IssueID: "input-request-issue", IssueKey: "AGE-22",
+		IssueTitle: "Needs a choice", ReceivedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.SetRunState(ctx, result.Run.ID, "running", "product", ""); err != nil {
+		t.Fatal(err)
+	}
+	request, err := memory.CreateInputRequest(ctx, model.InputRequest{RunID: result.Run.ID, Stage: "product", Round: 1,
+		Summary: "Choose a launch mode", Questions: []model.InputQuestion{{ID: "mode", Prompt: "Which mode?"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting, _ := memory.GetRun(ctx, result.Run.ID)
+	if waiting.State != "awaiting_input" || waiting.CurrentStage != "product" {
+		t.Fatalf("run did not enter awaiting_input: %+v", waiting)
+	}
+	if _, err := memory.CreateInputRequest(ctx, model.InputRequest{RunID: result.Run.ID, Stage: "product", Round: 1}); err != ErrConflict {
+		t.Fatalf("second round was accepted: %v", err)
+	}
+	resolved, response, err := memory.ResolveInputRequest(ctx, request.ID, model.InputResponse{Channel: "control_plane",
+		Answers: []model.InputAnswer{{QuestionID: "mode", OptionID: "guided"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed, _ := memory.GetRun(ctx, result.Run.ID)
+	if resolved.Status != "answered" || !response.Accepted || resumed.State != "queued" || resumed.QueueReason != "human_input_answered" {
+		t.Fatalf("request did not atomically resume run: request=%+v response=%+v run=%+v", resolved, response, resumed)
+	}
+}

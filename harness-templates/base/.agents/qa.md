@@ -22,6 +22,7 @@ Validate every PRD acceptance criterion through the running product, using Playw
 
 ## Boundaries
 
+- This stage may not request human input or wait for a response. Execute the supplied acceptance contract and return passed, requeue, or a concrete non-question failure from observed evidence.
 - Do not mark a criterion passed from code inspection alone when it is user-observable.
 - Do not make broad architectural changes, weaken tests, change the PRD or ADR, push, rebase, or merge.
 - Do not create a ticket for a defect you already fixed.

@@ -135,6 +135,70 @@ type TicketState struct {
 	UpdatedAt        time.Time       `json:"updated_at"`
 }
 
+type InputOption struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+	Recommended bool   `json:"recommended,omitempty"`
+}
+
+type InputQuestion struct {
+	ID            string        `json:"id"`
+	Prompt        string        `json:"prompt"`
+	Why           string        `json:"why,omitempty"`
+	Options       []InputOption `json:"options"`
+	AllowFreeText bool          `json:"allow_free_text"`
+	Required      bool          `json:"required"`
+}
+
+type InputRequest struct {
+	ID         string          `json:"id"`
+	RunID      string          `json:"run_id"`
+	Stage      string          `json:"stage"`
+	Round      int             `json:"round"`
+	Status     string          `json:"status"`
+	Summary    string          `json:"summary"`
+	Questions  []InputQuestion `json:"questions"`
+	CreatedAt  time.Time       `json:"created_at"`
+	UpdatedAt  time.Time       `json:"updated_at"`
+	AnsweredAt *time.Time      `json:"answered_at,omitempty"`
+}
+
+type InputAnswer struct {
+	QuestionID string `json:"question_id"`
+	OptionID   string `json:"option_id,omitempty"`
+	Text       string `json:"text,omitempty"`
+}
+
+type InputResponse struct {
+	ID         string        `json:"id"`
+	RequestID  string        `json:"request_id"`
+	RunID      string        `json:"run_id"`
+	Channel    string        `json:"channel"`
+	ActorID    string        `json:"actor_id,omitempty"`
+	ActorName  string        `json:"actor_name,omitempty"`
+	ExternalID string        `json:"external_id,omitempty"`
+	Answers    []InputAnswer `json:"answers"`
+	Accepted   bool          `json:"accepted"`
+	CreatedAt  time.Time     `json:"created_at"`
+}
+
+type InputDelivery struct {
+	RequestID   string    `json:"request_id"`
+	Provider    string    `json:"provider"`
+	State       string    `json:"state"`
+	ExternalID  string    `json:"external_id,omitempty"`
+	ExternalURL string    `json:"external_url,omitempty"`
+	Error       string    `json:"error,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type InputRequestFilter struct {
+	RunID  string
+	Status string
+	Limit  int
+}
+
 type LinearDelivery struct {
 	DeliveryID     string
 	EventType      string
@@ -144,6 +208,7 @@ type LinearDelivery struct {
 	IssueURL       string
 	IssueTitle     string
 	FeatureRequest string
+	SourceContext  json.RawMessage
 	WorkspaceID    string
 	TeamID         string
 	ProjectID      string

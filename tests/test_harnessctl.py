@@ -171,6 +171,33 @@ class AgentOutputTests(unittest.TestCase):
         self.assertEqual([], self.harnessctl.validate_product_output(product))
         self.assertEqual([["L-123-T01"], ["L-123-T02"]], self.harnessctl.dependency_waves(product["tickets"]))
 
+    def test_only_product_and_architect_accept_structured_needs_input(self) -> None:
+        request = {
+            "summary": "Choose the operating mode",
+            "questions": [
+                {
+                    "id": "mode",
+                    "prompt": "Which mode should ship?",
+                    "options": [
+                        {"id": "guided", "label": "Guided", "recommended": True},
+                        {"id": "automatic", "label": "Automatic", "recommended": False},
+                    ],
+                    "allow_free_text": True,
+                    "required": True,
+                }
+            ],
+        }
+        self.assertEqual([], self.harnessctl.validate_product_output({"agent": "product", "status": "needs_input", "input_request": request}))
+        self.assertEqual([], self.harnessctl.validate_architect_output({"agent": "architect", "status": "needs_input", "input_request": request}))
+        errors = self.harnessctl.validate_generic_agent_output(
+            "coder", {"agent": "coder", "status": "needs_input", "commit": None, "files_changed": [], "tdd": {}, "checks": [], "worktree_clean": True, "blocker": None, "residual_risks": []}
+        )
+        self.assertTrue(any("status must be one of" in error for error in errors))
+
+        invalid = json.loads(json.dumps(request))
+        invalid["questions"][0]["options"][1]["recommended"] = True
+        self.assertTrue(any("exactly one recommended" in error for error in self.harnessctl.validate_input_request(invalid)))
+
     def test_cycle_and_parallel_path_overlap_fail(self) -> None:
         product = self.product()
         product["tickets"][0]["depends_on"] = ["L-123-T02"]
@@ -297,6 +324,45 @@ class AgentOutputTests(unittest.TestCase):
             self.assertTrue((run_dir / "agent-output" / "product.json").is_file())
             self.assertTrue((run_dir / "artifacts" / "prd.md").is_file())
             self.assertEqual(2, len(json.loads((run_dir / "artifacts" / "ticket-plan.json").read_text())))
+
+            needs_input_file = Path(temporary) / "needs-input.json"
+            needs_input_file.write_text(
+                json.dumps(
+                    {
+                        "agent": "product",
+                        "status": "needs_input",
+                        "input_request": {
+                            "summary": "Choose",
+                            "questions": [
+                                {
+                                    "id": "mode",
+                                    "prompt": "Which mode?",
+                                    "options": [
+                                        {"id": "guided", "label": "Guided", "recommended": True},
+                                        {"id": "automatic", "label": "Automatic", "recommended": False},
+                                    ],
+                                    "allow_free_text": True,
+                                    "required": True,
+                                }
+                            ],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            _, waiting_result = run_json(
+                str(HARNESSCTL),
+                "materialize-result",
+                "--pipeline",
+                str(PLUGIN / "pipelines" / "default.yaml"),
+                "--run-dir",
+                str(run_dir),
+                "--stage",
+                "product",
+                "--input",
+                str(needs_input_file),
+            )
+            self.assertEqual([], waiting_result["outputs"])
 
             _, generated = run_json(
                 str(HARNESSCTL),

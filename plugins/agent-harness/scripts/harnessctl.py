@@ -27,7 +27,7 @@ STAGE_ALIASES = {
     "pull_request": "pr",
 }
 TERMINAL_RUN_STATUSES = {"completed"}
-STAGE_STATUSES = {"pending", "running", "ready", "blocked", "completed", "skipped"}
+STAGE_STATUSES = {"pending", "running", "ready", "waiting_for_input", "blocked", "completed", "skipped"}
 PRD_HEADINGS = [
     "# PRD:",
     "## Summary",
@@ -579,10 +579,54 @@ def _missing_or_out_of_order_headings(markdown: str, headings: list[str]) -> lis
     return missing
 
 
+def validate_input_request(data: Any) -> list[str]:
+    if not isinstance(data, dict):
+        return ["input_request must be an object"]
+    errors: list[str] = []
+    if not isinstance(data.get("summary"), str) or not data["summary"].strip():
+        errors.append("input_request.summary must be a non-empty string")
+    questions = data.get("questions")
+    if not isinstance(questions, list) or not 1 <= len(questions) <= 3:
+        return errors + ["input_request.questions must contain one to three questions"]
+    question_ids: set[str] = set()
+    for index, question in enumerate(questions):
+        prefix = f"input_request.questions[{index}]"
+        if not isinstance(question, dict):
+            errors.append(f"{prefix} must be an object")
+            continue
+        question_id = question.get("id")
+        if not isinstance(question_id, str) or not question_id or question_id in question_ids:
+            errors.append(f"{prefix}.id must be a unique non-empty string")
+        else:
+            question_ids.add(question_id)
+        if not isinstance(question.get("prompt"), str) or not question["prompt"].strip():
+            errors.append(f"{prefix}.prompt must be a non-empty string")
+        if question.get("allow_free_text") is not True:
+            errors.append(f"{prefix}.allow_free_text must be true")
+        options = question.get("options")
+        if not isinstance(options, list) or not 2 <= len(options) <= 3:
+            errors.append(f"{prefix}.options must contain two or three choices")
+            continue
+        option_ids = [option.get("id") for option in options if isinstance(option, dict)]
+        if len(option_ids) != len(options) or any(not isinstance(value, str) or not value for value in option_ids) or len(set(option_ids)) != len(option_ids):
+            errors.append(f"{prefix}.options require unique non-empty ids")
+        if sum(option.get("recommended") is True for option in options if isinstance(option, dict)) != 1:
+            errors.append(f"{prefix}.options require exactly one recommended choice")
+        if any(not isinstance(option.get("label"), str) or not option["label"].strip() for option in options if isinstance(option, dict)):
+            errors.append(f"{prefix}.options require non-empty labels")
+    return errors
+
+
 def validate_product_output(data: Any) -> list[str]:
     errors: list[str] = []
     if not isinstance(data, dict):
         return ["product output must be an object"]
+    if data.get("status") == "needs_input":
+        if data.get("agent") != "product":
+            errors.append("agent must be product")
+        if "input_request" not in data:
+            errors.append("input_request is required")
+        return errors + validate_input_request(data.get("input_request"))
     required = {"agent", "status", "source_issue", "prd_markdown", "tickets", "coverage", "blockers"}
     missing = sorted(required - set(data))
     if missing:
@@ -590,7 +634,7 @@ def validate_product_output(data: Any) -> list[str]:
     if data.get("agent") != "product":
         errors.append("agent must be product")
     if data.get("status") not in {"ready", "blocked"}:
-        errors.append("status must be ready or blocked")
+        errors.append("status must be ready, needs_input, or blocked")
     if not isinstance(data.get("prd_markdown"), str):
         errors.append("prd_markdown must be a string")
     else:
@@ -661,6 +705,12 @@ def validate_architect_output(data: Any, ticket_keys: set[str] | None = None) ->
     errors: list[str] = []
     if not isinstance(data, dict):
         return ["architect output must be an object"]
+    if data.get("status") == "needs_input":
+        if data.get("agent") != "architect":
+            errors.append("agent must be architect")
+        if "input_request" not in data:
+            errors.append("input_request is required")
+        return errors + validate_input_request(data.get("input_request"))
     required = {"agent", "status", "adr_filename", "adr_markdown", "ticket_constraints", "ticket_graph_valid", "blockers"}
     missing = sorted(required - set(data))
     if missing:
@@ -668,7 +718,7 @@ def validate_architect_output(data: Any, ticket_keys: set[str] | None = None) ->
     if data.get("agent") != "architect":
         errors.append("agent must be architect")
     if data.get("status") not in {"ready", "blocked"}:
-        errors.append("status must be ready or blocked")
+        errors.append("status must be ready, needs_input, or blocked")
     filename = data.get("adr_filename")
     if not isinstance(filename, str) or not re.fullmatch(r"ADR-[A-Za-z0-9._-]+\.md", filename):
         errors.append("adr_filename must be a safe ADR-*.md filename")
@@ -982,7 +1032,7 @@ def command_validate_agent(args: argparse.Namespace) -> None:
     if errors:
         fail(f"invalid {args.agent} output", details=errors)
     payload: dict[str, Any] = {"ok": True, "agent": args.agent, "status": data["status"]}
-    if args.agent == "product":
+    if args.agent == "product" and data["status"] != "needs_input":
         payload["waves"] = dependency_waves(data["tickets"])
     emit(payload)
 
@@ -1057,6 +1107,9 @@ def command_materialize_result(args: argparse.Namespace) -> None:
     result_path = run_file(run_dir, result_contract["file"], variables)
     write_contract_file(result_path, result_contract["format"], data)
     outputs: list[dict[str, str]] = []
+    if data.get("status") == "needs_input":
+        emit({"ok": True, "stage": args.stage, "agent": agent, "result_file": str(result_path), "outputs": outputs})
+        return
     for output in stage["outputs"]:
         value = extract_result(data, output["from_result"])
         output_path = run_file(run_dir, output["file"], variables)
@@ -1156,7 +1209,9 @@ def command_set_stage(args: argparse.Namespace) -> None:
     state["stages"][args.stage] = stage
     state["updated_at"] = now
     state.setdefault("events", []).append({"at": now, "type": f"stage.{args.status}", "details": {"stage": args.stage, **details}})
-    if args.status == "blocked":
+    if args.status == "waiting_for_input":
+        state["status"] = "awaiting_input"
+    elif args.status == "blocked":
         state["status"] = "paused"
     elif all(state["stages"][name].get("status") in {"completed", "skipped"} for name in state["selected_stages"]):
         state["status"] = "completed"

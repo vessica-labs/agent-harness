@@ -179,6 +179,16 @@ func (s *Scheduler) launch(ctx context.Context, run model.Run) {
 		s.pause(ctx, run, "repository_missing", err.Error())
 		return
 	}
+	inputContext := make([]map[string]any, 0)
+	if requests, listErr := s.store.ListInputRequests(ctx, model.InputRequestFilter{RunID: run.ID, Limit: 100}); listErr == nil {
+		for _, request := range requests {
+			responses, _ := s.store.ListInputResponses(ctx, request.ID)
+			if len(responses) > 0 {
+				inputContext = append(inputContext, map[string]any{"request": request, "responses": responses})
+			}
+		}
+	}
+	inputJSON, _ := json.Marshal(inputContext)
 	capability, err := s.box.MintCapability(run.ID, time.Now().Add(7*24*time.Hour))
 	if err != nil {
 		s.releaseSlots(ctx, run.ID, slots, "")
@@ -187,11 +197,14 @@ func (s *Scheduler) launch(ctx context.Context, run model.Run) {
 	}
 	variables := map[string]string{
 		"HARNESS_RUN_ID": run.ID, "HARNESS_ISSUE_KEY": run.SourceIssueKey,
-		"HARNESS_ISSUE_ID": run.SourceIssueID, "HARNESS_CONTROL_URL": s.config.ControlPlaneURL,
+		"HARNESS_ISSUE_ID": run.SourceIssueID, "HARNESS_ISSUE_URL": run.SourceIssueURL,
+		"HARNESS_ISSUE_TITLE": run.SourceIssueTitle, "HARNESS_CONTROL_URL": s.config.ControlPlaneURL,
 		"HARNESS_RUN_CAPABILITY": capability, "HARNESS_LEASE_OWNER": s.config.Owner,
 		"HARNESS_REPOSITORY_ID": repository.ID, "HARNESS_GITHUB_OWNER": repository.GitHubOwner,
 		"HARNESS_GITHUB_REPO": repository.GitHubRepo, "HARNESS_BASE_BRANCH": repository.BaseBranch,
 		"HARNESS_FEATURE_REQUEST_B64": base64.StdEncoding.EncodeToString([]byte(run.FeatureRequest)),
+		"HARNESS_SOURCE_ISSUE_B64":    base64.StdEncoding.EncodeToString(run.Metadata),
+		"HARNESS_HUMAN_INPUT_B64":     base64.StdEncoding.EncodeToString(inputJSON),
 		"HARNESS_CODEX_SESSIONS_B64":  base64.StdEncoding.EncodeToString(sessionsJSON),
 		"HARNESS_CODEX_AUTH_B64":      base64.StdEncoding.EncodeToString(sessions[0].Auth),
 		"HARNESS_CODEX_AUTH_SLOT":     sessions[0].ID, "HARNESS_ATTEMPT": strconv.Itoa(run.Attempt),
@@ -328,13 +341,17 @@ func (s *Scheduler) workerSessionStale(ctx context.Context, run model.Run) bool 
 }
 
 func (s *Scheduler) cleanupTerminal(ctx context.Context) {
-	for _, state := range []string{"completed", "paused", "cancelled"} {
+	for _, state := range []string{"completed", "awaiting_input", "paused", "cancelled"} {
 		runs, err := s.store.ListRuns(ctx, model.RunFilter{State: state, Limit: 500})
 		if err != nil {
 			continue
 		}
 		for _, run := range runs {
-			if run.SandboxID == "" || (state != "cancelled" && time.Since(run.UpdatedAt) < time.Minute) {
+			grace := time.Minute
+			if state == "awaiting_input" {
+				grace = 15 * time.Second
+			}
+			if run.SandboxID == "" || (state != "cancelled" && time.Since(run.UpdatedAt) < grace) {
 				continue
 			}
 			if err := s.sandbox.Destroy(ctx, run.SandboxID); err != nil {
@@ -347,7 +364,11 @@ func (s *Scheduler) cleanupTerminal(ctx context.Context) {
 				}
 			}
 			_ = s.store.SetSandbox(ctx, run.ID, "", "")
-			s.event(ctx, model.Event{RunID: run.ID, SourceIssueID: run.SourceIssueID, SandboxID: run.SandboxID, Type: "sandbox.destroyed", Level: "info", Message: "Terminal run sandbox destroyed"})
+			message := "Terminal run sandbox destroyed"
+			if state == "awaiting_input" {
+				message = "Checkpointed input-wait sandbox destroyed"
+			}
+			s.event(ctx, model.Event{RunID: run.ID, SourceIssueID: run.SourceIssueID, SandboxID: run.SandboxID, Type: "sandbox.destroyed", Level: "info", Message: message})
 		}
 	}
 }

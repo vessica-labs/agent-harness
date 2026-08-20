@@ -23,6 +23,7 @@ Update repository documentation so it accurately describes the implemented produ
 
 ## Boundaries
 
+- This stage may not request human input or wait for a response. Use the implementation and supplied evidence to make the narrowest accurate documentation decision and continue to completion.
 - Do not change product behavior merely to simplify documentation, copy stale commands forward, or make roadmap claims.
 - Do not include secrets, private URLs, local absolute paths, or generated run logs.
 - Do not push, rebase, merge, or rewrite historical ADRs.

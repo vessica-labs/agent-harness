@@ -45,6 +45,16 @@ type runtimeCodexSession struct {
 	auth []byte
 }
 
+type inputRequestSignal struct {
+	request model.InputRequest
+}
+
+func (e *inputRequestSignal) Error() string { return "stage requested human input" }
+
+type inputPolicyError struct{ message string }
+
+func (e *inputPolicyError) Error() string { return e.message }
+
 func New(config Config, logger *slog.Logger) *Runner {
 	return &Runner{config: config, client: newControlClient(config), logger: logger}
 }
@@ -155,6 +165,10 @@ func (r *Runner) Run(ctx context.Context) (runErr error) {
 			return r.pause(ctx, stage, err)
 		}
 		if err := r.executeStageWithRetries(ctx, stage); err != nil {
+			var input *inputRequestSignal
+			if errors.As(err, &input) {
+				return r.awaitInput(ctx, stage, input.request)
+			}
 			var request *repairRequest
 			if errors.As(err, &request) {
 				target, repairErr := r.handleRepair(ctx, stage, request, repairs)
@@ -185,7 +199,9 @@ func (r *Runner) executeStageWithRetries(ctx context.Context, stage Stage) error
 			return nil
 		}
 		var repair *repairRequest
-		if errors.As(last, &repair) || ctx.Err() != nil {
+		var input *inputRequestSignal
+		var policy *inputPolicyError
+		if errors.As(last, &repair) || errors.As(last, &input) || errors.As(last, &policy) || ctx.Err() != nil {
 			return last
 		}
 		if attempt == maxAttempts {
@@ -362,8 +378,61 @@ func (r *Runner) restoreOrInitialize(ctx context.Context, pipelinePath string) e
 			"--source", "tracker_title_and_body", "--content-file", temporary); err != nil {
 			return err
 		}
+		if r.stageHasInput("product", "source_issue") {
+			sourcePath := filepath.Join(r.config.Workspace, "source-issue.json")
+			source := r.config.SourceIssue
+			if len(source) == 0 || string(source) == "{}" {
+				source = mustJSON(map[string]any{"provider": "linear", "id": r.config.IssueID, "key": r.config.IssueKey,
+					"url": r.config.IssueURL, "title": r.config.IssueTitle, "title_and_body": r.config.FeatureRequest})
+			}
+			if err := os.WriteFile(sourcePath, append(source, '\n'), 0o600); err != nil {
+				return err
+			}
+			if _, err := r.harness(ctx, r.repo, "materialize-source", "--pipeline", pipelinePath,
+				"--run-dir", r.runDir, "--stage", "product", "--input-id", "source_issue",
+				"--source", "tracker_metadata", "--content-file", sourcePath); err != nil {
+				return err
+			}
+		}
+	}
+	if len(r.config.HumanInput) > 0 && string(r.config.HumanInput) != "[]" {
+		for _, stageID := range []string{"product", "arch"} {
+			if !r.stageHasInput(stageID, "human_input") {
+				continue
+			}
+			inputPath := filepath.Join(r.config.Workspace, "human-input-"+stageID+".json")
+			if err := os.WriteFile(inputPath, r.config.HumanInput, 0o600); err != nil {
+				return err
+			}
+			if _, err := r.harness(ctx, r.repo, "materialize-source", "--pipeline", pipelinePath,
+				"--run-dir", r.runDir, "--stage", stageID, "--input-id", "human_input",
+				"--source", "human_response", "--content-file", inputPath); err != nil {
+				return err
+			}
+		}
+	}
+	_, err = r.harness(ctx, r.repo, "checkpoint", "--run-dir", r.runDir, "--patch-json", string(mustJSON(map[string]any{
+		"issue": map[string]any{"provider": "linear", "id": r.config.IssueID, "key": r.config.IssueKey,
+			"url": r.config.IssueURL, "title": r.config.IssueTitle},
+	})), "--event", "source.issue-materialized")
+	if err != nil {
+		return err
 	}
 	return nil
+}
+
+func (r *Runner) stageHasInput(stageID, inputID string) bool {
+	for _, stage := range r.pipeline.Stages {
+		if stage.ID != stageID {
+			continue
+		}
+		for _, input := range stage.Inputs {
+			if input.ID == inputID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (r *Runner) executeStage(ctx context.Context, stage Stage) error {
@@ -388,7 +457,9 @@ func (r *Runner) executeStage(ctx context.Context, stage Stage) error {
 	}
 	if err != nil {
 		var repair *repairRequest
-		if errors.As(err, &repair) {
+		var input *inputRequestSignal
+		var policy *inputPolicyError
+		if errors.As(err, &repair) || errors.As(err, &input) || errors.As(err, &policy) {
 			return err
 		}
 		_ = r.runHooks(context.WithoutCancel(ctx), stage, stage.Hooks.OnFailure)
@@ -437,6 +508,9 @@ func (r *Runner) runSingleStage(ctx context.Context, stage Stage) error {
 		}
 	}
 	if err := r.runCodex(ctx, r.repo, stage, "", resultPath, extra); err != nil {
+		return err
+	}
+	if err := r.detectInputRequest(stage, resultPath); err != nil {
 		return err
 	}
 	if stage.ID == "arch" {
@@ -551,6 +625,10 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 				}
 				resultPath := filepath.Join(worktreeRun, filepath.FromSlash(replaceTicket(stage.Result.File, current.ticket.Key)))
 				if err := r.runCodex(ctx, current.worktree, stage, current.ticket.Key, resultPath, "Implement only this claimed ticket and do not push."); err != nil {
+					current.err = err
+					return
+				}
+				if err := r.detectInputRequest(stage, resultPath); err != nil {
 					current.err = err
 					return
 				}
@@ -762,6 +840,98 @@ func (r *Runner) pause(ctx context.Context, stage Stage, cause error) error {
 	_ = r.checkpoint(checkpointCtx)
 	_ = r.event(checkpointCtx, "run.paused", "error", cause.Error(), stage.ID, nil)
 	return cause
+}
+
+func (r *Runner) detectInputRequest(stage Stage, resultPath string) error {
+	body, err := os.ReadFile(resultPath)
+	if err != nil {
+		return err
+	}
+	var output struct {
+		Status       string `json:"status"`
+		InputRequest struct {
+			Summary   string                `json:"summary"`
+			Questions []model.InputQuestion `json:"questions"`
+		} `json:"input_request"`
+	}
+	if err := json.Unmarshal(body, &output); err != nil {
+		return err
+	}
+	if output.Status != "needs_input" {
+		return nil
+	}
+	if stage.ID != "product" && stage.ID != "arch" {
+		return &inputPolicyError{message: fmt.Sprintf("stage %s is not permitted to request human input", stage.ID)}
+	}
+	if r.hasHumanInputForStage(stage.ID) {
+		return &inputPolicyError{message: fmt.Sprintf("stage %s exhausted its single permitted human-input round", stage.ID)}
+	}
+	if err := validateWorkerInputRequest(output.InputRequest.Summary, output.InputRequest.Questions); err != nil {
+		return &inputPolicyError{message: err.Error()}
+	}
+	return &inputRequestSignal{request: model.InputRequest{RunID: r.config.RunID, Stage: stage.ID, Round: 1,
+		Summary: output.InputRequest.Summary, Questions: output.InputRequest.Questions}}
+}
+
+func validateWorkerInputRequest(summary string, questions []model.InputQuestion) error {
+	if strings.TrimSpace(summary) == "" || len(questions) == 0 || len(questions) > 3 {
+		return errors.New("needs_input result requires a summary and one to three structured questions")
+	}
+	questionIDs := map[string]bool{}
+	for _, question := range questions {
+		if strings.TrimSpace(question.ID) == "" || strings.TrimSpace(question.Prompt) == "" || questionIDs[question.ID] {
+			return errors.New("needs_input questions require unique ids and prompts")
+		}
+		questionIDs[question.ID] = true
+		if len(question.Options) < 2 || len(question.Options) > 3 || !question.AllowFreeText {
+			return fmt.Errorf("needs_input question %s requires two or three options and a free-text alternative", question.ID)
+		}
+		optionIDs, recommended := map[string]bool{}, 0
+		for _, option := range question.Options {
+			if strings.TrimSpace(option.ID) == "" || strings.TrimSpace(option.Label) == "" || optionIDs[option.ID] {
+				return fmt.Errorf("needs_input question %s has an invalid option", question.ID)
+			}
+			optionIDs[option.ID] = true
+			if option.Recommended {
+				recommended++
+			}
+		}
+		if recommended != 1 {
+			return fmt.Errorf("needs_input question %s requires exactly one recommended option", question.ID)
+		}
+	}
+	return nil
+}
+
+func (r *Runner) hasHumanInputForStage(stage string) bool {
+	var values []struct {
+		Request struct {
+			Stage string `json:"stage"`
+		} `json:"request"`
+	}
+	if json.Unmarshal(r.config.HumanInput, &values) != nil {
+		return false
+	}
+	for _, value := range values {
+		if value.Request.Stage == stage {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Runner) awaitInput(ctx context.Context, stage Stage, request model.InputRequest) error {
+	details := map[string]any{"summary": request.Summary, "questions": request.Questions, "round": 1}
+	if _, err := r.harness(context.WithoutCancel(ctx), r.repo, "set-stage", "--run-dir", r.runDir, "--stage", stage.ID,
+		"--status", "waiting_for_input", "--details-json", string(mustJSON(details))); err != nil {
+		return err
+	}
+	checkpointCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	defer cancel()
+	if err := r.checkpoint(checkpointCtx); err != nil {
+		return err
+	}
+	return r.event(checkpointCtx, "human_input.requested", "info", "Stage requested human input; sandbox may be stopped", stage.ID, details)
 }
 
 func (r *Runner) heartbeat(ctx context.Context) {

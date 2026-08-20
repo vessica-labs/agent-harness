@@ -22,6 +22,7 @@ Make the integrated branch pass its configured lint, architecture-lint, and buil
 
 ## Boundaries
 
+- This stage may not request human input or wait for a response. Diagnose and resolve gates from repository evidence until terminal success or a concrete non-question execution failure.
 - Do not reformat or refactor unrelated code, modify planning artifacts, push, rebase, merge, or declare an environment failure repaired.
 - Change lint or build configuration only when the existing contract is demonstrably incorrect and the smallest correction is required.
 - Process exit status is authoritative. A plausible explanation is not a pass.

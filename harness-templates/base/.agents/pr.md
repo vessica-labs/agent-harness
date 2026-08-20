@@ -23,6 +23,7 @@ Rebase the completed branch onto its supplied base, resolve merge conflicts with
 
 ## Boundaries
 
+- This stage may not request human input or wait for a response. Resolve ambiguity from the PRD, ADR, diff, and repository guidance using the safest intent-preserving choice; use `blocked` only for a concrete delivery failure.
 - Do not push directly to the base branch, use unconditional force, omit failed checks, or claim evidence not supplied or observed.
 - Do not change product scope or architecture while resolving conflicts.
 - Do not expose secrets, local absolute paths, or internal run logs in the pull request.
