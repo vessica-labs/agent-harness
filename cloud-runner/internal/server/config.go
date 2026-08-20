@@ -17,6 +17,10 @@ type Config struct {
 	MaxJournalBytes       int64
 	WebhookTolerance      time.Duration
 	InternalLeaseDuration time.Duration
+	PreviewPublicURL      string
+	PreviewEdgeToken      string
+	PreviewTTL            time.Duration
+	PreviewMaxAge         time.Duration
 }
 
 func ConfigFromEnv() (Config, error) {
@@ -30,6 +34,10 @@ func ConfigFromEnv() (Config, error) {
 		MaxJournalBytes:       int64(envInt("HARNESS_MAX_JOURNAL_BYTES", 100<<20)),
 		WebhookTolerance:      time.Minute,
 		InternalLeaseDuration: 15 * time.Minute,
+		PreviewPublicURL:      strings.TrimRight(os.Getenv("HARNESS_PREVIEW_PUBLIC_URL"), "/"),
+		PreviewEdgeToken:      os.Getenv("HARNESS_PREVIEW_EDGE_TOKEN"),
+		PreviewTTL:            envDuration("HARNESS_PREVIEW_TTL", time.Hour),
+		PreviewMaxAge:         envDuration("HARNESS_PREVIEW_MAX_AGE", 4*time.Hour),
 	}
 	if config.ManagementToken == "" {
 		return config, fmt.Errorf("HARNESS_MANAGEMENT_TOKEN is required")
@@ -42,6 +50,14 @@ func env(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	value, err := time.ParseDuration(strings.TrimSpace(os.Getenv(key)))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 func envInt(key string, fallback int) int {

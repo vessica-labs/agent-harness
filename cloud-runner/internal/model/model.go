@@ -45,6 +45,10 @@ type Run struct {
 	HeartbeatAt       *time.Time      `json:"heartbeat_at,omitempty"`
 	Branch            string          `json:"branch,omitempty"`
 	PullRequestURL    string          `json:"pull_request_url,omitempty"`
+	PreviewState      string          `json:"preview_state,omitempty"`
+	PreviewURL        string          `json:"preview_url,omitempty"`
+	PreviewPort       int             `json:"preview_port,omitempty"`
+	PreviewExpiresAt  *time.Time      `json:"preview_expires_at,omitempty"`
 	Error             string          `json:"error,omitempty"`
 	Metadata          json.RawMessage `json:"metadata,omitempty"`
 	CodexModel        string          `json:"codex_model,omitempty"`

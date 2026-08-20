@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/events"
+	"github.com/vessica-labs/agent-harness/cloud-runner/internal/preview"
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/sandbox"
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/scheduler"
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/secure"
@@ -34,7 +35,12 @@ func Run(args []string) error {
 	defer stop()
 	switch args[0] {
 	case "server":
+		if strings.EqualFold(os.Getenv("HARNESS_SERVICE_ROLE"), "preview-edge") {
+			return runPreviewEdge(ctx)
+		}
 		return runServer(ctx)
+	case "preview-edge":
+		return runPreviewEdge(ctx)
 	case "worker":
 		return runWorker(ctx)
 	case "cloud":
@@ -100,6 +106,13 @@ func runServer(ctx context.Context) error {
 			CodexModel:            envDefault("HARNESS_CODEX_MODEL", "gpt-5.6-sol"),
 			PlaywrightWorkers:     envInt("HARNESS_PLAYWRIGHT_WORKERS", 2),
 		}, logger)
+		if config.PreviewPublicURL != "" {
+			manager := preview.NewManager(values, provider, preview.NewBroker(config.PreviewTTL),
+				config.PreviewPublicURL, config.PreviewTTL, config.PreviewMaxAge, logger)
+			control.SetPreviewManager(manager)
+			schedule.SetPreviewManager(manager)
+			go manager.Restore(ctx)
+		}
 		go schedule.Run(ctx)
 	}
 	errChannel := make(chan error, 1)
@@ -112,6 +125,16 @@ func runServer(ctx context.Context) error {
 		defer cancel()
 		return control.Shutdown(shutdown)
 	}
+}
+
+func runPreviewEdge(ctx context.Context) error {
+	upstream := os.Getenv("HARNESS_PREVIEW_UPSTREAM")
+	token := os.Getenv("HARNESS_PREVIEW_EDGE_TOKEN")
+	if upstream == "" || token == "" {
+		return errors.New("preview edge requires HARNESS_PREVIEW_UPSTREAM and HARNESS_PREVIEW_EDGE_TOKEN")
+	}
+	address := envDefault("HARNESS_LISTEN_ADDRESS", ":"+envDefault("PORT", "8080"))
+	return preview.RunEdge(ctx, address, upstream, token)
 }
 
 func runWorker(ctx context.Context) error {
@@ -180,4 +203,6 @@ func envStringMap(key string) map[string]string {
 }
 
 func usageError() error { return errors.New(usage()) }
-func usage() string     { return `usage: agent-harness <server|worker|cloud|railway|ui> [arguments]` }
+func usage() string {
+	return `usage: agent-harness <server|worker|cloud|railway|ui|preview-edge> [arguments]`
+}

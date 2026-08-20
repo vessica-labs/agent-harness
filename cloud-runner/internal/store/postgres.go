@@ -148,7 +148,8 @@ AND (linear_project_id='' OR linear_project_id=$3) ORDER BY (linear_project_id=$
 const runColumns = `id, repository_id, provider, source_issue_id, source_issue_key,
 source_issue_url, source_issue_title, feature_request, state, current_stage, queue_reason,
 attempt, sandbox_id, sandbox_session, auth_slot_id, lease_owner, lease_expires_at,
-heartbeat_at, branch, pull_request_url, error, metadata, codex_model, codex_calls,
+heartbeat_at, branch, pull_request_url, preview_state, preview_url, preview_port, preview_expires_at,
+error, metadata, codex_model, codex_calls,
 input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens, estimated_api_cost_usd,
 started_at, created_at, updated_at, completed_at`
 
@@ -159,7 +160,8 @@ func scanRun(row rowScanner) (model.Run, error) {
 		&value.FeatureRequest, &value.State, &value.CurrentStage, &value.QueueReason,
 		&value.Attempt, &value.SandboxID, &value.SandboxSession, &value.AuthSlotID,
 		&value.LeaseOwner, &value.LeaseExpiresAt, &value.HeartbeatAt, &value.Branch,
-		&value.PullRequestURL, &value.Error, &value.Metadata, &value.CodexModel, &value.CodexCalls,
+		&value.PullRequestURL, &value.PreviewState, &value.PreviewURL, &value.PreviewPort,
+		&value.PreviewExpiresAt, &value.Error, &value.Metadata, &value.CodexModel, &value.CodexCalls,
 		&value.InputTokens, &value.CachedInputTokens, &value.OutputTokens, &value.ReasoningTokens,
 		&value.EstimatedCostUSD, &value.StartedAt, &value.CreatedAt,
 		&value.UpdatedAt, &value.CompletedAt)
@@ -653,6 +655,15 @@ func (p *Postgres) SetAuthSlot(ctx context.Context, id, slotID string) error {
 
 func (p *Postgres) SetDelivery(ctx context.Context, id, branch, pullRequestURL string) error {
 	tag, err := p.pool.Exec(ctx, `UPDATE runs SET branch=$2,pull_request_url=$3,updated_at=now() WHERE id=$1`, id, branch, pullRequestURL)
+	if err == nil && tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return err
+}
+
+func (p *Postgres) SetPreview(ctx context.Context, id, state, url string, port int, expiresAt *time.Time) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE runs SET preview_state=$2, preview_url=$3, preview_port=$4,
+preview_expires_at=$5, updated_at=now() WHERE id=$1`, id, state, url, port, expiresAt)
 	if err == nil && tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}

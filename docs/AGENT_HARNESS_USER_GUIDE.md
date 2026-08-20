@@ -451,6 +451,17 @@ automation:
     label: agent-harness
 ```
 
+Repositories that want live previews of completed runs add an optional `preview` block:
+
+```yaml
+preview:
+  command: npm run start
+  port: 3000
+  healthcheck: /
+```
+
+`command` starts the application inside the sandbox after the draft pull request is created, `port` is the port the application listens on (the worker sets `PORT` to it), and `healthcheck` is an optional absolute path polled until the application responds. Repositories without a `preview` block skip preview publication.
+
 Do not store OAuth tokens, private keys, Codex sessions, management tokens, or Railway tokens in this file.
 
 ### Validate the installation
@@ -490,6 +501,13 @@ railway add --database postgres --json
 railway domain --service control-plane --json
 ```
 
+To enable live previews of completed runs, also create the public preview edge service and give it a domain:
+
+```sh
+railway add --service preview-edge --json
+railway domain --service preview-edge --json
+```
+
 Create a workspace-scoped Railway token and enter it privately as `RAILWAY_API_TOKEN`. Never commit it or paste it into chat.
 
 Create the worker checkpoint, configure the control plane, and deploy:
@@ -506,7 +524,8 @@ agent-harness railway init \
   --service control-plane \
   --postgres-service Postgres \
   --url https://<control-plane-domain> \
-  --checkpoint agent-harness-worker-0.1.0-rc.23
+  --checkpoint agent-harness-worker-0.1.0-rc.23 \
+  --preview-url https://<preview-edge-domain>
 
 agent-harness railway deploy \
   --project <project-id> \
@@ -515,7 +534,7 @@ agent-harness railway deploy \
   --path /path/to/agent-harness/cloud-runner
 ```
 
-`railway init` generates a one-time bootstrap token and encryption key, configures Railway variables, connects Postgres, and stores the bootstrap credential locally. After the first successful deployment, exchange it for the first owner device session:
+`railway init` generates a one-time bootstrap token and encryption key, configures Railway variables, connects Postgres, and stores the bootstrap credential locally. When `--preview-url` is provided it also generates the shared preview-edge token and configures the `preview-edge` service role and upstream (deploy the same `cloud-runner` path to that service with `railway deploy --service preview-edge`). Omit `--preview-url` to leave previews disabled. After the first successful deployment, exchange the bootstrap credential for the first owner device session:
 
 ```sh
 agent-harness cloud team initialize --name "Your name" --device "Your laptop"
@@ -874,6 +893,12 @@ Use $inspect-harness to diagnose why run <run-id> paused. Do not resume it.
 ```
 
 Inspection reports authoritative journal facts first, then differences in Linear, Notion, Git, or GitHub. It does not reclaim leases, update comments, retry writes, edit files, or resume execution unless explicitly asked.
+
+### Live previews
+
+When previews are configured (a repository `preview` block plus a deployed preview edge), a completed run keeps its sandbox alive and serves the application behind a capability link. The link appears on the Run Detail page and is upserted into the Linear parent issue next to the draft pull request. Opening the link exchanges the one-time `?cap=` token for an HTTP-only cookie and shows the application with an overlay badge identifying the run and pull request; the badge expands into a panel reserved for future interactive editing.
+
+Preview access uses a sliding one-hour inactivity window (each authorized request extends it) with an absolute cap, after which the forward is stopped and the sandbox is destroyed. The control plane restores live previews after a restart.
 
 ## 13. Use the localhost dashboard
 
@@ -1585,6 +1610,10 @@ The helper also recognizes agent-result contracts for the optional `docs` role a
 | `HARNESS_MAX_REQUEST_BYTES` | No | General request-body limit; default 4 MiB |
 | `HARNESS_MAX_JOURNAL_BYTES` | No | Journal-upload limit; default 100 MiB |
 | `HARNESS_RAILWAY_BINARY` | No | Railway executable path |
+| `HARNESS_PREVIEW_PUBLIC_URL` | For previews | Public HTTPS origin of the preview edge; empty disables previews |
+| `HARNESS_PREVIEW_EDGE_TOKEN` | For previews | Shared secret proving requests came through the preview edge |
+| `HARNESS_PREVIEW_TTL` | No | Sliding preview inactivity window; default `1h` |
+| `HARNESS_PREVIEW_MAX_AGE` | No | Absolute preview lifetime cap; default `4h` |
 | `HARNESS_WORKER_PATH` | No | Worker executable path inside a sandbox |
 
 `agent-harness railway init` configures the ordinary production variables. Provider credentials are transferred separately and stored encrypted in Postgres.
@@ -1602,6 +1631,16 @@ The helper also recognizes agent-result contracts for the optional `docs` role a
 | `NOTION_TOKEN` | Notion internal-connection token |
 
 Remove temporary Railway variables after the encrypted credential is verified.
+
+### Preview-edge variables
+
+The preview edge is the same binary running with `HARNESS_SERVICE_ROLE=preview-edge` (or the `preview-edge` subcommand) as a second public Railway service. `agent-harness railway init --preview-url <https-origin>` provisions it.
+
+| Variable | Purpose |
+|---|---|
+| `HARNESS_SERVICE_ROLE` | Set to `preview-edge` to run the edge role |
+| `HARNESS_PREVIEW_UPSTREAM` | Private control-plane HTTP origin (`*.railway.internal`) |
+| `HARNESS_PREVIEW_EDGE_TOKEN` | Shared secret injected into forwarded requests |
 
 ### Local profile overrides
 

@@ -21,6 +21,7 @@ import (
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/events"
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/linear"
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/model"
+	"github.com/vessica-labs/agent-harness/cloud-runner/internal/preview"
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/providers/githubapp"
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/providers/linearapi"
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/providers/notionapi"
@@ -38,6 +39,8 @@ type Server struct {
 	ready               atomic.Bool
 	linearMu            sync.Mutex
 	workflowMu          sync.Mutex
+	previewMu           sync.RWMutex
+	preview             *preview.Manager
 	linear              func(string) *linearapi.Client
 	githubWebhookClient func(githubapp.Credentials) githubWebhookUpdater
 }
@@ -57,6 +60,10 @@ func New(config Config, values store.Store, box *secure.Box, broker *events.Brok
 	mux.HandleFunc("POST /auth/v1/token", server.refreshToken)
 	mux.Handle("/v1/", server.management(http.HandlerFunc(server.managementRoutes)))
 	mux.Handle("/internal/v1/", http.HandlerFunc(server.internalRoutes))
+	mux.Handle("/previews/", http.HandlerFunc(server.previewRoutes))
+	// Root-relative assets and websockets from proxied preview pages carry
+	// only the preview cookie; the broker resolves them to the right target.
+	mux.Handle("/", http.HandlerFunc(server.previewRoutes))
 	server.http = &http.Server{Addr: config.Address, Handler: server.logging(mux),
 		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 75 * time.Second, WriteTimeout: 0}
 	return server
@@ -846,6 +853,7 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 		}
 	} else if value.Type == "run.completed" {
 		_ = s.store.SetRunState(r.Context(), runID, "completed", value.Stage, "")
+		go s.publishPreview(runID)
 	} else if value.Type == "run.paused" || value.Type == "run.failed" {
 		_ = s.store.SetRunState(r.Context(), runID, "paused", value.Stage, value.Message)
 	} else if value.Type == "pipeline.stage" || value.Type == "stage.started" || value.Type == "stage.completed" || value.Type == "stage.retrying" {
@@ -882,6 +890,13 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 		}
 		if json.Unmarshal(value.Payload, &payload) == nil {
 			_ = s.store.SetDelivery(r.Context(), runID, payload.Branch, payload.URL)
+		}
+	} else if value.Type == "preview.ready" {
+		var payload struct {
+			Port int `json:"port"`
+		}
+		if json.Unmarshal(value.Payload, &payload) == nil && payload.Port > 0 {
+			_ = s.store.SetPreview(r.Context(), runID, "ready", "", payload.Port, nil)
 		}
 	}
 	if value.Type == "stage.started" || value.Type == "stage.completed" || value.Type == "stage.retrying" ||

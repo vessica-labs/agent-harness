@@ -46,6 +46,8 @@ func railwayInit(ctx context.Context, args []string) error {
 	publicURL := flags.String("url", "", "public control-plane URL")
 	checkpoint := flags.String("checkpoint", "agent-harness-worker-v1", "sandbox checkpoint")
 	postgresService := flags.String("postgres-service", "Postgres", "Railway Postgres service name")
+	previewService := flags.String("preview-service", "preview-edge", "public preview edge service")
+	previewURL := flags.String("preview-url", "", "public HTTPS preview edge URL; empty disables previews")
 	profileName := flags.String("profile", "default", "local cloud profile name")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -56,6 +58,9 @@ func railwayInit(ctx context.Context, args []string) error {
 	}
 	if !strings.HasPrefix(strings.ToLower(*publicURL), "https://") {
 		return errors.New("--url must be the public HTTPS control-plane URL")
+	}
+	if *previewURL != "" && !strings.HasPrefix(strings.ToLower(*previewURL), "https://") {
+		return errors.New("--preview-url must be the public HTTPS preview edge URL")
 	}
 	if err := verifyRailwaySandboxAccess(ctx, *project, *environment); err != nil {
 		return err
@@ -92,6 +97,35 @@ func railwayInit(ctx context.Context, args []string) error {
 	commandArgs = append(commandArgs, common...)
 	if err := railwayCommand(ctx, nil, io.Discard, commandArgs...); err != nil {
 		return err
+	}
+	if *previewURL != "" {
+		edgeToken, err := secure.GenerateKey()
+		if err != nil {
+			return err
+		}
+		setSecret := func(service, key, value string) error {
+			serviceCommon := []string{"--project", *project, "--environment", *environment, "--service", service, "--skip-deploys"}
+			commandArgs := append([]string{"variable", "set", key, "--stdin"}, serviceCommon...)
+			return railwayCommand(ctx, strings.NewReader(value), io.Discard, commandArgs...)
+		}
+		if err := setSecret(*service, "HARNESS_PREVIEW_EDGE_TOKEN", edgeToken); err != nil {
+			return err
+		}
+		if err := setSecret(*previewService, "HARNESS_PREVIEW_EDGE_TOKEN", edgeToken); err != nil {
+			return err
+		}
+		controlVariables := append([]string{"variable", "set",
+			"HARNESS_PREVIEW_PUBLIC_URL=" + strings.TrimRight(*previewURL, "/")}, common...)
+		if err := railwayCommand(ctx, nil, io.Discard, controlVariables...); err != nil {
+			return err
+		}
+		edgeVariables := []string{"variable", "set",
+			"HARNESS_SERVICE_ROLE=preview-edge",
+			"HARNESS_PREVIEW_UPSTREAM=http://${{" + *service + ".RAILWAY_PRIVATE_DOMAIN}}:${{" + *service + ".PORT}}",
+			"--project", *project, "--environment", *environment, "--service", *previewService, "--skip-deploys"}
+		if err := railwayCommand(ctx, nil, io.Discard, edgeVariables...); err != nil {
+			return err
+		}
 	}
 	if err := saveProfile(*profileName, *publicURL, managementToken); err != nil {
 		return err
