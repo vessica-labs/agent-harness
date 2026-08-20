@@ -13,10 +13,13 @@ import (
 
 func TestWorkerBootstrapUsesDigestCacheAndReportsBootstrapFailures(t *testing.T) {
 	script := workerBootstrap("agent-harness")
-	for _, expected := range []string{"worker-binary", "HARNESS_WORKER_CACHE_HIT=1", "run.failed", "exec \"$worker\" worker"} {
+	for _, expected := range []string{"worker-binary", "HARNESS_WORKER_CACHE_HIT=1", "run.failed", "exec \"$worker\" worker", "--retry-all-errors"} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("bootstrap missing %q:\n%s", expected, script)
 		}
+	}
+	if count := strings.Count(script, "--retry-all-errors"); count != 2 {
+		t.Fatalf("bootstrap must retry both worker binary requests; got %d:\n%s", count, script)
 	}
 	command := exec.Command("bash", "-n")
 	command.Stdin = strings.NewReader(script)
