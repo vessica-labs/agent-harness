@@ -74,11 +74,14 @@ To build from source instead:
 
 ```sh
 git clone https://github.com/vessica-labs/agent-harness.git
-cd agent-harness/cloud-runner
-make build
-mkdir -p "$HOME/.local/bin"
-cp bin/agent-harness "$HOME/.local/bin/agent-harness"
+cd agent-harness
+make install
+agent-harness version
 ```
+
+`make install` builds a version-stamped binary from the current checkout and
+installs it to `$HOME/.local/bin` by default. Set `PREFIX` to choose another
+installation prefix.
 
 ### 3. Install the Codex plugin
 
@@ -187,7 +190,7 @@ agent-harness railway init \
   --service control-plane \
   --postgres-service Postgres \
   --url https://<control-plane-domain> \
-  --checkpoint agent-harness-worker-0.1.0-rc.23
+  --checkpoint agent-harness-worker-0.1.0-rc.26
 
 agent-harness railway deploy \
   --project <railway-project-id> \
@@ -417,9 +420,48 @@ Named stages run exactly those stages in pipeline order. An unfinished run resum
 Run all repository checks:
 
 ```sh
-python3 -m unittest discover -s tests -v
-cd cloud-runner
 make verify
 ```
+
+Build or install the current checkout with `make build` or `make install`.
+
+## Maintainer release
+
+Production uses two artifacts from the same version: the tagged GHCR image for
+the control plane and a Railway checkpoint for disposable workers. From a clean,
+rebased `main`, run:
+
+```sh
+make release-check
+make release
+```
+
+Both commands inspect the release-candidate tags on `origin` and select the next
+RC on the newest version line, such as `v0.1.0-rc.27` after `v0.1.0-rc.26`.
+`release-check` is read-only with respect to GitHub and Railway. `release` reruns
+verification, pushes `main` and the selected version tag, waits for GitHub
+Actions to publish all release assets and the GHCR image, creates the matching
+Railway worker checkpoint, points the production control plane at the tagged
+image, and waits for terminal Railway success plus `/healthz` and `/readyz`.
+
+To start a new version line or override the automatic choice, provide an
+explicit version:
+
+```sh
+make release VERSION=v0.2.0-rc.1
+```
+
+Each external stage is also independently resumable:
+
+```sh
+make publish VERSION=v0.1.0-rc.27
+make checkpoint VERSION=v0.1.0-rc.27
+make deploy-production VERSION=v0.1.0-rc.27
+make production-status
+```
+
+The production Railway project, environment, service, and public URL have
+repository defaults. Override `RAILWAY_PROJECT`, `RAILWAY_ENVIRONMENT`,
+`RAILWAY_SERVICE`, or `PUBLIC_URL` when targeting a different installation.
 
 For local control-plane development and implementation details, see [cloud-runner/README.md](cloud-runner/README.md).

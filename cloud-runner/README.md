@@ -37,9 +37,28 @@ agent-harness ui
 5. Run `agent-harness cloud team initialize` once to exchange the bootstrap token for the first owner device session.
 6. Add independent Codex login slots and GitHub, Linear, and Notion service credentials with `agent-harness cloud auth`.
 7. Register each repository with `agent-harness cloud repo add`.
-8. Deploy with `agent-harness railway deploy` and wait for terminal Railway success plus `/healthz` and `/readyz`.
+8. For a source-based installation, deploy with `agent-harness railway deploy` and wait for terminal Railway success plus `/healthz` and `/readyz`. The maintained production installation uses the repository-level `make release VERSION=vX.Y.Z` flow instead.
 
 `railway init` first checks that the target environment can list Sandboxes. It stops with an enablement instruction when the feature is unavailable. The Railway CLI and Codex CLI versions are pinned in the image and checkpoint builder.
+
+## Maintainer release
+
+Run the release workflow from the repository root, not this directory:
+
+```text
+make release-check
+make release
+```
+
+`release-check` validates a clean, rebased `main` and runs every Python and Go
+check without changing GitHub or Railway. Both commands select the next RC from
+the remote release tags; pass `VERSION=vX.Y.Z-rc.N` only to override that choice
+or begin a new version line. `release` pushes the selected tag, waits for the
+GitHub release assets and GHCR image, creates the matching
+`agent-harness-worker-X.Y.Z-rc.N`, sets `HARNESS_SANDBOX_CHECKPOINT`, updates the
+Railway control-plane image, waits for terminal `SUCCESS`, and checks both
+health endpoints. Use `make publish`, `make checkpoint`, and
+`make deploy-production` with an explicit `VERSION` to resume individual stages.
 
 ## Service authentication
 

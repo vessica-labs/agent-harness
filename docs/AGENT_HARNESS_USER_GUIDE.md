@@ -344,12 +344,14 @@ To verify the release checksum, download `SHA256SUMS` beside the binary and veri
 
 ```sh
 git clone https://github.com/vessica-labs/agent-harness.git
-cd agent-harness/cloud-runner
-make build
-mkdir -p "$HOME/.local/bin"
-cp bin/agent-harness "$HOME/.local/bin/agent-harness"
+cd agent-harness
+make install
 agent-harness version
 ```
+
+The default installation prefix is `$HOME/.local`; override `PREFIX` when
+needed. The locally built binary reports the source tag or commit used to build
+it.
 
 ### Install the Codex plugin
 
@@ -371,7 +373,39 @@ Restart Codex and open a new task after installation or upgrade.
 
 ### Upgrade the cloud runner
 
-Upgrade the versioned worker checkpoint before deploying the matching control-plane version:
+The maintained production release uses one version for the GitHub assets, GHCR
+control-plane image, and Railway worker checkpoint. From a clean, rebased
+`main`, validate and release it from the repository root:
+
+```sh
+make release-check
+make release
+```
+
+These commands read the RC tags from `origin` and automatically select the next
+number on the newest release-candidate version line. For example, an existing
+`v0.1.0-rc.26` produces `v0.1.0-rc.27`. Pass an explicit version to override the
+selection or start a new version line:
+
+```sh
+make release VERSION=v0.2.0-rc.1
+```
+
+The release command waits for the selected tag's GitHub workflow, creates the
+worker checkpoint, updates Railway's pinned control-plane image, waits for
+terminal deployment success, and verifies `/healthz` and `/readyz`. To resume a
+partially completed release, run its stages separately with the selected
+version:
+
+```sh
+make publish VERSION=vX.Y.Z
+make checkpoint VERSION=vX.Y.Z
+make deploy-production VERSION=vX.Y.Z
+make production-status
+```
+
+For a separate source-based installation, upgrade the versioned worker
+checkpoint before deploying the matching local control-plane source:
 
 ```sh
 export RAILWAY_API_TOKEN='<enter privately>'
@@ -1523,6 +1557,11 @@ agent-harness railway logs [Railway CLI arguments]
 ```
 
 `upgrade` builds a worker template from the published GitHub release, creates a temporary source sandbox, captures the versioned checkpoint, and destroys the temporary sandbox. `init` verifies Sandbox access, generates secrets, configures the service, and creates the local profile. `deploy` runs a detached Railway deployment. `status` and `logs` pass through to the Railway CLI with Agent Harness caller metadata.
+
+The repository-level maintainer targets are stricter than the generic
+`agent-harness railway deploy` command: they deploy the immutable tagged GHCR
+image, update the matching worker checkpoint, wait for terminal Railway status,
+and verify the public health endpoints before reporting success.
 
 ### Deterministic helper commands
 
