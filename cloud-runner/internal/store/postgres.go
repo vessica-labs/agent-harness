@@ -555,17 +555,10 @@ ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`))
 	if err != nil {
 		return model.Run{}, err
 	}
-	if err := tx.QueryRow(ctx, `UPDATE runs SET state='running', attempt=attempt+1,
+	run, err = scanRun(tx.QueryRow(ctx, `UPDATE runs SET state='running', attempt=attempt+1,
 lease_owner=$2, lease_expires_at=now()+$3::interval, heartbeat_at=now(), queue_reason='',
-started_at=COALESCE(started_at,now()),updated_at=now() WHERE id=$1 RETURNING `+runColumns, run.ID, owner, interval(lease)).Scan(
-		&run.ID, &run.RepositoryID, &run.Provider, &run.SourceIssueID, &run.SourceIssueKey,
-		&run.SourceIssueURL, &run.SourceIssueTitle, &run.FeatureRequest, &run.State,
-		&run.CurrentStage, &run.QueueReason, &run.Attempt, &run.SandboxID,
-		&run.SandboxSession, &run.AuthSlotID, &run.LeaseOwner, &run.LeaseExpiresAt,
-		&run.HeartbeatAt, &run.Branch, &run.PullRequestURL, &run.Error, &run.Metadata,
-		&run.CodexModel, &run.CodexCalls, &run.InputTokens, &run.CachedInputTokens,
-		&run.OutputTokens, &run.ReasoningTokens, &run.EstimatedCostUSD,
-		&run.StartedAt, &run.CreatedAt, &run.UpdatedAt, &run.CompletedAt); err != nil {
+started_at=COALESCE(started_at,now()),updated_at=now() WHERE id=$1 RETURNING `+runColumns, run.ID, owner, interval(lease)))
+	if err != nil {
 		return model.Run{}, err
 	}
 	if _, err := appendEventTx(ctx, tx, model.Event{RunID: run.ID, SourceIssueID: run.SourceIssueID,
