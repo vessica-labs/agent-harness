@@ -356,6 +356,8 @@ Every redemption creates a named member and an individually revocable device ses
 
 Add the configured `agent-harness` label to an eligible root Linear issue. The webhook is acknowledged and persisted before work begins. Duplicate deliveries and later qualifying updates resolve to the existing run.
 
+To hold one source issue behind another, add an explicit line such as `Depends on AGE-22` to the dependent issue's description before applying the trigger label. Multiple issue keys may be comma-separated or declared on multiple `Depends on` lines. The run remains queued without consuming a sandbox until every referenced Linear issue is in a completed workflow state; a dependency update releases it automatically.
+
 Monitor from the CLI:
 
 ```sh
@@ -375,7 +377,7 @@ agent-harness ui
 The UI binds to `127.0.0.1` and streams authenticated events without exposing device credentials to browser JavaScript. Its top-level **Inbox** lists open Product and Architecture questions; operators can select the recommended or alternate choice, provide free text, and atomically queue the checkpointed run. The remaining **Runs** surface is read-only. For owners and administrators, the **Team** view can issue one-time invitation links, change non-owner roles, revoke members, invitations, or devices, and inspect authentication history.
 Selecting a pipeline run filters the event stream to that run. Run details include duration, model, token counts, and estimated API-equivalent token cost; Playwright execution in Railway sandboxes is resource-capped without reducing the number of independent ticket pipelines.
 
-Only Product and Architecture may request human input, and each may do so once. The runner uploads the journal, records the request, exits the disposable sandbox without retrying, moves Linear to **Needs Input**, and accepts the first answer from either the Inbox or a reply to the exact question thread. All later stages are prompt- and runtime-constrained from waiting for a user.
+Only Product and Architecture may request human input, and each may do so once. The runner uploads the journal, records the request, exits the disposable sandbox without retrying, moves Linear to **Needs Input**, and accepts the first answer from either the Inbox or a reply to the exact question thread. Answers accepted through the web UI or another non-Linear channel such as Slack are recorded in one idempotent Linear comment; an answer posted in Linear is already present there and is not copied. All later stages are prompt- and runtime-constrained from waiting for a user.
 
 Resume, cancel, or export a run:
 

@@ -6,7 +6,7 @@ The cloud runner is one Go binary with three roles:
 - `agent-harness worker` runs one source-ticket pipeline in an isolated Railway sandbox.
 - `agent-harness cloud`, `agent-harness railway`, and `agent-harness ui` operate the service locally.
 
-Postgres owns claims, leases, events, encrypted credentials, synchronization identities, compressed run journals, and canonical human-input requests and responses. Channel delivery records are provider-neutral: the control-plane UI and Linear project the same request today, and a later Slack adapter can add another delivery and response channel without changing runner state. Sandboxes are disposable; recovery recreates `.harness/runs/<run-id>` and checks out the last pushed integration branch.
+Postgres owns claims, leases, events, encrypted credentials, synchronization identities, compressed run journals, and canonical human-input requests and responses. Channel delivery records are provider-neutral: the control-plane UI and Linear project the same request today, and a Slack adapter can add another delivery and response channel without changing runner state. Accepted non-Linear answers are mirrored to one idempotent Linear comment; Linear-origin replies are not duplicated. Top-level `Depends on ISSUE-123` description instructions are persisted as queue gates and keep a run unclaimable until every referenced Linear issue is completed. Sandboxes are disposable; recovery recreates `.harness/runs/<run-id>` and checks out the last pushed integration branch.
 
 ## Local verification
 

@@ -679,6 +679,14 @@ Add the configured trigger label to a root issue in the registered workspace, te
 
 The first eligible webhook creates one durable run. Duplicate deliveries, later updates, and label replays resolve to that run instead of creating another one.
 
+To sequence source issues, put an explicit dependency instruction in the dependent issue's description before applying the trigger label:
+
+```text
+Depends on AGE-22
+```
+
+You may list multiple issue keys on that line or use multiple `Depends on` lines. Agent Harness resolves each key through Linear and checks its workflow-state type. If any dependency is not completed—or cannot currently be resolved—the new run stays queued with a `dependencies_pending` or `dependencies_check_failed` reason and cannot be claimed by the scheduler. A later Linear update to a referenced issue rechecks the full dependency set and releases the run only after every dependency is Done. This source-issue gate is separate from the logical child-ticket DAG created inside a running pipeline.
+
 ### Create an issue through Agent Harness
 
 The CLI can create a root Linear issue and apply the repository's trigger label:
@@ -826,7 +834,7 @@ Agent Harness resolves only unambiguous integration conflicts automatically. A c
 
 | State | Meaning |
 |---|---|
-| `queued` | Claimed and waiting for run capacity, auth capacity, or Railway capacity |
+| `queued` | Claimed and waiting for declared Linear dependencies, run capacity, auth capacity, or Railway capacity |
 | `running` | Leased to the scheduler and executing in a sandbox |
 | `awaiting_input` | Product or Architecture checkpointed one structured question round and stopped the disposable sandbox |
 | `paused` | Execution stopped with a recoverable execution, contract, or infrastructure error |
@@ -966,7 +974,7 @@ The Inbox button at the top of the dashboard shows the current response count. I
 
 ### Answer a Product or Architecture question
 
-Open the dashboard Inbox and select the request, or reply directly beneath the matching Agent Harness question comment in Linear. UI answers require one response per question and accept either a listed choice or the free-text alternative. A Linear reply is treated as one complete free-text response bundle. The first accepted response wins across all channels, is recorded with its actor and channel, moves the Linear issue from Needs Input to In Progress, and automatically queues a fresh sandbox that restores the journal.
+Open the dashboard Inbox and select the request, or reply directly beneath the matching Agent Harness question comment in Linear. UI answers require one response per question and accept either a listed choice or the free-text alternative. A Linear reply is treated as one complete free-text response bundle. The first accepted response wins across all channels, is recorded with its actor and channel, moves the Linear issue from Needs Input to In Progress, and automatically queues a fresh sandbox that restores the journal. Answers accepted through the web UI or another non-Linear channel such as Slack are also written to one marker-backed Linear comment. Linear-thread answers are not copied because the original reply is already the system-of-record comment.
 
 Product and Architecture are instructed to inspect the issue and repository first, bundle all material decisions into one round, recommend an option, and avoid asking when a safe reversible assumption is available. Coder, lint, documentation, QA, pull-request, and custom downstream stages cannot wait for a user and must work from their supplied context until a terminal result.
 
