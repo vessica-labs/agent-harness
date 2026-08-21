@@ -514,6 +514,7 @@ class BootstrapAndStateTests(unittest.TestCase):
             )
             run_dir = Path(created["run_dir"])
             self.assertFalse(created["resumed"])
+            self.assertTrue(created["session_token"].startswith("lease_"))
             process, lease_error = run_json(
                 str(HARNESSCTL),
                 "init-run",

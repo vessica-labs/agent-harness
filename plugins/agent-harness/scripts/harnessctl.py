@@ -861,7 +861,7 @@ def acquire_lease(repo: Path, issue_key: str, run_id: str, lease_seconds: int, r
         fresh = (now - updated).total_seconds() < int(existing.get("lease_seconds", lease_seconds))
         if fresh and not reclaim:
             raise HarnessError(f"issue is leased by {existing.get('run_id', 'another run')}; inspect it or explicitly reclaim the lease")
-    token = secrets.token_urlsafe(24)
+    token = "lease_" + secrets.token_urlsafe(24)
     atomic_write_json(lock_path, {
         "issue_key": issue_key,
         "run_id": run_id,
