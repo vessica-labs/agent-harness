@@ -99,9 +99,23 @@ func TestParseDelegatedAgentSession(t *testing.T) {
 	}
 }
 
+func TestParseDelegatedAgentSessionWithGeneratedThreadComment(t *testing.T) {
+	now := time.Now()
+	body := []byte(`{"action":"created","type":"AgentSessionEvent","organizationId":"org-1","appUserId":"vessica-user","promptContext":"<issue>Build it</issue>","agentSession":{"id":"session-2","appUserId":"vessica-user","commentId":"session-thread-comment","sourceCommentId":null,"issue":{"id":"issue-2","identifier":"ENG-45","title":"Build it","description":"Details","url":"https://linear.app/ENG-45","teamId":"team-1"}}}`)
+	headers := signedHeaders(body, "s", now)
+	headers.Set(HeaderEvent, "AgentSessionEvent")
+	parsed, err := Parse(headers, body, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, reason := parsed.AgentSessionEligible(); !ok {
+		t.Fatalf("ineligible: %s", reason)
+	}
+}
+
 func TestMentionedAgentSessionIsNotDispatchEligible(t *testing.T) {
 	now := time.Now()
-	body := []byte(`{"action":"created","type":"AgentSessionEvent","organizationId":"org-1","appUserId":"vessica-user","agentSession":{"id":"session-2","appUserId":"vessica-user","commentId":"comment-2","issue":{"id":"issue-2","identifier":"ENG-45","title":"Question","url":"https://linear.app/ENG-45","teamId":"team-1"}}}`)
+	body := []byte(`{"action":"created","type":"AgentSessionEvent","organizationId":"org-1","appUserId":"vessica-user","agentSession":{"id":"session-3","appUserId":"vessica-user","commentId":"session-thread-comment","sourceCommentId":"mention-comment","issue":{"id":"issue-3","identifier":"ENG-46","title":"Question","url":"https://linear.app/ENG-46","teamId":"team-1"}}}`)
 	headers := signedHeaders(body, "s", now)
 	headers.Set(HeaderEvent, "AgentSessionEvent")
 	parsed, err := Parse(headers, body, now)
