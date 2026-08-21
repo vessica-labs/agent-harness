@@ -192,6 +192,11 @@ func (r *Runner) Run(ctx context.Context) (runErr error) {
 }
 
 func (r *Runner) executeStageWithRetries(ctx context.Context, stage Stage) error {
+	if recovered, err := r.recoverRepairRequest(stage); err != nil {
+		return err
+	} else if recovered != nil {
+		return recovered
+	}
 	const maxAttempts = 3
 	var last error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {

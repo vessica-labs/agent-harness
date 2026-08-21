@@ -889,7 +889,7 @@ After the final failed attempt, the run pauses.
 
 ### QA repair loop
 
-The default pipeline allows QA to re-enter coder, continue through lint, and return to QA up to two times. Repair counts, new tickets, and completed work are persisted. Exceeding the configured limit pauses the run instead of looping indefinitely.
+The default pipeline allows QA to re-enter coder, continue through lint, and return to QA up to two times. Repair counts, new tickets, and completed work are persisted. If a run paused after QA produced a valid `requeue` result but before the loop was available, resuming after adding the matching loop consumes that checkpointed repair request without rerunning QA. QA runs normally after the coders finish so the repaired acceptance criteria are verified. Exceeding the configured limit pauses the run instead of looping indefinitely.
 
 ## 12. Monitor runs
 

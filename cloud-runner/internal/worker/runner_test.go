@@ -100,6 +100,33 @@ repair_loops:
 	}
 }
 
+func TestRecoverBlockedQARepairRequest(t *testing.T) {
+	runDir := t.TempDir()
+	resultPath := filepath.Join(runDir, "agent-output", "qa.json")
+	if err := os.MkdirAll(filepath.Dir(resultPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "state.json"), []byte(`{"stages":{"qa":{"status":"blocked"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := `{"agent":"qa","status":"requeue","new_tickets":[{"key":"AGE-29-Q01"}]}`
+	if err := os.WriteFile(resultPath, []byte(result), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &Runner{runDir: runDir}
+	stage := Stage{ID: "qa", Result: FileContract{File: "agent-output/qa.json"}}
+	recovered, err := runner.recoverRepairRequest(stage)
+	if err != nil || recovered == nil || recovered.resultPath != resultPath {
+		t.Fatalf("blocked QA repair was not recovered: request=%+v error=%v", recovered, err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "state.json"), []byte(`{"stages":{"qa":{"status":"pending"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if recovered, err := runner.recoverRepairRequest(stage); err != nil || recovered != nil {
+		t.Fatalf("pending QA incorrectly reused stale repair: request=%+v error=%v", recovered, err)
+	}
+}
+
 func TestJournalRoundTripAndTraversalRejection(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "source")

@@ -13,6 +13,37 @@ type repairRequest struct{ resultPath string }
 
 func (r *repairRequest) Error() string { return "QA requested coding repair tickets" }
 
+func (r *Runner) recoverRepairRequest(stage Stage) (*repairRequest, error) {
+	if stage.ID != "qa" {
+		return nil, nil
+	}
+	state, err := r.state()
+	if err != nil {
+		return nil, err
+	}
+	details, _ := state.Stages[stage.ID].(map[string]any)
+	if details["status"] != "blocked" {
+		return nil, nil
+	}
+	resultPath := filepath.Join(r.runDir, filepath.FromSlash(stage.Result.File))
+	body, err := os.ReadFile(resultPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var output struct {
+		Agent      string   `json:"agent"`
+		Status     string   `json:"status"`
+		NewTickets []ticket `json:"new_tickets"`
+	}
+	if json.Unmarshal(body, &output) != nil || output.Agent != "qa" || output.Status != "requeue" || len(output.NewTickets) == 0 {
+		return nil, nil
+	}
+	return &repairRequest{resultPath: resultPath}, nil
+}
+
 func (r *Runner) loadRepairCounts() (map[string]int, error) {
 	counts := map[string]int{}
 	body, err := os.ReadFile(filepath.Join(r.runDir, "state.json"))
