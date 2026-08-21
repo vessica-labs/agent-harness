@@ -3,8 +3,10 @@ name: Cloud runner
 on:
   pull_request:
     paths:
+      - Makefile
       - cloud-runner/**
       - plugins/agent-harness/**
+      - scripts/release.py
       - tests/**
       - .github/workflows/cloud-runner.yml
   push:
