@@ -17,7 +17,7 @@ type Repository struct {
 	LinearWorkspaceID  string    `json:"linear_workspace_id"`
 	LinearTeamID       string    `json:"linear_team_id"`
 	LinearProjectID    string    `json:"linear_project_id,omitempty"`
-	TriggerLabel       string    `json:"trigger_label"`
+	LinearAgentName    string    `json:"linear_agent_name"`
 	NotionParentID     string    `json:"notion_parent_page_id,omitempty"`
 	Enabled            bool      `json:"enabled"`
 	CreatedAt          time.Time `json:"created_at"`

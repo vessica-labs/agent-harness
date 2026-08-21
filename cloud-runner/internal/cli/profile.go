@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 type profileFile struct {
@@ -21,6 +24,12 @@ type profileFile struct {
 
 type profile struct {
 	URL string `json:"url"`
+}
+
+type repositoryProfileConfig struct {
+	Cloud struct {
+		Profile string `yaml:"profile"`
+	} `yaml:"cloud"`
 }
 
 type sessionCredentials struct {
@@ -39,6 +48,10 @@ func loadProfileSession(name string) (string, string, sessionCredentials, error)
 	if url, token := os.Getenv("AGENT_HARNESS_URL"), os.Getenv("AGENT_HARNESS_TOKEN"); url != "" && token != "" {
 		return "env", strings.TrimRight(url, "/"), sessionCredentials{AccessToken: token}, nil
 	}
+	name, err := requestedProfileName(name)
+	if err != nil {
+		return "", "", sessionCredentials{}, err
+	}
 	config, err := readProfiles()
 	if err != nil {
 		return "", "", sessionCredentials{}, err
@@ -51,7 +64,7 @@ func loadProfileSession(name string) (string, string, sessionCredentials, error)
 	}
 	selected, ok := config.Profiles[name]
 	if !ok || selected.URL == "" {
-		return "", "", sessionCredentials{}, errors.New("cloud profile is not configured; run agent-harness cloud profile set")
+		return "", "", sessionCredentials{}, fmt.Errorf("cloud profile %q is not configured; run agent-harness cloud profile set --name %s", name, name)
 	}
 	raw, err := loadSecret(name)
 	if err != nil {
@@ -62,6 +75,45 @@ func loadProfileSession(name string) (string, string, sessionCredentials, error)
 		credentials = sessionCredentials{AccessToken: raw}
 	}
 	return name, strings.TrimRight(selected.URL, "/"), credentials, nil
+}
+
+func requestedProfileName(name string) (string, error) {
+	if value := strings.TrimSpace(name); value != "" {
+		return value, nil
+	}
+	if value := strings.TrimSpace(os.Getenv("AGENT_HARNESS_PROFILE")); value != "" {
+		return value, nil
+	}
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return repositoryProfileName(workingDirectory)
+}
+
+func repositoryProfileName(start string) (string, error) {
+	directory, err := filepath.Abs(start)
+	if err != nil {
+		return "", err
+	}
+	for {
+		body, readErr := os.ReadFile(filepath.Join(directory, ".harness", "config.yaml"))
+		if readErr == nil {
+			value := repositoryProfileConfig{}
+			if err := yaml.Unmarshal(body, &value); err != nil {
+				return "", fmt.Errorf("read repository cloud profile: %w", err)
+			}
+			return strings.TrimSpace(value.Cloud.Profile), nil
+		}
+		if !errors.Is(readErr, os.ErrNotExist) {
+			return "", readErr
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			return "", nil
+		}
+		directory = parent
+	}
 }
 
 func saveProfile(name, url, token string) error {

@@ -121,8 +121,8 @@ func (m *Memory) PutRepository(_ context.Context, value model.Repository) (model
 	if value.BaseBranch == "" {
 		value.BaseBranch = "main"
 	}
-	if value.TriggerLabel == "" {
-		value.TriggerLabel = "agent-harness"
+	if value.LinearAgentName == "" {
+		value.LinearAgentName = "Vessica"
 	}
 	now := time.Now().UTC()
 	if previous, ok := m.repositories[value.ID]; ok {

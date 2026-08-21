@@ -25,7 +25,10 @@ const (
 
 type ParsedWebhook struct {
 	Delivery        model.LinearDelivery
-	Labels          []string
+	AgentSessionID  string
+	AppUserID       string
+	PromptContext   string
+	Delegated       bool
 	HasParent       bool
 	Archived        bool
 	Cancelled       bool
@@ -86,14 +89,41 @@ func Parse(headers http.Header, body []byte, receivedAt time.Time) (ParsedWebhoo
 	if err := json.Unmarshal(body, &root); err != nil {
 		return ParsedWebhook{}, fmt.Errorf("decode Linear webhook: %w", err)
 	}
+	parsed := ParsedWebhook{}
+	eventType := coalesce(headers.Get(HeaderEvent), value(root, "type"))
+	if strings.EqualFold(eventType, "AgentSessionEvent") {
+		session, _ := root["agentSession"].(map[string]any)
+		issue, _ := session["issue"].(map[string]any)
+		parsed.AgentSessionID = value(session, "id")
+		parsed.AppUserID = coalesce(value(root, "appUserId"), value(session, "appUserId"))
+		parsed.PromptContext = strings.TrimSpace(value(root, "promptContext"))
+		parsed.Delegated = (parsed.AppUserID != "" && value(issue, "delegateId") == parsed.AppUserID) ||
+			(value(session, "commentId") == "" && value(session, "sourceCommentId") == "")
+		parsed.Delivery = model.LinearDelivery{
+			DeliveryID: stringValue(headers.Get(HeaderDelivery)), EventType: eventType,
+			Action: value(root, "action"), IssueID: value(issue, "id"), IssueKey: value(issue, "identifier"),
+			IssueURL: value(issue, "url"), IssueTitle: value(issue, "title"),
+			WorkspaceID: coalesce(value(root, "organizationId"), value(session, "organizationId")),
+			TeamID:      coalesce(value(issue, "teamId"), nestedID(issue, "team")),
+			ReceivedAt:  receivedAt, RawPayload: append([]byte(nil), body...),
+		}
+		description := value(issue, "description")
+		parsed.Delivery.FeatureRequest = strings.TrimSpace(parsed.Delivery.IssueTitle + "\n\n" + description)
+		parsed.Delivery.Dependencies = DependencyIssueKeys(description)
+		hash := sha256.Sum256(body)
+		parsed.Delivery.PayloadSHA256 = hex.EncodeToString(hash[:])
+		if parsed.AgentSessionID == "" || parsed.Delivery.IssueID == "" || parsed.Delivery.TeamID == "" {
+			return ParsedWebhook{}, errors.New("Linear agent-session webhook session, issue, or team id is missing")
+		}
+		return parsed, nil
+	}
 	data, ok := root["data"].(map[string]any)
 	if !ok {
 		return ParsedWebhook{}, errors.New("Linear webhook data is missing")
 	}
-	parsed := ParsedWebhook{}
 	parsed.Delivery = model.LinearDelivery{
 		DeliveryID: stringValue(headers.Get(HeaderDelivery)),
-		EventType:  coalesce(headers.Get(HeaderEvent), value(root, "type")),
+		EventType:  eventType,
 		Action:     value(root, "action"), IssueID: value(data, "id"),
 		IssueKey: value(data, "identifier"), IssueURL: value(data, "url"),
 		IssueTitle: value(data, "title"), WorkspaceID: coalesce(value(root, "organizationId"), nestedID(data, "organization")),
@@ -122,11 +152,23 @@ func Parse(headers http.Header, body []byte, receivedAt time.Time) (ParsedWebhoo
 	parsed.HasParent = data["parent"] != nil || value(data, "parentId") != ""
 	parsed.Archived = data["archivedAt"] != nil || boolValue(data["archived"])
 	parsed.Cancelled = data["canceledAt"] != nil || data["cancelledAt"] != nil
-	parsed.Labels = labels(data["labels"])
 	if parsed.Delivery.IssueID == "" || parsed.Delivery.TeamID == "" {
 		return ParsedWebhook{}, errors.New("Linear webhook issue id or team id is missing")
 	}
 	return parsed, nil
+}
+
+func (p ParsedWebhook) AgentSessionEligible() (bool, string) {
+	if !strings.EqualFold(p.Delivery.EventType, "AgentSessionEvent") {
+		return false, "not_agent_session_event"
+	}
+	if p.Delivery.Action != "created" {
+		return false, "unsupported_agent_session_action"
+	}
+	if !p.Delegated {
+		return false, "not_issue_delegation"
+	}
+	return true, ""
 }
 
 // DependencyIssueKeys extracts top-level issue dependencies from explicit
@@ -140,48 +182,6 @@ func DependencyIssueKeys(description string) []string {
 			if !seen[key] {
 				seen[key] = true
 				result = append(result, key)
-			}
-		}
-	}
-	return result
-}
-
-func (p ParsedWebhook) Eligible(triggerLabel string) (bool, string) {
-	if !strings.EqualFold(p.Delivery.EventType, "Issue") {
-		return false, "not_issue_event"
-	}
-	if p.Delivery.Action != "create" && p.Delivery.Action != "update" {
-		return false, "unsupported_action"
-	}
-	if p.HasParent {
-		return false, "child_issue"
-	}
-	if p.Archived || p.Cancelled {
-		return false, "inactive_issue"
-	}
-	for _, label := range p.Labels {
-		if strings.EqualFold(label, triggerLabel) {
-			return true, ""
-		}
-	}
-	return false, "trigger_label_missing"
-}
-
-func labels(raw any) []string {
-	if object, ok := raw.(map[string]any); ok {
-		if nodes, ok := object["nodes"]; ok {
-			raw = nodes
-		}
-	}
-	values, _ := raw.([]any)
-	result := make([]string, 0, len(values))
-	for _, item := range values {
-		switch value := item.(type) {
-		case string:
-			result = append(result, value)
-		case map[string]any:
-			if name := value["name"]; name != nil {
-				result = append(result, fmt.Sprint(name))
 			}
 		}
 	}

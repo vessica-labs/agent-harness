@@ -4,7 +4,7 @@
 
 ## Project Purpose
 
-Agent Harness is a lean, editable issue-to-pull-request coding workflow for Codex. Each target repository owns its context documents, agent definitions, deterministic pipeline YAML, architecture rules, and durable run journal. The optional Railway cloud runner watches labeled Linear issues and executes that repository-owned workflow in isolated sandboxes.
+Agent Harness is a lean, editable issue-to-pull-request coding workflow for Codex. Each target repository owns its context documents, agent definitions, deterministic pipeline YAML, architecture rules, and durable run journal. The optional Railway cloud runner appears in Linear as the Vessica agent app actor and executes that repository-owned workflow when a root issue is delegated to it.
 
 ## Repository Map
 

@@ -26,7 +26,22 @@ type Issue struct {
 	URL         string        `json:"url"`
 	Description string        `json:"description"`
 	State       WorkflowState `json:"state"`
-	Comments    struct {
+	Team        *struct {
+		ID string `json:"id"`
+	} `json:"team,omitempty"`
+	Project *struct {
+		ID string `json:"id"`
+	} `json:"project,omitempty"`
+	Parent *struct {
+		ID string `json:"id"`
+	} `json:"parent,omitempty"`
+	Delegate *struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"delegate,omitempty"`
+	ArchivedAt *time.Time `json:"archivedAt,omitempty"`
+	CanceledAt *time.Time `json:"canceledAt,omitempty"`
+	Comments   struct {
 		Nodes []Comment `json:"nodes"`
 	} `json:"comments"`
 	Attachments struct {
@@ -79,8 +94,18 @@ type Attachment struct {
 
 type RegistrationContext struct {
 	Workspace Workspace `json:"workspace"`
+	Agent     User      `json:"agent"`
 	Teams     []Team    `json:"teams"`
 	Projects  []Project `json:"projects"`
+}
+
+type User struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type AgentActivity struct {
+	ID string `json:"id"`
 }
 
 type Workspace struct {
@@ -124,6 +149,7 @@ func NewWithEndpoint(token, endpoint string) *Client {
 
 func (c *Client) RegistrationContext(ctx context.Context) (RegistrationContext, error) {
 	var result struct {
+		Viewer       User      `json:"viewer"`
 		Organization Workspace `json:"organization"`
 		Teams        struct {
 			Nodes []Team `json:"nodes"`
@@ -140,11 +166,11 @@ func (c *Client) RegistrationContext(ctx context.Context) (RegistrationContext, 
 			} `json:"nodes"`
 		} `json:"projects"`
 	}
-	query := `query HarnessRegistrationContext{organization{id name} teams{nodes{id name key}} projects{nodes{id name teams{nodes{id}}}}}`
+	query := `query HarnessRegistrationContext{viewer{id name} organization{id name} teams{nodes{id name key}} projects{nodes{id name teams{nodes{id}}}}}`
 	if err := c.graphql(ctx, query, map[string]any{}, &result); err != nil {
 		return RegistrationContext{}, err
 	}
-	context := RegistrationContext{Workspace: result.Organization, Teams: result.Teams.Nodes, Projects: make([]Project, 0, len(result.Projects.Nodes))}
+	context := RegistrationContext{Workspace: result.Organization, Agent: result.Viewer, Teams: result.Teams.Nodes, Projects: make([]Project, 0, len(result.Projects.Nodes))}
 	for _, project := range result.Projects.Nodes {
 		value := Project{ID: project.ID, Name: project.Name, TeamIDs: make([]string, 0, len(project.Teams.Nodes))}
 		for _, team := range project.Teams.Nodes {
@@ -153,6 +179,22 @@ func (c *Client) RegistrationContext(ctx context.Context) (RegistrationContext, 
 		context.Projects = append(context.Projects, value)
 	}
 	return context, nil
+}
+
+func (c *Client) ValidateAgentIdentity(ctx context.Context, expectedName string) (User, error) {
+	var result struct {
+		Viewer User `json:"viewer"`
+	}
+	if err := c.graphql(ctx, `query HarnessAgentIdentity{viewer{id name}}`, map[string]any{}, &result); err != nil {
+		return User{}, err
+	}
+	if result.Viewer.ID == "" || result.Viewer.Name == "" {
+		return User{}, errors.New("Linear OAuth token does not resolve to an app user")
+	}
+	if expectedName != "" && !strings.EqualFold(strings.TrimSpace(result.Viewer.Name), strings.TrimSpace(expectedName)) {
+		return result.Viewer, fmt.Errorf("Linear app actor is %q, expected %q", result.Viewer.Name, expectedName)
+	}
+	return result.Viewer, nil
 }
 
 func (c *Client) ValidateRegistration(ctx context.Context, workspaceID, teamID, projectID string) error {
@@ -186,7 +228,7 @@ func (c *Client) Issue(ctx context.Context, id string) (Issue, error) {
 	var result struct {
 		Issue Issue `json:"issue"`
 	}
-	err := c.graphql(ctx, `query HarnessIssue($id:String!){issue(id:$id){id identifier title url description state{id name type position} comments{nodes{id body createdAt user{id name}}} children{nodes{id identifier title url description state{id name type position}}}}}`, map[string]any{"id": id}, &result)
+	err := c.graphql(ctx, `query HarnessIssue($id:String!){issue(id:$id){id identifier title url description archivedAt canceledAt team{id} project{id} parent{id} delegate{id name} state{id name type position} comments{nodes{id body createdAt user{id name}}} children{nodes{id identifier title url description state{id name type position}}}}}`, map[string]any{"id": id}, &result)
 	return result.Issue, err
 }
 
@@ -194,7 +236,7 @@ func (c *Client) IssueContext(ctx context.Context, id string) (Issue, error) {
 	var result struct {
 		Issue Issue `json:"issue"`
 	}
-	err := c.graphql(ctx, `query HarnessIssueContext($id:String!){issue(id:$id){id identifier title url description comments{nodes{id body createdAt user{id name} children{nodes{id body createdAt user{id name}}}}} attachments{nodes{id title url}}}}`, map[string]any{"id": id}, &result)
+	err := c.graphql(ctx, `query HarnessIssueContext($id:String!){issue(id:$id){id identifier title url description archivedAt canceledAt team{id} project{id} parent{id} delegate{id name} comments{nodes{id body createdAt user{id name} children{nodes{id body createdAt user{id name}}}}} attachments{nodes{id title url}}}}`, map[string]any{"id": id}, &result)
 	return result.Issue, err
 }
 
@@ -361,31 +403,22 @@ func (c *Client) SetIssueState(ctx context.Context, issueID string, state Workfl
 	return result.IssueUpdate.Issue, nil
 }
 
-// CreateRootIssue creates an issue that can enter the webhook-driven harness.
-// The trigger label is resolved by name inside the configured team so callers
-// never need to handle provider label identifiers or credentials locally.
-func (c *Client) CreateRootIssue(ctx context.Context, teamID, projectID, labelName, title, description string) (Issue, error) {
-	if teamID == "" || labelName == "" || strings.TrimSpace(title) == "" {
-		return Issue{}, errors.New("Linear team, trigger label, and issue title are required")
+// CreateDelegatedIssue creates an issue delegated to the authenticated Linear
+// app actor. Linear creates the AgentSession whose webhook enters the harness.
+func (c *Client) CreateDelegatedIssue(ctx context.Context, teamID, projectID, agentName, title, description string) (Issue, error) {
+	if teamID == "" || strings.TrimSpace(title) == "" {
+		return Issue{}, errors.New("Linear team and issue title are required")
 	}
-	var labels struct {
-		IssueLabels struct {
-			Nodes []IssueLabel `json:"nodes"`
-		} `json:"issueLabels"`
-	}
-	query := `query HarnessIssueLabel($teamId:ID!,$name:String!){issueLabels(filter:{team:{id:{eq:$teamId}},name:{eq:$name}}){nodes{id name}}}`
-	if err := c.graphql(ctx, query, map[string]any{"teamId": teamID, "name": labelName}, &labels); err != nil {
+	agent, err := c.ValidateAgentIdentity(ctx, agentName)
+	if err != nil {
 		return Issue{}, err
 	}
-	if len(labels.IssueLabels.Nodes) != 1 {
-		return Issue{}, fmt.Errorf("Linear trigger label %q resolved to %d labels in the configured team", labelName, len(labels.IssueLabels.Nodes))
-	}
-	variables := map[string]any{"teamId": teamID, "labelIds": []string{labels.IssueLabels.Nodes[0].ID},
+	variables := map[string]any{"teamId": teamID, "delegateId": agent.ID,
 		"title": strings.TrimSpace(title), "description": strings.TrimSpace(description)}
-	mutation := `mutation HarnessRootIssueCreate($teamId:String!,$labelIds:[String!]!,$title:String!,$description:String!){issueCreate(input:{teamId:$teamId,labelIds:$labelIds,title:$title,description:$description}){success issue{id identifier title url description}}}`
+	mutation := `mutation HarnessDelegatedIssueCreate($teamId:String!,$delegateId:String!,$title:String!,$description:String!){issueCreate(input:{teamId:$teamId,delegateId:$delegateId,title:$title,description:$description}){success issue{id identifier title url description delegate{id name}}}}`
 	if projectID != "" {
 		variables["projectId"] = projectID
-		mutation = `mutation HarnessRootIssueCreate($teamId:String!,$projectId:String!,$labelIds:[String!]!,$title:String!,$description:String!){issueCreate(input:{teamId:$teamId,projectId:$projectId,labelIds:$labelIds,title:$title,description:$description}){success issue{id identifier title url description}}}`
+		mutation = `mutation HarnessDelegatedIssueCreate($teamId:String!,$projectId:String!,$delegateId:String!,$title:String!,$description:String!){issueCreate(input:{teamId:$teamId,projectId:$projectId,delegateId:$delegateId,title:$title,description:$description}){success issue{id identifier title url description delegate{id name}}}}`
 	}
 	var result struct {
 		IssueCreate struct {
@@ -400,6 +433,46 @@ func (c *Client) CreateRootIssue(ctx context.Context, teamID, projectID, labelNa
 		return Issue{}, errors.New("Linear issue creation did not succeed")
 	}
 	return result.IssueCreate.Issue, nil
+}
+
+func (c *Client) CreateAgentActivity(ctx context.Context, agentSessionID string, content map[string]any) (AgentActivity, error) {
+	if agentSessionID == "" || content["type"] == nil {
+		return AgentActivity{}, errors.New("Linear agent session and activity type are required")
+	}
+	var result struct {
+		AgentActivityCreate struct {
+			Success       bool          `json:"success"`
+			AgentActivity AgentActivity `json:"agentActivity"`
+		} `json:"agentActivityCreate"`
+	}
+	query := `mutation HarnessAgentActivityCreate($input:AgentActivityCreateInput!){agentActivityCreate(input:$input){success agentActivity{id}}}`
+	input := map[string]any{"agentSessionId": agentSessionID, "content": content}
+	if err := c.graphql(ctx, query, map[string]any{"input": input}, &result); err != nil {
+		return AgentActivity{}, err
+	}
+	if !result.AgentActivityCreate.Success || result.AgentActivityCreate.AgentActivity.ID == "" {
+		return AgentActivity{}, errors.New("Linear agent activity creation did not succeed")
+	}
+	return result.AgentActivityCreate.AgentActivity, nil
+}
+
+func (c *Client) UpdateAgentSessionLinks(ctx context.Context, agentSessionID string, links []map[string]string) error {
+	if agentSessionID == "" {
+		return errors.New("Linear agent session is required")
+	}
+	var result struct {
+		AgentSessionUpdate struct {
+			Success bool `json:"success"`
+		} `json:"agentSessionUpdate"`
+	}
+	query := `mutation HarnessAgentSessionLinks($id:String!,$input:AgentSessionUpdateInput!){agentSessionUpdate(id:$id,input:$input){success}}`
+	if err := c.graphql(ctx, query, map[string]any{"id": agentSessionID, "input": map[string]any{"externalUrls": links}}, &result); err != nil {
+		return err
+	}
+	if !result.AgentSessionUpdate.Success {
+		return errors.New("Linear agent session link update did not succeed")
+	}
+	return nil
 }
 
 // ArchiveIssue resolves either an issue UUID or identifier and archives the

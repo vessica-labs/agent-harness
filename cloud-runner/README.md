@@ -22,18 +22,27 @@ go run ./cmd/agent-harness server
 With the server running, set the local profile and open the read-only dashboard:
 
 ```text
-agent-harness cloud profile set --url http://127.0.0.1:8080 --token "$HARNESS_MANAGEMENT_TOKEN"
+agent-harness cloud profile set --name local-development --url http://127.0.0.1:8080 --token "$HARNESS_MANAGEMENT_TOKEN"
 agent-harness cloud team initialize --name "Local owner" --device "Development machine"
 agent-harness cloud whoami
 agent-harness ui
 ```
 
+The installed CLI can keep many named profiles. A target repository selects one without committing credentials:
+
+```yaml
+cloud:
+  profile: vessica-cli
+```
+
+Commands run inside that repository, including nested worktrees, automatically use the selected profile. `agent-harness cloud --profile NAME ...` and `AGENT_HARNESS_PROFILE=NAME` are explicit overrides; `agent-harness cloud profile list` shows the current selection and URLs without secrets. Provider credentials are scoped to an entire control-plane installation. Deploy one Railway control plane and Postgres database per repository when Linear or Notion workspaces must be isolated.
+
 ## Railway setup
 
 1. Enable Railway Sandboxes through Priority Boarding.
-2. Create one single-replica control-plane service and one Postgres service.
+2. Create one single-replica control-plane service and one Postgres service for each independently credentialed repository.
 3. Publish a tagged release, then create the versioned worker checkpoint with `agent-harness railway upgrade --project <id> --version vX.Y.Z`.
-4. Run `agent-harness railway init` to install sealed service configuration and a local profile.
+4. Run `agent-harness railway init --profile <repository-profile>` to install sealed service configuration and a local profile that matches the repository's `cloud.profile`.
 5. Run `agent-harness cloud team initialize` once to exchange the bootstrap token for the first owner device session.
 6. Add independent Codex login slots and GitHub, Linear, and Notion service credentials with `agent-harness cloud auth`.
 7. Register each repository with `agent-harness cloud repo add`.
@@ -96,9 +105,9 @@ LINEAR_WEBHOOK_SECRET=... \
 agent-harness cloud auth linear
 ```
 
-`LINEAR_EXPIRES_AT` may be seconds from now or an RFC3339 timestamp. Rotated access and refresh tokens are re-encrypted atomically. Configure the OAuth application with `actor=app`, the required read/write/create scopes, and the control-plane `/webhooks/linear` URL.
+`LINEAR_EXPIRES_AT` may be seconds from now or an RFC3339 timestamp. Rotated access and refresh tokens are re-encrypted atomically. Configure the OAuth application as the **Vessica** app actor with `actor=app`, `app:assignable` plus the required read/write/create scopes, and the control-plane `/webhooks/linear` URL.
 
-For the guided path, run `agent-harness cloud auth linear manifest --url https://<control-plane>` to open Linear's pre-filled application manifest, then run `agent-harness cloud auth linear --client-id ... --client-secret ... --webhook-secret ...`. The manifest subscribes to Issue, Comment, and OAuthAuthorization events. For an existing OAuth app, add the Comment webhook resource before using Linear as an answer channel. The second command opens the app-actor OAuth consent flow on a loopback callback and stores the rotating token set directly in the control plane.
+For the guided path, run `agent-harness cloud auth linear manifest --url https://<control-plane>` to open Linear's pre-filled Vessica application manifest, then run `agent-harness cloud auth linear --client-id ... --client-secret ... --webhook-secret ...`. The manifest subscribes to AgentSessionEvent, Issue, Comment, OAuthAuthorization, and PermissionChange events. AgentSessionEvent drives native delegation; Issue remains read-only intake for dependency release, and Comment remains the human-input answer channel. The second command opens the assignable app-actor OAuth consent flow on a loopback callback and stores the rotating token set directly in the control plane.
 
 Create the least-privilege GitHub App with `agent-harness cloud auth github --manifest-owner <organization>`. The local manifest callback requests only Metadata read, Contents write, and Pull Requests write, configures the signed `/webhooks/github` endpoint for pull-request events, then encrypts the generated private key and webhook secret without writing them to disk. Install that app only on repositories the runner should operate and use the resulting installation ID during repository registration.
 
@@ -107,7 +116,7 @@ Create the least-privilege GitHub App with `agent-harness cloud auth github --ma
 ```text
 agent-harness cloud repo add --name example --github-owner owner --github-repo repo \
   --github-installation 123 --linear-workspace org --linear-team team \
-  --trigger-label agent-harness --notion-parent page --base-branch main
+  --linear-agent Vessica --notion-parent page --base-branch main
 agent-harness cloud repo issue create --repo <repository-id> --title "Test feature" \
   --description-file feature-request.md
 agent-harness cloud repo issue archive --repo <repository-id> --issue AGE-123 --yes
@@ -119,7 +128,7 @@ agent-harness cloud runs export <run-id> --repo /path/to/repo
 agent-harness ui
 ```
 
-The issue commands use the control plane's encrypted Linear app credential; provider tokens never enter the local process. `issue create` applies the repository's configured trigger label so Linear's signed webhook remains the only run-claim path. `issue archive` refuses to archive a source issue or canonical child already mapped to a durable run.
+The issue commands use the control plane's encrypted Linear app credential; provider tokens never enter the local process. `issue create` delegates the new issue to the configured Vessica app actor so Linear creates the native AgentSession whose signed webhook is the only run-claim path. `issue archive` refuses to archive a source issue or canonical child already mapped to a durable run.
 
 The UI binds only to `127.0.0.1`. Its backend refreshes and injects the current device access token into proxied REST and SSE calls; browser JavaScript never receives either device credential. The Team view manages invitations, roles, members, devices, and the authentication audit history.
 
@@ -127,7 +136,7 @@ Selecting a run filters the SSE feed to that run; “Show all runs” reconnects
 
 Cloud workers cap Playwright at two workers by default. This preserves browser parallelism without allowing a repository's CPU-visible default to exhaust the sandbox process/thread budget. Repositories should read `HARNESS_PLAYWRIGHT_WORKERS` in Playwright configuration or pass it as `--workers`; every cloud agent is also instructed to apply the cap explicitly.
 
-Linear parents move to Todo when claimed and In Progress when the first pipeline stage starts. Product and Architecture may each use one structured human-input round; the journal is uploaded, the disposable sandbox exits, the parent moves to Needs Input, and a single question-thread comment is created. A human reply to that exact thread or an Inbox answer records the same canonical response, returns the issue to In Progress, and queues a fresh sandbox that restores the journal. All other stages are forbidden from entering a human-input wait state. Every stage start, completion, and retry adds activity to the parent. Child issues are created directly in Todo, move to In Progress when a coder claims them, and move to Done after their commit is integrated. A completed pipeline moves the parent to For Review; the signed GitHub merge webhook moves it to Done. Workflow IDs are discovered from the configured team rather than hard-coded.
+Linear parents move to Todo when claimed and In Progress when the first pipeline stage starts. Vessica acknowledges the native AgentSession immediately, publishes semantic Agent Activities for stage progress, input waits, failures, and completion, and attaches the draft pull request URL to the session. Product and Architecture may each use one structured human-input round; the journal is uploaded, the disposable sandbox exits, the parent moves to Needs Input, and a single question-thread comment is created. A human reply to that exact thread or an Inbox answer records the same canonical response, returns the issue to In Progress, and queues a fresh sandbox that restores the journal. All other stages are forbidden from entering a human-input wait state. Child issues are created directly in Todo, move to In Progress when a coder claims them, and move to Done after their commit is integrated. A completed pipeline moves the parent to For Review; the signed GitHub merge webhook moves it to Done. Workflow IDs are discovered from the configured team rather than hard-coded.
 
 The public surface is deliberately small: signed Linear and GitHub webhook intake, health checks, the inert join page, invitation redemption, and token rotation. Management and SSE endpoints require a short-lived member access token and enforce viewer/operator/admin/owner roles. Worker endpoints require a separate short-lived capability scoped to one run. The localhost UI proxies device authentication server-side and never stores it in browser JavaScript.
 

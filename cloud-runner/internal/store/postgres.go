@@ -60,7 +60,7 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 }
 
 const repositoryColumns = `id, name, github_owner, github_repo, github_installation_id,
-base_branch, linear_workspace_id, linear_team_id, linear_project_id, trigger_label,
+base_branch, linear_workspace_id, linear_team_id, linear_project_id, linear_agent_name,
 notion_parent_page_id, enabled, created_at, updated_at`
 
 type rowScanner interface {
@@ -71,7 +71,7 @@ func scanRepository(row rowScanner) (model.Repository, error) {
 	var value model.Repository
 	err := row.Scan(&value.ID, &value.Name, &value.GitHubOwner, &value.GitHubRepo,
 		&value.GitHubInstallation, &value.BaseBranch, &value.LinearWorkspaceID,
-		&value.LinearTeamID, &value.LinearProjectID, &value.TriggerLabel,
+		&value.LinearTeamID, &value.LinearProjectID, &value.LinearAgentName,
 		&value.NotionParentID, &value.Enabled, &value.CreatedAt, &value.UpdatedAt)
 	return value, err
 }
@@ -80,25 +80,25 @@ func (p *Postgres) PutRepository(ctx context.Context, repo model.Repository) (mo
 	if repo.ID == "" {
 		repo.ID = newID("repo")
 	}
-	if repo.TriggerLabel == "" {
-		repo.TriggerLabel = "agent-harness"
+	if repo.LinearAgentName == "" {
+		repo.LinearAgentName = "Vessica"
 	}
 	if repo.BaseBranch == "" {
 		repo.BaseBranch = "main"
 	}
 	row := p.pool.QueryRow(ctx, `INSERT INTO repositories (
 id, name, github_owner, github_repo, github_installation_id, base_branch,
-linear_workspace_id, linear_team_id, linear_project_id, trigger_label,
+linear_workspace_id, linear_team_id, linear_project_id, linear_agent_name,
 notion_parent_page_id, enabled) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, github_owner=EXCLUDED.github_owner,
 github_repo=EXCLUDED.github_repo, github_installation_id=EXCLUDED.github_installation_id,
 base_branch=EXCLUDED.base_branch, linear_workspace_id=EXCLUDED.linear_workspace_id,
 linear_team_id=EXCLUDED.linear_team_id, linear_project_id=EXCLUDED.linear_project_id,
-trigger_label=EXCLUDED.trigger_label, notion_parent_page_id=EXCLUDED.notion_parent_page_id,
+linear_agent_name=EXCLUDED.linear_agent_name, notion_parent_page_id=EXCLUDED.notion_parent_page_id,
 enabled=EXCLUDED.enabled, updated_at=now()
 RETURNING `+repositoryColumns, repo.ID, repo.Name, repo.GitHubOwner, repo.GitHubRepo,
 		repo.GitHubInstallation, repo.BaseBranch, repo.LinearWorkspaceID, repo.LinearTeamID,
-		repo.LinearProjectID, repo.TriggerLabel, repo.NotionParentID, repo.Enabled)
+		repo.LinearProjectID, repo.LinearAgentName, repo.NotionParentID, repo.Enabled)
 	return scanRepository(row)
 }
 

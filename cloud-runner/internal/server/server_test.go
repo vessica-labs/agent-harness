@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,10 +37,80 @@ func testTeamToken(t *testing.T, memory *store.Memory, box *secure.Box, role str
 	return token
 }
 
-func TestSignedWebhookClaimsOnceAndManagementIsProtected(t *testing.T) {
+func TestDelegatedAgentSessionDispatchesAndAcknowledgesNatively(t *testing.T) {
 	ctx := context.Background()
 	memory := store.NewMemory()
-	repo, err := memory.PutRepository(ctx, model.Repository{Name: "repo", GitHubOwner: "v", GitHubRepo: "r", LinearWorkspaceID: "org", LinearTeamID: "team", TriggerLabel: "agent-harness", Enabled: true})
+	_, err := memory.PutRepository(ctx, model.Repository{ID: "repo-1", Name: "repo", GitHubOwner: "v", GitHubRepo: "r",
+		LinearWorkspaceID: "org", LinearTeamID: "team", LinearAgentName: "Vessica", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var activities atomic.Int32
+	linearHost := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var envelope struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&envelope)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(envelope.Query, "HarnessIssueContext"):
+			_, _ = io.WriteString(w, `{"data":{"issue":{"id":"issue-7","identifier":"ENG-7","title":"Native dispatch","url":"https://linear.test/ENG-7","description":"Implement it","team":{"id":"team"},"delegate":{"id":"app-user","name":"Vessica"},"comments":{"nodes":[]},"attachments":{"nodes":[]}}}}`)
+		case strings.Contains(envelope.Query, "HarnessAgentActivityCreate"):
+			activities.Add(1)
+			_, _ = io.WriteString(w, `{"data":{"agentActivityCreate":{"success":true,"agentActivity":{"id":"activity-1"}}}}`)
+		case strings.Contains(envelope.Query, "HarnessWorkflowStates"):
+			_, _ = io.WriteString(w, `{"data":{"workflowStates":{"nodes":[{"id":"todo","name":"Todo","type":"unstarted","position":1},{"id":"started","name":"In Progress","type":"started","position":2},{"id":"input","name":"Needs Input","type":"started","position":3},{"id":"review","name":"For Review","type":"started","position":4},{"id":"done","name":"Done","type":"completed","position":5}]}}}`)
+		case strings.Contains(envelope.Query, "HarnessIssueState"):
+			_, _ = io.WriteString(w, `{"data":{"issueUpdate":{"success":true,"issue":{"id":"issue-7","identifier":"ENG-7","url":"https://linear.test/ENG-7"}}}}`)
+		default:
+			t.Errorf("unexpected Linear query: %s", envelope.Query)
+			http.Error(w, "unexpected", http.StatusBadRequest)
+		}
+	}))
+	defer linearHost.Close()
+	key, _ := secure.GenerateKey()
+	box, _ := secure.NewBox(key)
+	server := New(Config{LinearWebhookSecret: "webhook-secret", MaxRequestBytes: 1 << 20, WebhookTolerance: time.Minute},
+		memory, box, events.NewBroker(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server.linear = func(token string) *linearapi.Client { return linearapi.NewWithEndpoint(token, linearHost.URL) }
+	credential, _ := json.Marshal(linearapi.OAuthCredential{AccessToken: "linear-token"})
+	if err := server.putCredential(ctx, "linear_oauth", credential); err != nil {
+		t.Fatal(err)
+	}
+	host := httptest.NewServer(server.Handler())
+	defer host.Close()
+	body := []byte(`{"action":"created","type":"AgentSessionEvent","organizationId":"org","appUserId":"app-user","agentSession":{"id":"session-7","appUserId":"app-user","issue":{"id":"issue-7","identifier":"ENG-7","title":"Native dispatch","description":"Implement it","url":"https://linear.test/ENG-7","teamId":"team"}}}`)
+	req, _ := http.NewRequest(http.MethodPost, host.URL+"/webhooks/linear", bytes.NewReader(body))
+	now := time.Now()
+	mac := hmac.New(sha256.New, []byte("webhook-secret"))
+	mac.Write(body)
+	req.Header.Set(linear.HeaderDelivery, "delivery-agent-7")
+	req.Header.Set(linear.HeaderEvent, "AgentSessionEvent")
+	req.Header.Set(linear.HeaderTimestamp, strconv.FormatInt(now.UnixMilli(), 10))
+	req.Header.Set(linear.HeaderSignature, hex.EncodeToString(mac.Sum(nil)))
+	response, err := http.DefaultClient.Do(req)
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("webhook response: %v status=%v", err, response.StatusCode)
+	}
+	response.Body.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		runs, _ := memory.ListRuns(ctx, model.RunFilter{})
+		if len(runs) == 1 && activities.Load() == 1 {
+			if linearAgentSessionID(runs[0]) != "session-7" {
+				t.Fatalf("agent session was not persisted: %s", runs[0].Metadata)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("delegated session was not dispatched or acknowledged; activities=%d", activities.Load())
+}
+
+func TestIssueWebhookDoesNotDispatchAndManagementIsProtected(t *testing.T) {
+	ctx := context.Background()
+	memory := store.NewMemory()
+	repo, err := memory.PutRepository(ctx, model.Repository{Name: "repo", GitHubOwner: "v", GitHubRepo: "r", LinearWorkspaceID: "org", LinearTeamID: "team", LinearAgentName: "Vessica", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,9 +145,16 @@ func TestSignedWebhookClaimsOnceAndManagementIsProtected(t *testing.T) {
 		response.Body.Close()
 	}
 	runs, _ := memory.ListRuns(ctx, model.RunFilter{})
-	if len(runs) != 1 {
-		t.Fatalf("got %d runs", len(runs))
+	if len(runs) != 0 {
+		t.Fatalf("ordinary issue webhooks must not dispatch runs: %d", len(runs))
 	}
+	claimed, err := memory.AcceptLinearDelivery(ctx, repo, model.LinearDelivery{DeliveryID: "agent-session-delivery",
+		EventType: "AgentSessionEvent", Action: "created", IssueID: "issue-1", IssueKey: "ENG-1",
+		IssueTitle: "Build", ReceivedAt: time.Now().UTC()})
+	if err != nil || claimed.Run == nil {
+		t.Fatalf("seed run: %+v %v", claimed, err)
+	}
+	runs = []model.Run{*claimed.Run}
 	capability, _ := box.MintCapability(runs[0].ID, time.Now().Add(time.Hour))
 	binaryRequest, _ := http.NewRequest(http.MethodHead, host.URL+"/internal/v1/runs/"+runs[0].ID+"/worker-binary", nil)
 	binaryRequest.Header.Set("Authorization", "Bearer "+capability)
@@ -165,7 +244,7 @@ func TestArchiveGuardRejectsCanonicalIssuesAndAllowsUnmappedDuplicates(t *testin
 	ctx := context.Background()
 	memory := store.NewMemory()
 	repository, err := memory.PutRepository(ctx, model.Repository{ID: "repo-1", Name: "repo", GitHubOwner: "v", GitHubRepo: "r",
-		LinearWorkspaceID: "org", LinearTeamID: "team", TriggerLabel: "agent-harness", Enabled: true})
+		LinearWorkspaceID: "org", LinearTeamID: "team", LinearAgentName: "Vessica", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

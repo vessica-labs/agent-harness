@@ -31,12 +31,12 @@ func linearAuth(ctx context.Context, client *apiClient, args []string) error {
 			return errors.New("manifest --url must be the public HTTPS control-plane URL")
 		}
 		values := url.Values{
-			"distribution": {"private"}, "display.description": {"Runs repository-owned coding pipelines for labeled Linear issues"},
-			"developer.name": {"Vessica Labs"}, "oauth.client_name": {"Agent Harness"},
+			"distribution": {"private"}, "display.description": {"Vessica runs repository-owned coding pipelines for delegated Linear issues"},
+			"developer.name": {"Vessica Labs"}, "oauth.client_name": {"Vessica"},
 			"oauth.client_uri":    {"https://github.com/vessica-labs/agent-harness"},
 			"oauth.redirect_uris": {linearLocalCallback}, "oauth.grant_types": {"authorization_code"},
 			"webhook.enabled": {"true"}, "webhook.url": {strings.TrimRight(*publicURL, "/") + "/webhooks/linear"},
-			"webhook.resourceTypes": {"Issue", "Comment", "OAuthAuthorization"},
+			"webhook.resourceTypes": {"AgentSessionEvent", "Issue", "Comment", "OAuthAuthorization", "PermissionChange"},
 		}
 		manifestURL := "https://linear.app/settings/api/applications/new?" + values.Encode()
 		if err := openBrowser(manifestURL); err != nil {
@@ -107,7 +107,7 @@ func runLinearOAuth(ctx context.Context, clientID, clientSecret string) (lineara
 	go server.Serve(listener)
 	defer server.Shutdown(context.Background())
 	authorize := url.Values{"client_id": {clientID}, "redirect_uri": {linearLocalCallback}, "response_type": {"code"},
-		"scope": {"read,write,issues:create,comments:create"}, "state": {state}, "actor": {"app"}, "prompt": {"consent"}}
+		"scope": {"read,write,issues:create,comments:create,app:assignable"}, "state": {state}, "actor": {"app"}, "prompt": {"consent"}}
 	if err := openBrowser("https://linear.app/oauth/authorize?" + authorize.Encode()); err != nil {
 		return linearapi.OAuthCredential{}, err
 	}

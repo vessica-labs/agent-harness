@@ -22,13 +22,17 @@ def quoted(value: str) -> str:
 
 def render_config(args: argparse.Namespace) -> bytes:
     child = "null" if args.provider == "linear" else quoted(args.child_issue_type)
+    cloud = (
+        "cloud:\n"
+        f"  profile: {quoted(args.cloud_profile)}\n"
+    ) if args.cloud_profile else ""
     automation = (
         "automation:\n"
         "  enabled: true\n"
         "  trigger:\n"
         "    provider: linear\n"
-        "    type: label\n"
-        f"    label: {quoted(args.trigger_label)}\n"
+        "    type: agent\n"
+        f"    agent: {quoted(args.linear_agent)}\n"
     ) if args.provider == "linear" else ""
     return (
         "version: 1\n"
@@ -42,6 +46,7 @@ def render_config(args: argparse.Namespace) -> bytes:
         "git:\n"
         f"  remote: {quoted(args.remote)}\n"
         f"  base_branch: {quoted(args.base_branch)}\n"
+        + cloud
         + automation
     ).encode()
 
@@ -157,7 +162,8 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--notion-parent-page-id", required=True)
     install.add_argument("--remote", default="origin")
     install.add_argument("--base-branch", default="main")
-    install.add_argument("--trigger-label", default="agent-harness")
+    install.add_argument("--linear-agent", default="Vessica")
+    install.add_argument("--cloud-profile", help="local named control-plane profile for this repository")
     install.add_argument("--apply", action="store_true")
     install.add_argument("--force", action="store_true")
     return parser

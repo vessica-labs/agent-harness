@@ -285,10 +285,10 @@ def validate_config(config: Any) -> list[str]:
             if not isinstance(trigger, dict):
                 errors.append("automation.trigger must be a mapping")
             else:
-                if trigger.get("provider") != "linear" or trigger.get("type") != "label":
-                    errors.append("automation.trigger must use the linear label trigger")
-                if not isinstance(trigger.get("label"), str) or not trigger["label"].strip():
-                    errors.append("automation.trigger.label must be a non-empty string")
+                if trigger.get("provider") != "linear" or trigger.get("type") != "agent":
+                    errors.append("automation.trigger must use the Linear agent trigger")
+                if not isinstance(trigger.get("agent"), str) or not trigger["agent"].strip():
+                    errors.append("automation.trigger.agent must be a non-empty string")
     preview = config.get("preview")
     if preview is not None:
         if not isinstance(preview, dict):

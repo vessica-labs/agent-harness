@@ -39,7 +39,7 @@ func TestUpsertChildUsesDurableExternalIdentity(t *testing.T) {
 	}
 }
 
-func TestCreateRootIssueResolvesConfiguredTriggerLabel(t *testing.T) {
+func TestCreateDelegatedIssueUsesAuthenticatedAgent(t *testing.T) {
 	requests := 0
 	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
@@ -51,31 +51,63 @@ func TestCreateRootIssueResolvesConfiguredTriggerLabel(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch requests {
 		case 1:
-			if !strings.Contains(envelope.Query, "HarnessIssueLabel") || envelope.Variables["name"] != "agent-harness" {
-				t.Fatalf("unexpected label request: %#v", envelope)
+			if !strings.Contains(envelope.Query, "HarnessAgentIdentity") {
+				t.Fatalf("unexpected identity request: %#v", envelope)
 			}
-			_, _ = w.Write([]byte(`{"data":{"issueLabels":{"nodes":[{"id":"label-1","name":"agent-harness"}]}}}`))
+			_, _ = w.Write([]byte(`{"data":{"viewer":{"id":"agent-1","name":"Vessica"}}}`))
 		case 2:
-			if !strings.Contains(envelope.Query, "HarnessRootIssueCreate") || envelope.Variables["projectId"] != "project-1" {
+			if !strings.Contains(envelope.Query, "HarnessDelegatedIssueCreate") || envelope.Variables["projectId"] != "project-1" {
 				t.Fatalf("unexpected create request: %#v", envelope)
 			}
-			labels, ok := envelope.Variables["labelIds"].([]any)
-			if !ok || len(labels) != 1 || labels[0] != "label-1" {
-				t.Fatalf("trigger label not applied: %#v", envelope.Variables["labelIds"])
+			if envelope.Variables["delegateId"] != "agent-1" {
+				t.Fatalf("agent not delegated: %#v", envelope.Variables)
 			}
-			_, _ = w.Write([]byte(`{"data":{"issueCreate":{"success":true,"issue":{"id":"issue-12","identifier":"AGE-12","title":"Pipeline explorer","url":"https://linear.test/AGE-12"}}}}`))
+			_, _ = w.Write([]byte(`{"data":{"issueCreate":{"success":true,"issue":{"id":"issue-12","identifier":"AGE-12","title":"Pipeline explorer","url":"https://linear.test/AGE-12","delegate":{"id":"agent-1","name":"Vessica"}}}}}`))
 		default:
 			t.Fatalf("unexpected request %d", requests)
 		}
 	}))
 	defer host.Close()
 	client := &Client{token: "token", endpoint: host.URL, http: &http.Client{Timeout: time.Second}}
-	issue, err := client.CreateRootIssue(context.Background(), "team-1", "project-1", "agent-harness", " Pipeline explorer ", "description")
+	issue, err := client.CreateDelegatedIssue(context.Background(), "team-1", "project-1", "Vessica", " Pipeline explorer ", "description")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if requests != 2 || issue.Identifier != "AGE-12" {
 		t.Fatalf("requests=%d issue=%+v", requests, issue)
+	}
+}
+
+func TestCreateAgentActivityAndUpdateSessionLinks(t *testing.T) {
+	requests := 0
+	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var envelope struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&envelope)
+		w.Header().Set("Content-Type", "application/json")
+		if requests == 1 {
+			if !strings.Contains(envelope.Query, "HarnessAgentActivityCreate") {
+				t.Fatalf("unexpected activity request: %#v", envelope)
+			}
+			_, _ = w.Write([]byte(`{"data":{"agentActivityCreate":{"success":true,"agentActivity":{"id":"activity-1"}}}}`))
+			return
+		}
+		if !strings.Contains(envelope.Query, "HarnessAgentSessionLinks") || envelope.Variables["id"] != "session-1" {
+			t.Fatalf("unexpected session update: %#v", envelope)
+		}
+		_, _ = w.Write([]byte(`{"data":{"agentSessionUpdate":{"success":true}}}`))
+	}))
+	defer host.Close()
+	client := &Client{token: "token", endpoint: host.URL, http: &http.Client{Timeout: time.Second}}
+	activity, err := client.CreateAgentActivity(context.Background(), "session-1", map[string]any{"type": "thought", "body": "Queued"})
+	if err != nil || activity.ID != "activity-1" {
+		t.Fatalf("activity=%+v err=%v", activity, err)
+	}
+	if err := client.UpdateAgentSessionLinks(context.Background(), "session-1", []map[string]string{{"label": "Pull request", "url": "https://github.test/pr/1"}}); err != nil {
+		t.Fatal(err)
 	}
 }
 

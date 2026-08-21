@@ -40,7 +40,7 @@ A direct full-pipeline request authorizes issue/Notion writes, scoped commits, i
 
 ## Cloud runs
 
-- Treat the opt-in Linear label as the cloud trigger. For “run this ticket in the cloud,” confirm the repository is registered, add the configured label through Linear, and read the resulting canonical run comment. Repeated label updates resume the same source claim rather than creating another run.
+- Treat native delegation to the configured Linear agent app actor as the cloud trigger. For “run this ticket in the cloud,” confirm the repository is registered, delegate the root issue to Vessica through Linear, and read the resulting AgentSession activity. Repeated delegations resolve to the same source claim rather than creating another run.
 - Use `agent-harness cloud runs list|show|watch` for status and the ordered event stream. A watch is read-only and may remain attached until the run completes, pauses, or the user stops it.
 - Use `agent-harness cloud runs resume <run-id>` only after inspecting the pause reason. Use `cancel` only on explicit user direction.
 - Cloud execution still reads the checked-in `.harness/pipeline.yaml`; do not substitute a plugin-owned DAG.
