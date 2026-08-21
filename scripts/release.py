@@ -293,6 +293,19 @@ def deployment_image(deployment: dict[str, Any]) -> str:
     return str(meta.get("image") or "")
 
 
+def connect_image_command(args: argparse.Namespace, image: str) -> list[str]:
+    return [
+        "railway",
+        "service",
+        "source",
+        "connect",
+        "--image",
+        image,
+        *railway_args(args),
+        "--json",
+    ]
+
+
 def current_deployment(args: argparse.Namespace) -> dict[str, Any]:
     listed = deployments(args, limit=1)
     if not listed:
@@ -412,22 +425,7 @@ def deploy(args: argparse.Namespace) -> None:
             excluded_id = ""
     else:
         command(
-            [
-                "railway",
-                "environment",
-                "edit",
-                "--project",
-                args.project,
-                "--environment",
-                args.environment,
-                "--service-config",
-                args.service,
-                "source.image",
-                image,
-                "--message",
-                f"Deploy Agent Harness {version}",
-                "--json",
-            ],
+            connect_image_command(args, image),
             env=RAILWAY_ENV,
         )
         excluded_id = str(previous.get("id") or "")

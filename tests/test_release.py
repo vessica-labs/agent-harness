@@ -1,4 +1,5 @@
 import importlib.util
+from argparse import Namespace
 from pathlib import Path
 import unittest
 
@@ -93,6 +94,30 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_failed_deployment_states_are_terminal(self):
         self.assertTrue({"FAILED", "CRASHED", "CANCELLED"} <= release.FAILED_DEPLOYMENT_STATES)
         self.assertNotIn("DEPLOYING", release.FAILED_DEPLOYMENT_STATES)
+
+    def test_deploy_connects_the_versioned_image_source(self):
+        args = Namespace(project="project-id", environment="production", service="control-plane")
+
+        self.assertEqual(
+            release.connect_image_command(
+                args, "ghcr.io/vessica-labs/agent-harness:v0.1.0-rc.28"
+            ),
+            [
+                "railway",
+                "service",
+                "source",
+                "connect",
+                "--image",
+                "ghcr.io/vessica-labs/agent-harness:v0.1.0-rc.28",
+                "--project",
+                "project-id",
+                "--environment",
+                "production",
+                "--service",
+                "control-plane",
+                "--json",
+            ],
+        )
 
     def test_release_requires_all_runtime_assets(self):
         self.assertEqual(
