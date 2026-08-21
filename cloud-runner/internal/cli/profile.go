@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"os"
@@ -8,6 +10,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
+	"time"
 )
 
 type profileFile struct {
@@ -94,6 +98,10 @@ func saveSessionProfile(name, url string, credentials sessionCredentials) error 
 	if err := saveProfileMetadata(name, url); err != nil {
 		return err
 	}
+	return saveSessionCredentials(name, credentials)
+}
+
+func saveSessionCredentials(name string, credentials sessionCredentials) error {
 	body, err := json.Marshal(credentials)
 	if err != nil {
 		return err
@@ -148,6 +156,51 @@ func configPath(name string) (string, error) {
 }
 
 func secretService(name string) string { return "agent-harness:" + name }
+
+func acquireProfileRefreshLock(ctx context.Context, name string) (func(), error) {
+	digest := sha256.Sum256([]byte(name))
+	path, err := configPath(filepath.Join("locks", "refresh-"+stringHex(digest[:])+".lock"))
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return func() {
+				_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+				_ = file.Close()
+			}, nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			_ = file.Close()
+			return nil, err
+		}
+		timer := time.NewTimer(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			_ = file.Close()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func stringHex(value []byte) string {
+	const digits = "0123456789abcdef"
+	result := make([]byte, len(value)*2)
+	for index, item := range value {
+		result[index*2], result[index*2+1] = digits[item>>4], digits[item&15]
+	}
+	return string(result)
+}
 
 func saveSecret(name, token string) error {
 	if runtime.GOOS == "darwin" {
