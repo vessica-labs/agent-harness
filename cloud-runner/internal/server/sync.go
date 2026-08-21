@@ -435,6 +435,26 @@ func (s *Server) reconcileRunProjections(ctx context.Context, runID string) (map
 			return nil, err
 		}
 	}
+	answeredRequests, err := s.store.ListInputRequests(ctx, model.InputRequestFilter{RunID: runID, Status: "answered", Limit: 100})
+	if err != nil {
+		return nil, err
+	}
+	inputAnswersUpdated := 0
+	for _, request := range answeredRequests {
+		responses, listErr := s.store.ListInputResponses(ctx, request.ID)
+		if listErr != nil {
+			return nil, listErr
+		}
+		for _, response := range responses {
+			if !response.Accepted || strings.EqualFold(response.Channel, "linear") {
+				continue
+			}
+			if err := s.syncLinearInputAnswerComment(ctx, linearClient, run, request, response); err != nil {
+				return nil, err
+			}
+			inputAnswersUpdated++
+		}
+	}
 
 	notionRestored := 0
 	if raw, credentialErr := s.credential(ctx, "notion"); credentialErr == nil {
@@ -462,7 +482,8 @@ func (s *Server) reconcileRunProjections(ctx context.Context, runID string) (map
 		}
 	}
 	return map[string]any{"ok": true, "linear_issues_updated": linearUpdated,
-		"linear_activities_updated": linearActivities, "input_requests_updated": len(inputRequests), "notion_pages_restored": notionRestored}, nil
+		"linear_activities_updated": linearActivities, "input_requests_updated": len(inputRequests),
+		"input_answers_updated": inputAnswersUpdated, "notion_pages_restored": notionRestored}, nil
 }
 
 func (s *Server) linearAccessToken(ctx context.Context) (string, error) {

@@ -88,7 +88,7 @@ func TestLinearParentLifecycleFollowsRunAndMergeEvents(t *testing.T) {
 			if requestErr != nil {
 				t.Fatal(requestErr)
 			}
-			if err := server.syncLinearInputAnswered(ctx, request); err != nil {
+			if err := server.syncLinearInputAnswered(ctx, request, model.InputResponse{Channel: "linear"}); err != nil {
 				t.Fatal(err)
 			}
 		}

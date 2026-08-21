@@ -189,7 +189,7 @@ paths:
   /v1/input-requests/{request_id}/responses:
     post:
       security: [{bearerAuth: []}]
-      description: Atomically accept an operator response, answer the request, and requeue the checkpointed run
+      description: Atomically accept an operator response, mirror the answer to an idempotent Linear comment, and requeue the checkpointed run
       parameters: [{name: request_id, in: path, required: true, schema: {type: string}}]
       requestBody:
         required: true

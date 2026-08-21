@@ -11,6 +11,7 @@ import (
 
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/linear"
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/model"
+	"github.com/vessica-labs/agent-harness/cloud-runner/internal/providers/linearapi"
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/store"
 )
 
@@ -169,7 +170,7 @@ func (s *Server) recordInputAnswered(ctx context.Context, request model.InputReq
 		Level: "info", Message: "Human input received; run queued to resume", Payload: payload})
 	_, _ = s.appendEvent(ctx, model.Event{RunID: request.RunID, Stage: request.Stage, Type: "run.resumed",
 		Level: "info", Message: "Run queued after human input"})
-	if err := s.syncLinearInputAnswered(ctx, request); err != nil {
+	if err := s.syncLinearInputAnswered(ctx, request, response); err != nil {
 		s.logger.Error("synchronize answered human input to Linear", "request_id", request.ID, "error", err)
 	}
 	s.broker.Notify()
@@ -223,7 +224,7 @@ func (s *Server) syncLinearInputRequested(ctx context.Context, request model.Inp
 	return s.setLinearIssueState(ctx, client, run.ID, "parent-state", run.SourceIssueID, lifecycle.NeedsInput, true)
 }
 
-func (s *Server) syncLinearInputAnswered(ctx context.Context, request model.InputRequest) error {
+func (s *Server) syncLinearInputAnswered(ctx context.Context, request model.InputRequest, response model.InputResponse) error {
 	run, err := s.store.GetRun(ctx, request.RunID)
 	if err != nil {
 		return err
@@ -241,7 +242,71 @@ func (s *Server) syncLinearInputAnswered(ctx context.Context, request model.Inpu
 	if err != nil {
 		return err
 	}
-	return s.setLinearIssueState(ctx, client, run.ID, "parent-state", run.SourceIssueID, lifecycle.InProgress, true)
+	var answerErr error
+	if !strings.EqualFold(response.Channel, "linear") {
+		answerErr = s.syncLinearInputAnswerComment(ctx, client, run, request, response)
+	}
+	stateErr := s.setLinearIssueState(ctx, client, run.ID, "parent-state", run.SourceIssueID, lifecycle.InProgress, true)
+	return errors.Join(answerErr, stateErr)
+}
+
+func (s *Server) syncLinearInputAnswerComment(ctx context.Context, client *linearapi.Client, run model.Run, request model.InputRequest, response model.InputResponse) error {
+	marker := "<!-- agent-harness:input-answer:" + request.ID + " -->"
+	body := renderLinearInputAnswer(marker, request, response)
+	return s.upsertLinearActivity(ctx, client, run, "input-answer:"+request.ID, marker, body)
+}
+
+func renderLinearInputAnswer(marker string, request model.InputRequest, response model.InputResponse) string {
+	channel := strings.TrimSpace(response.Channel)
+	if strings.EqualFold(channel, "control_plane") {
+		channel = "web UI"
+	}
+	if channel == "" {
+		channel = "external channel"
+	}
+	lines := []string{marker, "", "## Input answered via " + channel}
+	if actor := strings.TrimSpace(response.ActorName); actor != "" {
+		lines = append(lines, "", "Answered by **"+actor+"**.")
+	}
+	answers := map[string]model.InputAnswer{}
+	knownQuestions := map[string]bool{}
+	for _, answer := range response.Answers {
+		answers[answer.QuestionID] = answer
+	}
+	for _, question := range request.Questions {
+		knownQuestions[question.ID] = true
+		answer, ok := answers[question.ID]
+		if !ok {
+			continue
+		}
+		lines = append(lines, "", "### "+question.Prompt)
+		if answer.OptionID != "" {
+			label := answer.OptionID
+			for _, option := range question.Options {
+				if option.ID == answer.OptionID {
+					label = option.Label
+					break
+				}
+			}
+			lines = append(lines, "- Selected: **"+label+"**")
+		}
+		if text := strings.TrimSpace(answer.Text); text != "" {
+			lines = append(lines, "- Answer: "+text)
+		}
+	}
+	for _, answer := range response.Answers {
+		if knownQuestions[answer.QuestionID] {
+			continue
+		}
+		lines = append(lines, "", "### Response")
+		if option := strings.TrimSpace(answer.OptionID); option != "" {
+			lines = append(lines, "- Selected: **"+option+"**")
+		}
+		if text := strings.TrimSpace(answer.Text); text != "" {
+			lines = append(lines, "- Answer: "+text)
+		}
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
 func (s *Server) linearInputComment(w http.ResponseWriter, r *http.Request, parsed linear.ParsedWebhook) {
