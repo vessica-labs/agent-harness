@@ -488,9 +488,10 @@ VALUES ('linear',$1,$2,$3) ON CONFLICT DO NOTHING RETURNING run_id`, delivery.Is
 
 	if created {
 		_, err = tx.Exec(ctx, `INSERT INTO runs(id, repository_id, provider, source_issue_id,
-source_issue_key, source_issue_url, source_issue_title, feature_request, metadata, state)
-VALUES ($1,$2,'linear',$3,$4,$5,$6,$7,$8,'queued')`, claimedRunID, repo.ID, delivery.IssueID,
-			delivery.IssueKey, delivery.IssueURL, delivery.IssueTitle, delivery.FeatureRequest, jsonOrEmpty(delivery.SourceContext))
+source_issue_key, source_issue_url, source_issue_title, feature_request, metadata, state, queue_reason)
+VALUES ($1,$2,'linear',$3,$4,$5,$6,$7,$8,'queued',$9)`, claimedRunID, repo.ID, delivery.IssueID,
+			delivery.IssueKey, delivery.IssueURL, delivery.IssueTitle, delivery.FeatureRequest,
+			jsonOrEmpty(delivery.SourceContext), delivery.QueueReason)
 		if err != nil {
 			return model.DeliveryResult{}, err
 		}
@@ -535,7 +536,8 @@ func (p *Postgres) ClaimNextRun(ctx context.Context, owner string, maxActive int
 		return model.Run{}, err
 	}
 	if active >= maxActive {
-		if _, err := tx.Exec(ctx, `UPDATE runs SET queue_reason='concurrency_limit',updated_at=now() WHERE state='queued'`); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE runs SET queue_reason='concurrency_limit',updated_at=now()
+WHERE state='queued' AND queue_reason !~ '^dependencies_'`); err != nil {
 			return model.Run{}, err
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -544,7 +546,8 @@ func (p *Postgres) ClaimNextRun(ctx context.Context, owner string, maxActive int
 		return model.Run{}, ErrNoRunnableRun
 	}
 	run, err := scanRun(tx.QueryRow(ctx, `SELECT `+runColumns+` FROM runs
-WHERE state='queued' OR (state='running' AND lease_expires_at < now())
+WHERE (state='queued' AND queue_reason !~ '^dependencies_')
+   OR (state='running' AND lease_expires_at < now())
 ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.Run{}, ErrNoRunnableRun

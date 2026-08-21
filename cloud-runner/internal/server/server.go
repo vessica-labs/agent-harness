@@ -132,26 +132,52 @@ func (s *Server) linearWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, err)
 		return
 	}
+	var linearClient *linearapi.Client
+	if token, tokenErr := s.linearAccessToken(r.Context()); tokenErr == nil {
+		linearClient = s.linear(token)
+		dependencyCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		if err := s.releaseLinearDependencyWaiters(dependencyCtx, repository, linearClient, parsed.Delivery.IssueKey); err != nil {
+			s.logger.Error("refresh Linear dependency waiters", "issue_key", parsed.Delivery.IssueKey, "error", err)
+		}
+		cancel()
+	}
 	eligible, reason := parsed.Eligible(repository.TriggerLabel)
 	if !eligible {
 		duplicate, _ := s.store.RecordIgnoredLinearDelivery(r.Context(), parsed.Delivery, repository.ID, reason)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ignored": true, "duplicate": duplicate, "reason": reason})
 		return
 	}
-	if token, tokenErr := s.linearAccessToken(r.Context()); tokenErr == nil {
-		client := s.linear(token)
-		contextCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	contextValue := map[string]any{"provider": "linear", "id": parsed.Delivery.IssueID,
+		"key": parsed.Delivery.IssueKey, "url": parsed.Delivery.IssueURL, "title": parsed.Delivery.IssueTitle,
+		"dependencies": parsed.Delivery.Dependencies}
+	if linearClient != nil {
+		contextCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
-		issue, issueErr := client.IssueContext(contextCtx, parsed.Delivery.IssueID)
+		issue, issueErr := linearClient.IssueContext(contextCtx, parsed.Delivery.IssueID)
 		if issueErr != nil {
-			issue, issueErr = client.Issue(contextCtx, parsed.Delivery.IssueID)
+			issue, issueErr = linearClient.Issue(contextCtx, parsed.Delivery.IssueID)
 		}
 		if issueErr == nil {
-			parsed.Delivery.SourceContext, _ = json.Marshal(map[string]any{"provider": "linear", "id": issue.ID,
+			parsed.Delivery.Dependencies = linear.DependencyIssueKeys(issue.Description)
+			contextValue = map[string]any{"provider": "linear", "id": issue.ID,
 				"key": issue.Identifier, "url": issue.URL, "title": issue.Title, "description": issue.Description,
-				"comments": issue.Comments.Nodes, "attachments": issue.Attachments.Nodes})
+				"comments": issue.Comments.Nodes, "attachments": issue.Attachments.Nodes,
+				"dependencies": parsed.Delivery.Dependencies}
 		}
 	}
+	if len(parsed.Delivery.Dependencies) > 0 {
+		dependencyCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		pending, dependencyErr := s.pendingLinearDependencies(dependencyCtx, linearClient, parsed.Delivery.Dependencies)
+		cancel()
+		contextValue["pending_dependencies"] = pending
+		if dependencyErr != nil {
+			parsed.Delivery.QueueReason = "dependencies_check_failed: " + strings.Join(parsed.Delivery.Dependencies, ", ")
+			contextValue["dependency_check_error"] = dependencyErr.Error()
+		} else if len(pending) > 0 {
+			parsed.Delivery.QueueReason = "dependencies_pending: " + strings.Join(pending, ", ")
+		}
+	}
+	parsed.Delivery.SourceContext, _ = json.Marshal(contextValue)
 	result, err := s.store.AcceptLinearDelivery(r.Context(), repository, parsed.Delivery)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, err)
@@ -162,9 +188,17 @@ func (s *Server) linearWebhook(w http.ResponseWriter, r *http.Request) {
 			Type: "webhook.duplicate", Level: "info", Message: "Duplicate or repeated qualifying Linear webhook resolved to the existing run"})
 	}
 	if result.Run != nil && result.Run.State == "queued" && result.Run.CurrentStage == "" {
-		if err := s.syncLinearLifecycleEvent(r.Context(), result.Run.ID, model.Event{RunID: result.Run.ID,
-			SourceIssueID: result.Run.SourceIssueID, Type: "run.queued", Level: "info",
-			Message: "Linear issue claimed and queued"}); err != nil {
+		event := model.Event{RunID: result.Run.ID, SourceIssueID: result.Run.SourceIssueID,
+			Type: "run.queued", Level: "info", Message: "Linear issue claimed and queued"}
+		if strings.HasPrefix(result.Run.QueueReason, "dependencies_") {
+			event.Type, event.Message = "run.dependencies_waiting", "Run is waiting for Linear dependencies to reach Done"
+			event.Payload, _ = json.Marshal(map[string]any{"dependencies": parsed.Delivery.Dependencies,
+				"queue_reason": result.Run.QueueReason})
+			if !result.Duplicate {
+				_, _ = s.appendEvent(r.Context(), event)
+			}
+		}
+		if err := s.syncLinearLifecycleEvent(r.Context(), result.Run.ID, event); err != nil {
 			writeError(w, http.StatusBadGateway, fmt.Errorf("synchronize claimed Linear issue: %w", err))
 			return
 		}

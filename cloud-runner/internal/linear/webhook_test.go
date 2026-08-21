@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -78,5 +79,13 @@ func TestParseCommentReply(t *testing.T) {
 	}
 	if parsed.ParentCommentID != "question-comment" || parsed.ActorID != "user-1" || parsed.CommentBody == "" {
 		t.Fatalf("bad comment parse: %+v", parsed)
+	}
+}
+
+func TestDependencyIssueKeysRequireExplicitDependsOnInstruction(t *testing.T) {
+	description := "Related context mentions AGE-10.\n\nDepends on AGE-22, age_2-7 and AGE-22\n- Depends on: OPS-9\n"
+	dependencies := DependencyIssueKeys(description)
+	if strings.Join(dependencies, ",") != "AGE-22,AGE_2-7,OPS-9" {
+		t.Fatalf("unexpected dependencies: %v", dependencies)
 	}
 }

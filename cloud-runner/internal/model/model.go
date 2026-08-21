@@ -213,6 +213,8 @@ type LinearDelivery struct {
 	IssueTitle     string
 	FeatureRequest string
 	SourceContext  json.RawMessage
+	Dependencies   []string
+	QueueReason    string
 	WorkspaceID    string
 	TeamID         string
 	ProjectID      string

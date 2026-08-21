@@ -281,7 +281,7 @@ func (s *Server) syncLinearLifecycleEvent(ctx context.Context, runID string, eve
 	}
 	var target *linearapi.WorkflowState
 	switch event.Type {
-	case "run.queued":
+	case "run.queued", "run.dependencies_waiting", "run.dependencies_satisfied":
 		target = &lifecycle.Todo
 	case "stage.started":
 		if pullRequestMerged(ctx, s, run.ID) {
@@ -318,6 +318,10 @@ func linearActivity(run model.Run, event model.Event) (string, string, string, b
 	switch event.Type {
 	case "run.queued":
 		activityKind, activityTitle = "run:queued", "Agent Harness picked up this issue"
+	case "run.dependencies_waiting":
+		activityKind, activityTitle = "run:dependencies:waiting", "Waiting for Linear dependencies"
+	case "run.dependencies_satisfied":
+		activityKind, activityTitle = "run:dependencies:satisfied", "Linear dependencies are Done; pipeline released"
 	case "stage.started":
 		activityKind, activityTitle = "stage:"+event.Stage+":started", "Pipeline stage started: "+event.Stage
 	case "stage.completed":

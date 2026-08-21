@@ -82,6 +82,31 @@ func TestConcurrencyLimitAndEventOrder(t *testing.T) {
 	}
 }
 
+func TestDependencyWaitingRunCannotBeClaimedUntilReleased(t *testing.T) {
+	ctx := context.Background()
+	memory := NewMemory()
+	repo := repository(t, memory)
+	result, err := memory.AcceptLinearDelivery(ctx, repo, model.LinearDelivery{DeliveryID: "dependency-delivery",
+		IssueID: "dependent", IssueKey: "ENG-2", IssueTitle: "Dependent",
+		QueueReason: "dependencies_pending: ENG-1", ReceivedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.ClaimNextRun(ctx, "owner", 3, time.Minute); err != ErrNoRunnableRun {
+		t.Fatalf("dependency-waiting run was claimable: %v", err)
+	}
+	queued, _ := memory.GetRun(ctx, result.Run.ID)
+	if queued.QueueReason != "dependencies_pending: ENG-1" {
+		t.Fatalf("dependency reason was overwritten: %+v", queued)
+	}
+	if err := memory.RequeueRun(ctx, result.Run.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.ClaimNextRun(ctx, "owner", 3, time.Minute); err != nil {
+		t.Fatalf("released run was not claimable: %v", err)
+	}
+}
+
 func TestAuthSlotExclusiveLease(t *testing.T) {
 	ctx := context.Background()
 	memory := NewMemory()

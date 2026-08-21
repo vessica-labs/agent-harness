@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +36,11 @@ type ParsedWebhook struct {
 	ActorName       string
 	ActorType       string
 }
+
+var (
+	dependencyLine = regexp.MustCompile(`(?im)^\s*(?:[-*]\s*)?depends\s+on\s*:?\s*(.+?)\s*$`)
+	issueKey       = regexp.MustCompile(`(?i)\b[A-Z][A-Z0-9_]*-[0-9]+\b`)
+)
 
 func Verify(headers http.Header, body []byte, secret string, now time.Time, tolerance time.Duration) error {
 	if secret == "" {
@@ -110,6 +116,7 @@ func Parse(headers http.Header, body []byte, receivedAt time.Time) (ParsedWebhoo
 	}
 	description := value(data, "description")
 	parsed.Delivery.FeatureRequest = strings.TrimSpace(parsed.Delivery.IssueTitle + "\n\n" + description)
+	parsed.Delivery.Dependencies = DependencyIssueKeys(description)
 	hash := sha256.Sum256(body)
 	parsed.Delivery.PayloadSHA256 = hex.EncodeToString(hash[:])
 	parsed.HasParent = data["parent"] != nil || value(data, "parentId") != ""
@@ -120,6 +127,23 @@ func Parse(headers http.Header, body []byte, receivedAt time.Time) (ParsedWebhoo
 		return ParsedWebhook{}, errors.New("Linear webhook issue id or team id is missing")
 	}
 	return parsed, nil
+}
+
+// DependencyIssueKeys extracts top-level issue dependencies from explicit
+// "Depends on ISSUE-123" instructions in a Linear issue description.
+func DependencyIssueKeys(description string) []string {
+	seen := map[string]bool{}
+	var result []string
+	for _, match := range dependencyLine.FindAllStringSubmatch(description, -1) {
+		for _, raw := range issueKey.FindAllString(match[1], -1) {
+			key := strings.ToUpper(raw)
+			if !seen[key] {
+				seen[key] = true
+				result = append(result, key)
+			}
+		}
+	}
+	return result
 }
 
 func (p ParsedWebhook) Eligible(triggerLabel string) (bool, string) {

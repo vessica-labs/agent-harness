@@ -207,7 +207,8 @@ func (m *Memory) AcceptLinearDelivery(_ context.Context, repo model.Repository, 
 	value := model.Run{ID: newID("run"), RepositoryID: repo.ID, Provider: "linear",
 		SourceIssueID: delivery.IssueID, SourceIssueKey: delivery.IssueKey,
 		SourceIssueURL: delivery.IssueURL, SourceIssueTitle: delivery.IssueTitle,
-		FeatureRequest: delivery.FeatureRequest, Metadata: delivery.SourceContext, State: "queued", CreatedAt: now, UpdatedAt: now}
+		FeatureRequest: delivery.FeatureRequest, Metadata: delivery.SourceContext, State: "queued",
+		QueueReason: delivery.QueueReason, CreatedAt: now, UpdatedAt: now}
 	m.runs[value.ID] = value
 	m.claims[claimKey] = value.ID
 	m.appendEventLocked(model.Event{RunID: value.ID, SourceIssueID: value.SourceIssueID,
@@ -241,7 +242,7 @@ func (m *Memory) ClaimNextRun(_ context.Context, owner string, maxActive int, le
 	}
 	if active >= maxActive {
 		for id, value := range m.runs {
-			if value.State == "queued" {
+			if value.State == "queued" && !strings.HasPrefix(value.QueueReason, "dependencies_") {
 				value.QueueReason, value.UpdatedAt = "concurrency_limit", now
 				m.runs[id] = value
 			}
@@ -250,7 +251,8 @@ func (m *Memory) ClaimNextRun(_ context.Context, owner string, maxActive int, le
 	}
 	var candidates []model.Run
 	for _, value := range m.runs {
-		if value.State == "queued" || (value.State == "running" && value.LeaseExpiresAt != nil && value.LeaseExpiresAt.Before(now)) {
+		if (value.State == "queued" && !strings.HasPrefix(value.QueueReason, "dependencies_")) ||
+			(value.State == "running" && value.LeaseExpiresAt != nil && value.LeaseExpiresAt.Before(now)) {
 			candidates = append(candidates, value)
 		}
 	}
