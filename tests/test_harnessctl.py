@@ -446,6 +446,8 @@ class BootstrapAndStateTests(unittest.TestCase):
             "team-id",
             "--notion-parent-page-id",
             "page-id",
+            "--cloud-profile",
+            "project-control-plane",
         ]
         if apply:
             args.append("--apply")
@@ -470,7 +472,8 @@ class BootstrapAndStateTests(unittest.TestCase):
                 (target / ".harness" / "pipeline.yaml").read_bytes(),
             )
             self.assertNotIn("coder_concurrency", (target / ".harness" / "config.yaml").read_text())
-            self.assertIn("label: \"agent-harness\"", (target / ".harness" / "config.yaml").read_text())
+            self.assertIn('profile: "project-control-plane"', (target / ".harness" / "config.yaml").read_text())
+            self.assertIn("agent: \"Vessica\"", (target / ".harness" / "config.yaml").read_text())
             run_json(str(HARNESSCTL), "validate-config", str(target / ".harness" / "config.yaml"))
             run_json(str(HARNESSCTL), "validate-pipeline", str(target / ".harness" / "pipeline.yaml"), "--repo", str(target))
 

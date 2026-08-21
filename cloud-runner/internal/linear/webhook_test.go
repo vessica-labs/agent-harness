@@ -17,7 +17,7 @@ func signedHeaders(body []byte, secret string, now time.Time) http.Header {
 	return http.Header{HeaderDelivery: []string{"delivery-1"}, HeaderEvent: []string{"Issue"}, HeaderTimestamp: []string{strconv.FormatInt(now.UnixMilli(), 10)}, HeaderSignature: []string{hex.EncodeToString(mac.Sum(nil))}}
 }
 
-func TestVerifyParseAndEligibility(t *testing.T) {
+func TestVerifyAndParseIssueUpdate(t *testing.T) {
 	now := time.Now()
 	secret := "webhook-secret"
 	body := []byte(`{"action":"update","type":"Issue","organizationId":"org-1","data":{"id":"issue-1","identifier":"ENG-42","title":"Build it","description":"Details","url":"https://linear.app/issue/ENG-42","team":{"id":"team-1"},"project":{"id":"project-1"},"labels":{"nodes":[{"name":"agent-harness"}]}}}`)
@@ -29,9 +29,6 @@ func TestVerifyParseAndEligibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, reason := parsed.Eligible("agent-harness"); !ok {
-		t.Fatalf("ineligible: %s", reason)
-	}
 	if parsed.Delivery.IssueKey != "ENG-42" || parsed.Delivery.WorkspaceID != "org-1" {
 		t.Fatalf("bad parse: %+v", parsed)
 	}
@@ -41,20 +38,15 @@ func TestVerifyParseAndEligibility(t *testing.T) {
 	}
 }
 
-func TestChildAndMissingLabelAreIgnored(t *testing.T) {
+func TestChildIssueShapeIsParsed(t *testing.T) {
 	now := time.Now()
 	body := []byte(`{"action":"create","type":"Issue","organizationId":"org-1","data":{"id":"child","identifier":"ENG-43","title":"Child","team":{"id":"team-1"},"parent":{"id":"parent"},"labels":[{"name":"agent-harness"}]}}`)
 	parsed, err := Parse(signedHeaders(body, "s", now), body, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, reason := parsed.Eligible("agent-harness"); ok || reason != "child_issue" {
-		t.Fatalf("got %v %s", ok, reason)
-	}
-	parsed.HasParent = false
-	parsed.Labels = nil
-	if ok, reason := parsed.Eligible("agent-harness"); ok || reason != "trigger_label_missing" {
-		t.Fatalf("got %v %s", ok, reason)
+	if !parsed.HasParent {
+		t.Fatal("child issue parent was not parsed")
 	}
 }
 
@@ -87,5 +79,36 @@ func TestDependencyIssueKeysRequireExplicitDependsOnInstruction(t *testing.T) {
 	dependencies := DependencyIssueKeys(description)
 	if strings.Join(dependencies, ",") != "AGE-22,AGE_2-7,OPS-9" {
 		t.Fatalf("unexpected dependencies: %v", dependencies)
+	}
+}
+
+func TestParseDelegatedAgentSession(t *testing.T) {
+	now := time.Now()
+	body := []byte(`{"action":"created","type":"AgentSessionEvent","organizationId":"org-1","appUserId":"vessica-user","promptContext":"<issue>Build it</issue>","agentSession":{"id":"session-1","appUserId":"vessica-user","issue":{"id":"issue-1","identifier":"ENG-44","title":"Build it","description":"Details","url":"https://linear.app/ENG-44","teamId":"team-1","delegateId":"vessica-user"}}}`)
+	headers := signedHeaders(body, "s", now)
+	headers.Set(HeaderEvent, "AgentSessionEvent")
+	parsed, err := Parse(headers, body, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, reason := parsed.AgentSessionEligible(); !ok {
+		t.Fatalf("ineligible: %s", reason)
+	}
+	if parsed.AgentSessionID != "session-1" || parsed.Delivery.IssueKey != "ENG-44" || parsed.PromptContext == "" {
+		t.Fatalf("bad agent session parse: %+v", parsed)
+	}
+}
+
+func TestMentionedAgentSessionIsNotDispatchEligible(t *testing.T) {
+	now := time.Now()
+	body := []byte(`{"action":"created","type":"AgentSessionEvent","organizationId":"org-1","appUserId":"vessica-user","agentSession":{"id":"session-2","appUserId":"vessica-user","commentId":"comment-2","issue":{"id":"issue-2","identifier":"ENG-45","title":"Question","url":"https://linear.app/ENG-45","teamId":"team-1"}}}`)
+	headers := signedHeaders(body, "s", now)
+	headers.Set(HeaderEvent, "AgentSessionEvent")
+	parsed, err := Parse(headers, body, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, reason := parsed.AgentSessionEligible(); ok || reason != "not_issue_delegation" {
+		t.Fatalf("got %v %s", ok, reason)
 	}
 }

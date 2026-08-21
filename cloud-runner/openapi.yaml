@@ -122,7 +122,7 @@ paths:
   /v1/repositories/{repository_id}/linear/issues:
     post:
       security: [{bearerAuth: []}]
-      description: Create a root Linear issue with the repository's configured trigger label
+      description: Create a root Linear issue delegated to the repository's configured Linear agent
       parameters: [{name: repository_id, in: path, required: true, schema: {type: string}}]
       requestBody:
         required: true
@@ -135,7 +135,7 @@ paths:
                 title: {type: string}
                 description: {type: string, maxLength: 65535}
       responses:
-        "201": {description: Linear issue created; its webhook will claim the run}
+        "201": {description: Linear issue created and delegated; its AgentSession webhook will claim the run}
   /v1/repositories/{repository_id}/linear/issues/{issue_id}/archive:
     post:
       security: [{bearerAuth: []}]

@@ -25,6 +25,9 @@ type apiClient struct {
 	profileName      string
 	mu               sync.Mutex
 	http             *http.Client
+	loadLatest       func() (sessionCredentials, error)
+	persist          func(sessionCredentials) error
+	lockRefresh      func(context.Context) (func(), error)
 }
 
 func newAPI(profileName string) (*apiClient, error) {
@@ -34,7 +37,22 @@ func newAPI(profileName string) (*apiClient, error) {
 	}
 	accessExpiry, _ := time.Parse(time.RFC3339, credentials.AccessExpiresAt)
 	refreshExpiry, _ := time.Parse(time.RFC3339, credentials.RefreshExpiresAt)
-	return &apiClient{url: url, token: credentials.AccessToken, refreshToken: credentials.RefreshToken, accessExpiresAt: accessExpiry, refreshExpiresAt: refreshExpiry, profileName: name, http: &http.Client{Timeout: 2 * time.Minute}}, nil
+	client := &apiClient{url: url, token: credentials.AccessToken, refreshToken: credentials.RefreshToken, accessExpiresAt: accessExpiry, refreshExpiresAt: refreshExpiry, profileName: name, http: &http.Client{Timeout: 2 * time.Minute}}
+	if name != "env" {
+		client.loadLatest = func() (sessionCredentials, error) {
+			_, latestURL, latest, loadErr := loadProfileSession(name)
+			if loadErr != nil {
+				return sessionCredentials{}, loadErr
+			}
+			if latestURL != url {
+				return sessionCredentials{}, errors.New("cloud profile URL changed while refreshing its team session")
+			}
+			return latest, nil
+		}
+		client.persist = func(latest sessionCredentials) error { return saveSessionCredentials(name, latest) }
+		client.lockRefresh = func(ctx context.Context) (func(), error) { return acquireProfileRefreshLock(ctx, name) }
+	}
+	return client, nil
 }
 
 func (c *apiClient) do(ctx context.Context, method, path string, input, output any) error {
@@ -100,6 +118,25 @@ func (c *apiClient) ensureToken(ctx context.Context) error {
 func (c *apiClient) refresh(ctx context.Context, force bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	unlock := func() {}
+	if c.lockRefresh != nil {
+		var err error
+		unlock, err = c.lockRefresh(ctx)
+		if err != nil {
+			return fmt.Errorf("lock cloud profile refresh: %w", err)
+		}
+		defer unlock()
+	}
+	if c.loadLatest != nil {
+		latest, err := c.loadLatest()
+		if err != nil {
+			return fmt.Errorf("reload cloud profile before refresh: %w", err)
+		}
+		if latest.RefreshToken != "" && latest.RefreshToken != c.refreshToken {
+			c.applyCredentialsLocked(latest)
+			return nil
+		}
+	}
 	if c.refreshToken == "" {
 		return errors.New("team session expired; join the control plane again")
 	}
@@ -127,11 +164,18 @@ func (c *apiClient) refresh(ctx context.Context, force bool) error {
 	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
 		return err
 	}
-	c.token = result.Tokens.AccessToken
-	c.refreshToken = result.Tokens.RefreshToken
-	c.accessExpiresAt, _ = time.Parse(time.RFC3339, result.Tokens.AccessExpiresAt)
-	c.refreshExpiresAt, _ = time.Parse(time.RFC3339, result.Tokens.RefreshExpiresAt)
-	return saveSessionProfile(c.profileName, c.url, result.Tokens)
+	c.applyCredentialsLocked(result.Tokens)
+	if c.persist != nil {
+		return c.persist(result.Tokens)
+	}
+	return nil
+}
+
+func (c *apiClient) applyCredentialsLocked(credentials sessionCredentials) {
+	c.token = credentials.AccessToken
+	c.refreshToken = credentials.RefreshToken
+	c.accessExpiresAt, _ = time.Parse(time.RFC3339, credentials.AccessExpiresAt)
+	c.refreshExpiresAt, _ = time.Parse(time.RFC3339, credentials.RefreshExpiresAt)
 }
 
 func (c *apiClient) currentToken(ctx context.Context) (string, error) {

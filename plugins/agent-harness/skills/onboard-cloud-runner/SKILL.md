@@ -12,9 +12,10 @@ Drive the onboarding to a verified, registered repository. Perform safe steps di
 - Inspect before changing anything. Resume completed steps instead of recreating resources or credentials.
 - Keep secrets out of chat, commands shown to the user, source files, logs, and Codex subprocesses.
 - Treat interactive Codex app connections and cloud control-plane credentials as separate security boundaries; never copy one into the other.
+- Install the plugin/CLI once, but use a repository-specific named profile and a separate Railway control plane whenever its Linear or Notion credentials must be isolated. Provider credentials are control-plane-wide.
 - Use a hidden local prompt or temporary sealed Railway variable for credential entry. Transfer it into the control plane, verify the encrypted credential, then remove the temporary value.
-- Show the target Railway project, service, environment, GitHub repositories, Linear team/project, Notion parent, and trigger label before registering the repository.
-- Never add the trigger label to a real Linear issue during onboarding.
+- Show the target Railway project, service, environment, GitHub repositories, Linear team/project, Linear agent app actor, and Notion parent before registering the repository.
+- Never delegate a real Linear issue to Vessica during onboarding.
 - Never claim a provider is ready from configuration alone. Run the checks specified below.
 - Never repeat, log, or inspect a magic-link fragment. Pass a user-provided invitation link directly to `agent-harness cloud join`, then discard it from working context.
 
@@ -36,14 +37,14 @@ The link is single-use and normally expires in one hour. Ask an administrator fo
 3. Check for `git`, `gh`, `codex`, `railway`, and `agent-harness`. Install only missing tools.
    - Preferred Railway installer: `curl -fsSL agents.railway.com | sh`
    - Alternatives: `brew install railway` or `npm install -g @railway/cli`
-4. Run `gh auth status`, `railway whoami --json`, `agent-harness version`, and `agent-harness cloud auth status` when a cloud profile already exists.
+4. Confirm `.harness/config.yaml` contains this repository's non-secret `cloud.profile`. Run `gh auth status`, `railway whoami --json`, `agent-harness version`, `agent-harness cloud profile list`, and `agent-harness cloud auth status` when that profile already exists.
 5. Report completed, missing, and blocked steps before continuing.
 
 ## 2. Prepare Railway
 
 1. Sign in with `railway login` when needed. Relay a device-login link immediately if the CLI cannot open a browser.
 2. Confirm Railway Sandboxes are enabled before provisioning the runner.
-3. Reuse or create one Railway project containing:
+3. Reuse or create one Railway project dedicated to this repository containing:
    - a single-replica `control-plane` service;
    - a Railway Postgres service;
    - a public HTTPS domain on `control-plane`.
@@ -55,12 +56,13 @@ agent-harness railway upgrade --project <project-id> --environment production --
 agent-harness railway init --project <project-id> --environment production \
   --service control-plane --postgres-service Postgres \
   --url https://<control-plane-domain> \
-  --checkpoint agent-harness-worker-<version>
+  --checkpoint agent-harness-worker-<version> \
+  --profile <repository-profile>
 agent-harness railway deploy --project <project-id> --environment production \
   --service control-plane --path <agent-harness-repo>/cloud-runner
 ```
 
-6. Wait for terminal Railway success. Verify `/healthz`, `/readyz`, the local cloud profile, and Sandbox listing before provider setup.
+6. Wait for terminal Railway success. From the target repository, verify `/healthz`, `/readyz`, `cloud profile list` selects the repository profile, and Sandbox listing before provider setup.
 
 ## 2A. Initialize team access
 
@@ -92,12 +94,13 @@ Send the returned magic link privately. Use `cloud team members`, `cloud team se
 
 1. Run `agent-harness cloud auth linear manifest --url https://<control-plane-domain>`.
 2. Guide the user to create a private Linear application with:
-   - redirect URI `http://127.0.0.1:8743/callback`;
-   - webhooks enabled at `https://<control-plane-domain>/webhooks/linear`;
-   - resource types `Issue` and `OAuthAuthorization`;
-   - Public and Client credentials disabled.
+	- app name `Vessica`;
+	- redirect URI `http://127.0.0.1:8743/callback`;
+	- webhooks enabled at `https://<control-plane-domain>/webhooks/linear`;
+	- resource types `AgentSessionEvent`, `Issue`, `Comment`, `OAuthAuthorization`, and `PermissionChange`;
+	- Public and Client credentials disabled.
 3. Have the user place the client ID, client secret, and webhook signing secret into temporary sealed Railway variables named `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET`, and `LINEAR_WEBHOOK_SECRET`.
-4. Run the app-actor OAuth flow through `agent-harness cloud auth linear`, wait for consent, and require both `linear_oauth` and `linear_webhook_secret` to be configured.
+4. Run the app-actor OAuth flow through `agent-harness cloud auth linear`, verify that consent includes `app:assignable`, wait for consent, and require both `linear_oauth` and `linear_webhook_secret` to be configured.
 5. Remove all three temporary Railway variables and verify the control plane redeploys successfully.
 6. Confirm the configured team has Todo, In Progress, For Review (or In Review/Review), and Done workflow states; repository registration rejects an incomplete lifecycle.
 
@@ -129,13 +132,13 @@ agent-harness cloud repo add \
   --github-installation <installation-id> \
   --linear-workspace <workspace-id> --linear-team <team-id> \
   --linear-project <optional-project-id> \
-  --trigger-label agent-harness \
+  --linear-agent Vessica \
   --notion-parent <page-id> --base-branch <branch>
 ```
 
 3. Run `agent-harness cloud repo list`, `agent-harness cloud auth status`, and both health endpoints.
-4. Confirm `.harness/config.yaml` uses the same trigger label and provider identifiers.
-5. Finish with the local monitor command `agent-harness ui` and explain that adding the configured label to a root Linear issue starts its one durable run.
+4. Confirm `.harness/config.yaml` uses the same Linear agent name and provider identifiers.
+5. Finish with the local monitor command `agent-harness ui` and explain that delegating a root Linear issue to Vessica starts its one durable run.
 
 ## Recovery
 

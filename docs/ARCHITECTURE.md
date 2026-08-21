@@ -9,7 +9,7 @@ How this repository is built, in one map. Contributor conventions and commands l
 A lean issue → draft-PR coding workflow for the Codex CLI. Two halves:
 
 1. **Repository-owned harness** (`.harness/` + `.agents/` copied from `harness-templates/base`): context docs, agent role prompts, deterministic `pipeline.yaml`, arch-lint rules, and a durable per-run journal under `.harness/runs/<run_id>/`.
-2. **Optional Railway cloud runner** (`cloud-runner/`, one Go binary): watches labeled Linear issues and executes *the repository's own* pipeline in isolated Railway sandboxes.
+2. **Optional Railway cloud runner** (`cloud-runner/`, one Go binary): runs as the native Linear app actor **Vessica**, accepts issues delegated to that agent, and executes *the repository's own* pipeline in isolated Railway sandboxes.
 
 Invariant to respect when building on top: **`.harness/pipeline.yaml` is the workflow authority.** Neither the Go worker nor the plugin hard-codes the product/arch/coder/lint/qa/pr stage set. Adding a stage = editing YAML + adding an `.agents/*.md` role, not editing Go.
 
@@ -36,6 +36,7 @@ tests/                         python: plugin package, harnessctl, arch-lint
 | `providers/{linearapi,notionapi,githubapp}` | thin API clients |
 | `secure` | AES-256-GCM credential envelope, capability/token minting |
 | `ui` | embedded localhost dashboard proxying the control plane |
+| `cli/profile.go` | named local control-plane profiles, keychain-backed sessions, and nearest-repository `cloud.profile` selection |
 | `events` | broker used to wake SSE listeners |
 
 `cloud-runner/scripts/harnessctl.py` is byte-identical to `plugins/agent-harness/scripts/harnessctl.py` — `make verify` enforces this with `cmp`. Any change must be made in both.
@@ -43,14 +44,14 @@ tests/                         python: plugin package, harnessctl, arch-lint
 ## 3. Runtime topology
 
 ```
-Linear webhook ──> control-plane service (Railway) ──> Railway Postgres
+Linear AgentSession webhook ──> control-plane service (Railway) ──> Railway Postgres
                         │
                         ├── ticket sandbox 1 ── Codex CLI
                         ├── ticket sandbox 2 ── Codex CLI
                         └── ticket sandbox 3 ── Codex CLI   (MaxActiveRuns default 3)
 ```
 
-One qualifying labeled Linear root issue → one durable run; duplicate deliveries dedupe to the same run via `webhook_deliveries` + `source_claims`. Completion → **draft** GitHub PR, never merged automatically. Sandboxes are disposable; recovery comes from Postgres journals + pushed branches.
+One root Linear issue delegated to Vessica → one durable run; duplicate deliveries dedupe to the same run via `webhook_deliveries` + `source_claims`. The native `AgentSession` ID is stored in run metadata, and semantic Agent Activities keep Linear's agent UI current. Ordinary Issue webhooks update dependency gates but cannot dispatch runs. Completion → **draft** GitHub PR, never merged automatically. Sandboxes are disposable; recovery comes from Postgres journals + pushed branches.
 
 ## 4. Control plane (`internal/server`)
 
@@ -58,7 +59,7 @@ Routes (`server.go`):
 
 ```
 GET  /healthz /readyz
-POST /webhooks/linear        signature + timestamp verified (internal/linear.Verify)
+POST /webhooks/linear        signature + timestamp verified; AgentSessionEvent delegation dispatches asynchronously
 POST /webhooks/github        PR merged/closed → pr.merged events
 GET  /join                   invitation redemption page
 POST /auth/v1/initialize | /auth/v1/invitations/redeem | /auth/v1/token
@@ -81,13 +82,13 @@ Internal worker API surface: append events, journal upload/download, heartbeat, 
 
 `/v1/events` is SSE with durable replay (`after`, `run_id`, `Last-Event-ID`), 20s keepalives that re-validate the session and emit `auth_revoked` when it is gone. Event protocol constant: `agent-harness.events/v1`.
 
-**External projection is idempotent by marker** (`sync.go`): every Linear comment / Notion page is upserted by an HTML marker (`<!-- agent-harness:run:<id> -->`, `:child:`, `:ticket:`, `:summary:`, `:activity:`, `:input:`, `notion-artifact:`), and each logical key is tracked in `external_sync` with `pending`/`synced`/`failed`. `reconcileRunProjections` can force-replay everything. Linear workflow states are resolved/created once per team (`EnsureLifecycleStates`: Todo, InProgress, NeedsInput, ForReview, Done).
+**External projection is idempotent by marker or provider identity** (`sync.go`): every Linear comment / Notion page is upserted by an HTML marker (`<!-- agent-harness:run:<id> -->`, `:child:`, `:ticket:`, `:summary:`, `:activity:`, `:input:`, `notion-artifact:`); native Linear Agent Activities use the AgentSession ID plus a durable logical key. All projections are tracked in `external_sync` with `pending`/`synced`/`failed`. `reconcileRunProjections` can force-replay everything. Linear workflow states are resolved/created once per team (`EnsureLifecycleStates`: Todo, InProgress, NeedsInput, ForReview, Done).
 
 **Human input** (`input.go`) is deliberately constrained: only `product` and `arch`, one round each, 1–3 questions, each with 2–3 options, exactly one marked recommended, free-text allowed. Answers arrive from the dashboard Inbox or a reply in the exact Linear question thread (`FindInputRequestByDelivery`); the first accepted answer wins (`ResolveInputRequest` returns `ErrConflict` for the rest) and queues a resumed run.
 
 ## 5. Persistence (`internal/store`)
 
-Migrations: `001_initial.sql` (repositories, webhook_deliveries, source_claims, runs, stages, tickets, external_sync, events, artifacts, credentials, auth_slots, idempotency_keys), `003_team_access.sql` (installation_state, members, invitations, member_sessions with refresh-reuse detection index, auth_audit_log), `004_human_input.sql` (input_requests, input_responses, input_deliveries).
+Migrations: `001_initial.sql` (repositories, webhook_deliveries, source_claims, runs, stages, tickets, external_sync, events, artifacts, credentials, auth_slots, idempotency_keys), `003_team_access.sql` (installation_state, members, invitations, member_sessions with refresh-reuse detection index, auth_audit_log), `004_human_input.sql` (input_requests, input_responses, input_deliveries), `005_linear_agent.sql` (per-repository Linear app-actor name, default `Vessica`).
 
 Notable: `events(run_id, run_seq)` gives per-run ordering plus a global sequence for SSE; `ClaimNextRun(owner, maxActive, leaseDuration)` is the concurrency gate; `LeaseAuthSlots` / `ReleaseAuthSlot` / `QuarantineAuthSlot` manage Codex credentials. `store.Store` is a single interface with a full in-memory implementation, so most server/scheduler tests run without Postgres — keep both implementations in sync when extending it.
 
@@ -132,6 +133,8 @@ Writes a 0600 env file, `railway sandbox create --json` (optionally with a check
 - `.harness/{AGENTS,ARCHITECTURE,DESIGN,SECURITY,TESTING,DEPLOY}.md`, `arch-lint-rules.json`, `adrs/`, `runs/`, `worktrees/`, `scripts/arch-lint.py`.
 
 `plugins/agent-harness/`: `pipelines/default.yaml` (the 6-stage DAG + repair loop), `schemas/{config,pipeline,state,product-output,architect-output}.schema.json`, `skills/{setup-harness,run-harness,inspect-harness,onboard-cloud-runner}`, `scripts/harnessctl.py`.
+
+One plugin/CLI installation may address many independent control planes. A target repository's non-secret `.harness/config.yaml` can select a named local profile with `cloud.profile`; the profile stores the URL locally and its device session in the OS keychain or protected fallback. Provider credentials remain installation-wide inside each control plane's encrypted Postgres, so repositories that require distinct Linear or Notion workspaces use distinct Railway control planes and profiles rather than sharing one provider credential set.
 
 `harnessctl.py` is the deterministic orchestration surface used by both the Go worker and local Codex runs: `validate-config`, `validate-pipeline`, `resolve-stages`, `waves`, `validate-agent-output`, `materialize-source`, `materialize-generated-inputs`, `materialize-result`, `init-run`, `checkpoint`, `set-stage`, `render-comment`, `list-runs`, `markers`, `run-hook`, `release-lease`. Journal state lives in `state.json`; leases prevent two orchestrators from touching one issue.
 

@@ -2,7 +2,7 @@
 title: Agent Harness User Guide
 description: Install, configure, run, customize, monitor, and recover Agent Harness issue-to-pull-request workflows.
 product: Agent Harness
-product_version: v0.1.0-rc.26
+product_version: v0.1.0-rc.31
 release_status: Release candidate
 last_verified: 2026-08-18
 ---
@@ -13,7 +13,7 @@ Agent Harness is an editable, issue-to-pull-request software-development workflo
 
 This guide covers the complete user-facing Agent Harness platform: the Codex plugin, repository harness, local execution, Railway cloud runner, command-line interface, localhost dashboard, Linear, GitHub and Notion integrations, workflow customization, security, and recovery.
 
-> **Release status:** Agent Harness is currently a release candidate. These instructions were verified against `v0.1.0-rc.26`. Jira integration is coming soon and is not part of the supported workflow documented here.
+> **Release status:** Agent Harness is currently a release candidate. These instructions were verified against `v0.1.0-rc.31`. Jira integration is coming soon and is not part of the supported workflow documented here.
 
 ## Quickstart
 
@@ -39,7 +39,7 @@ Download Agent Harness for Apple Silicon macOS:
 ```sh
 mkdir -p "$HOME/.local/bin"
 curl -fL \
-  https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.26/agent-harness-darwin-arm64 \
+  https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.31/agent-harness-darwin-arm64 \
   -o "$HOME/.local/bin/agent-harness"
 chmod 0755 "$HOME/.local/bin/agent-harness"
 export PATH="$HOME/.local/bin:$PATH"
@@ -81,7 +81,7 @@ Codex will:
 
 ### 4. Start the first run
 
-After onboarding reports that all checks are green, add the configured `agent-harness` label to an eligible root Linear issue. The issue title and description become the initial feature request.
+After onboarding reports that all checks are green, delegate an eligible root Linear issue to the **Vessica** agent. Linear creates a native AgentSession, and the issue title and description become the initial feature request.
 
 Agent Harness claims the issue once, launches an isolated Railway sandbox, reads the repository's checked-in workflow, and begins the pipeline. Repeated webhook deliveries resolve to the same durable run.
 
@@ -164,7 +164,7 @@ The platform provides:
 The cloud architecture is:
 
 ```text
-Root Linear issue with trigger label
+Root Linear issue delegated to Vessica
                 |
                 v
        Signed Linear webhook
@@ -278,7 +278,7 @@ In **local execution**, Agent Harness creates or updates canonical comments and 
 In **cloud execution**, Agent Harness uses the configured Linear team's real workflow-state IDs:
 
 - A newly claimed parent immediately moves to Todo and receives an Agent Harness activity comment.
-- The first pipeline stage moves the parent to In Progress; every stage start, completion, and retry adds activity to the parent.
+- The first pipeline stage moves the parent to In Progress; Vessica publishes native Agent Activities for stage starts, completions, retries, input waits, failures, and the final response.
 - A Product or Architecture input request moves the parent to Needs Input and creates one replyable question thread. Answering in that thread or the control-plane Inbox returns it to In Progress.
 - New child tickets are created directly in the team's Todo state.
 - A coder claim moves that child to In Progress.
@@ -320,17 +320,36 @@ For the cloud runner, the operator needs:
 
 The Codex plugin's interactive app connections and the cloud control plane's service credentials are separate systems. Do not copy a Codex app credential into Railway or paste provider secrets into chat. The onboarding flow uses device login, local callbacks, private shell entry, or temporary sealed Railway variables.
 
+### One installation, repository-specific control planes
+
+Install the Codex plugin and Agent Harness CLI once. Each repository can bind itself to a different named local profile with a non-secret entry in `.harness/config.yaml`:
+
+```yaml
+cloud:
+  profile: vessica-cli
+```
+
+The CLI searches from the current directory upward for the nearest `.harness/config.yaml`, so the binding also works in nested directories and ticket worktrees. The selected profile contains only a control-plane URL in the local config directory; its rotating device session stays in the operating-system keychain or the mode-0600 fallback. Profile resolution is:
+
+1. `AGENT_HARNESS_URL` plus `AGENT_HARNESS_TOKEN` for non-refreshing automation.
+2. `agent-harness cloud --profile NAME ...`.
+3. `AGENT_HARNESS_PROFILE=NAME`.
+4. The repository's `cloud.profile`.
+5. The current local profile, then `default`.
+
+GitHub, Linear, Notion, and Codex credentials are scoped to a control-plane installation, not to an individual repository registration inside it. When repositories must use different Linear workspaces or different Notion workspaces/parents, deploy one Railway project, Postgres database, domain, and named profile per repository. Sharing one control plane is appropriate only when those provider credentials are intentionally shared.
+
 ## 5. Install and upgrade
 
 ### Install a release binary
 
-Release assets are published for macOS and Linux on AMD64 and ARM64. This example installs `v0.1.0-rc.26` on Apple Silicon macOS:
+Release assets are published for macOS and Linux on AMD64 and ARM64. This example installs `v0.1.0-rc.31` on Apple Silicon macOS:
 
 ```sh
 mkdir -p "$HOME/.local/bin"
 
 curl -fL \
-  https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.26/agent-harness-darwin-arm64 \
+  https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.31/agent-harness-darwin-arm64 \
   -o "$HOME/.local/bin/agent-harness"
 
 chmod 0755 "$HOME/.local/bin/agent-harness"
@@ -384,7 +403,7 @@ make release
 
 These commands read the RC tags from `origin` and automatically select the next
 number on the newest release-candidate version line. For example, an existing
-`v0.1.0-rc.26` produces `v0.1.0-rc.27`. Pass an explicit version to override the
+`v0.1.0-rc.31` produces `v0.1.0-rc.32`. Pass an explicit version to override the
 selection or start a new version line:
 
 ```sh
@@ -413,7 +432,7 @@ export RAILWAY_API_TOKEN='<enter privately>'
 agent-harness railway upgrade \
   --project <railway-project-id> \
   --environment production \
-  --version v0.1.0-rc.26
+  --version v0.1.0-rc.31
 
 agent-harness railway deploy \
   --project <railway-project-id> \
@@ -477,12 +496,14 @@ notion:
 git:
   remote: origin
   base_branch: main
+cloud:
+  profile: <repository-profile>
 automation:
   enabled: true
   trigger:
     provider: linear
-    type: label
-    label: agent-harness
+    type: agent
+    agent: Vessica
 ```
 
 Repositories that want live previews of completed runs add an optional `preview` block:
@@ -518,7 +539,7 @@ Use `$onboard-cloud-runner` for the supported guided path. It inspects existing 
 
 ### Step 1: Prepare Railway
 
-Create or reuse one Railway project containing:
+For the repository being onboarded, create or reuse one dedicated Railway project containing:
 
 - One single-replica `control-plane` service.
 - One Railway Postgres service.
@@ -529,7 +550,7 @@ Railway Sandboxes must be enabled for the project. The onboarding flow verifies 
 If creating the resources manually:
 
 ```sh
-railway init --name agent-harness
+railway init --name <repository>-agent-harness
 railway add --service control-plane --json
 railway add --database postgres --json
 railway domain --service control-plane --json
@@ -550,7 +571,7 @@ Create the worker checkpoint, configure the control plane, and deploy:
 agent-harness railway upgrade \
   --project <project-id> \
   --environment production \
-  --version v0.1.0-rc.26
+  --version v0.1.0-rc.31
 
 agent-harness railway init \
   --project <project-id> \
@@ -558,7 +579,8 @@ agent-harness railway init \
   --service control-plane \
   --postgres-service Postgres \
   --url https://<control-plane-domain> \
-  --checkpoint agent-harness-worker-0.1.0-rc.23 \
+  --checkpoint agent-harness-worker-0.1.0-rc.31 \
+  --profile <repository-profile> \
   --preview-url https://<preview-edge-domain>
 
 agent-harness railway deploy \
@@ -568,7 +590,7 @@ agent-harness railway deploy \
   --path /path/to/agent-harness/cloud-runner
 ```
 
-`railway init` generates a one-time bootstrap token and encryption key, configures Railway variables, connects Postgres, and stores the bootstrap credential locally. When `--preview-url` is provided it also generates the shared preview-edge token and configures the `preview-edge` service role and upstream (deploy the same `cloud-runner` path to that service with `railway deploy --service preview-edge`). Omit `--preview-url` to leave previews disabled. After the first successful deployment, exchange the bootstrap credential for the first owner device session:
+`railway init` generates a one-time bootstrap token and encryption key, configures Railway variables, connects Postgres, and stores the bootstrap credential under the named local profile. Use the same profile name in this repository's `cloud.profile`. When `--preview-url` is provided it also generates the shared preview-edge token and configures the `preview-edge` service role and upstream (deploy the same `cloud-runner` path to that service with `railway deploy --service preview-edge`). Omit `--preview-url` to leave previews disabled. After the first successful deployment, exchange the bootstrap credential for the first owner device session:
 
 ```sh
 agent-harness cloud team initialize --name "Your name" --device "Your laptop"
@@ -626,9 +648,11 @@ Use these settings:
 | Client credentials | Off |
 | Webhooks | On |
 | Webhook URL | `https://<control-plane-domain>/webhooks/linear` |
-| Webhook resources | `Issue`, `OAuthAuthorization` |
+| App name | `Vessica` |
+| OAuth actor/scopes | `actor=app`; include `app:assignable` |
+| Webhook resources | `AgentSessionEvent`, `Issue`, `Comment`, `OAuthAuthorization`, `PermissionChange` |
 
-The OAuth application requests `read`, `write`, `issues:create`, and `comments:create` as an app actor.
+The OAuth application requests `read`, `write`, `issues:create`, `comments:create`, and `app:assignable` as the Vessica app actor. The assignable scope makes Vessica appear in Linear's Agent picker; delegation creates the native AgentSession that dispatches the run.
 
 Place the client ID, client secret, and webhook signing secret in temporary sealed Railway variables:
 
@@ -687,12 +711,12 @@ agent-harness cloud repo add \
   --linear-workspace <workspace-id> \
   --linear-team <team-id> \
   --linear-project <optional-project-id> \
-  --trigger-label agent-harness \
+  --linear-agent Vessica \
   --notion-parent <parent-page-id> \
   --base-branch main
 ```
 
-Registration validates the GitHub installation, Linear workspace/team/project, and Notion parent before saving the record.
+Registration validates the GitHub installation, Linear workspace/team/project, the Vessica app-actor identity, and Notion parent before saving the record.
 
 Verify the finished setup:
 
@@ -703,17 +727,17 @@ curl -fsS https://<control-plane-domain>/healthz
 curl -fsS https://<control-plane-domain>/readyz
 ```
 
-Confirm that the registered trigger label exactly matches `.harness/config.yaml`. Only then add it to a real root Linear issue.
+Confirm that the registered Linear agent is `Vessica` and exactly matches `.harness/config.yaml`. Only then delegate a real root Linear issue to Vessica.
 
 ## 8. Start and manage source issues
 
 ### Start from Linear
 
-Add the configured trigger label to a root issue in the registered workspace, team, and optional project. The webhook must describe an eligible, non-cancelled root issue; child issues and issues without the label are ignored.
+Assign Vessica from the Agent section of a root issue in the registered workspace, team, and optional project. Linear keeps the human owner as the primary assignee and sets Vessica as the issue delegate. That delegation creates a native AgentSession; its signed `AgentSessionEvent` webhook is the only cloud dispatch trigger. Child, archived, cancelled, mentioned-only, and differently delegated issues are ignored.
 
-The first eligible webhook creates one durable run. Duplicate deliveries, later updates, and label replays resolve to that run instead of creating another one.
+The first eligible AgentSession webhook creates one durable run. Duplicate deliveries and repeated delegations resolve to that run instead of creating another one. Ordinary Issue webhooks never dispatch work.
 
-To sequence source issues, put an explicit dependency instruction in the dependent issue's description before applying the trigger label:
+To sequence source issues, put an explicit dependency instruction in the dependent issue's description before delegating it to Vessica:
 
 ```text
 Depends on AGE-22
@@ -723,7 +747,7 @@ You may list multiple issue keys on that line or use multiple `Depends on` lines
 
 ### Create an issue through Agent Harness
 
-The CLI can create a root Linear issue and apply the repository's trigger label:
+The CLI can create a root Linear issue and delegate it to the repository's Vessica app actor:
 
 ```sh
 agent-harness cloud repo issue create \
@@ -732,7 +756,7 @@ agent-harness cloud repo issue create \
   --description-file feature-request.md
 ```
 
-Use `--description-file -` to read Markdown from standard input. The description must be non-empty and smaller than 64 KiB. The signed Linear webhook remains the only claim path; the create command does not bypass normal intake.
+Use `--description-file -` to read Markdown from standard input. The description must be non-empty and smaller than 64 KiB. Linear creates a native AgentSession for Vessica, and the signed AgentSession webhook remains the only claim path; the create command does not bypass normal intake.
 
 ### Archive a disposable issue safely
 
@@ -1451,10 +1475,13 @@ agent-harness ui [--address 127.0.0.1:7373] [--profile NAME]
 ### Cloud profile
 
 ```text
+agent-harness cloud profile list
+agent-harness cloud profile copy --from NAME --to NAME
 agent-harness cloud profile set --url URL --token TOKEN [--name NAME]
+agent-harness cloud --profile NAME <team|repo|runs|auth|whoami|logout> ...
 ```
 
-`profile set` establishes a named URL and bearer credential. During first installation that credential is the bootstrap token, usable only by `cloud team initialize`; initialization replaces it with the owner's rotating device session. `cloud join` creates or replaces the selected profile with the invited member's rotating device session. `AGENT_HARNESS_URL` and `AGENT_HARNESS_TOKEN` remain available as non-refreshing automation overrides.
+`profile list` shows profile names, URLs, the global current profile, and the profile selected for the current repository; it never prints credentials. `profile copy` creates a local alias without exposing the stored session. `profile set` establishes a named URL and bearer credential. During first installation that credential is the bootstrap token, usable only by `cloud team initialize`; initialization replaces it with the owner's rotating device session. `cloud join` creates or replaces the selected profile with the invited member's rotating device session. `AGENT_HARNESS_PROFILE` overrides repository selection. `AGENT_HARNESS_URL` and `AGENT_HARNESS_TOKEN` together remain the highest-precedence non-refreshing automation override.
 
 ### Team access
 
@@ -1511,7 +1538,7 @@ Registration options are:
 - `--linear-workspace`: Linear workspace ID.
 - `--linear-team`: Linear team ID.
 - `--linear-project`: optional project ID.
-- `--trigger-label`: default `agent-harness`.
+- `--linear-agent`: default `Vessica`; must match the installed Linear app actor.
 - `--notion-parent`: Notion parent page ID.
 
 ### Linear issue utilities
@@ -1606,7 +1633,8 @@ python3 <plugin>/scripts/bootstrap.py bootstrap \
   --workspace WORKSPACE_ID \
   --project TEAM_OR_PROJECT_ID \
   --notion-parent-page-id PAGE_ID \
-  [--remote origin] [--base-branch main] [--trigger-label agent-harness]
+  [--remote origin] [--base-branch main] [--linear-agent Vessica] \
+  [--cloud-profile REPOSITORY_PROFILE]
 ```
 
 Add `--apply` only after reviewing the preview. Add `--force` only when replacement of every reported conflict has been explicitly approved.
@@ -1766,6 +1794,7 @@ Configure a local profile in another terminal:
 
 ```sh
 agent-harness cloud profile set \
+  --name local-development \
   --url http://127.0.0.1:8080 \
   --token "$HARNESS_MANAGEMENT_TOKEN"
 
@@ -1823,11 +1852,12 @@ Run:
 
 ```sh
 agent-harness cloud profile set \
+  --name <repository-profile> \
   --url https://<control-plane-domain> \
   --token '<bootstrap-or-member-access-token>'
 ```
 
-If the token is missing from Keychain or the protected fallback file, set the profile again.
+Run `agent-harness cloud profile list` from the repository. If `selected` is not the intended profile, correct `.harness/config.yaml` or use `agent-harness cloud --profile NAME ...`. If the token is missing from Keychain or the protected fallback file, set that named profile again.
 
 ### A team invitation or device session fails
 
@@ -1850,7 +1880,7 @@ Use `cloud team audit` from an administrator session to inspect logout, administ
 
 `/healthz` confirms that the process is alive. `/readyz` also requires Postgres to respond. Check `DATABASE_URL`, Railway service references, database status, migrations, and control-plane logs.
 
-### A Linear label does not start a run
+### Assigning Vessica does not start a run
 
 Verify:
 
@@ -1858,8 +1888,9 @@ Verify:
 - Workspace, team, and optional project IDs match.
 - The issue is a root issue, not a child.
 - The issue is not cancelled.
-- The exact configured label is present.
-- The webhook URL and `Issue` resource are enabled.
+- Vessica is installed as an app actor with the `app:assignable` scope and team access.
+- The issue is delegated to Vessica, not merely assigned to a synthetic user or @mentioned.
+- The webhook URL and `AgentSessionEvent` resource are enabled.
 - The webhook secret stored in the control plane matches Linear.
 - `/webhooks/linear` is reachable publicly over HTTPS.
 
@@ -1946,7 +1977,7 @@ Export refuses to overwrite `.harness/runs/<run-id>`. Inspect and preserve an ex
 | Area | Current behavior |
 |---|---|
 | Release status | Release candidate |
-| Supported cloud trigger | Root Linear issue with configured label |
+| Supported cloud trigger | Root Linear issue delegated to the Vessica app actor |
 | Jira | Coming soon |
 | Cloud pipeline selection | Full checked-in pipeline |
 | Local pipeline selection | Full or exact named stages |

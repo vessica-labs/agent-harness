@@ -39,6 +39,14 @@
         "base_branch": {"type": "string", "minLength": 1}
       }
     },
+    "cloud": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile"],
+      "properties": {
+        "profile": {"type": "string", "minLength": 1}
+      }
+    },
     "preview": {
       "type": "object",
       "additionalProperties": false,
@@ -58,11 +66,11 @@
         "trigger": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["provider", "type", "label"],
+          "required": ["provider", "type", "agent"],
           "properties": {
             "provider": {"const": "linear"},
-            "type": {"const": "label"},
-            "label": {"type": "string", "minLength": 1}
+            "type": {"const": "agent"},
+            "agent": {"type": "string", "minLength": 1}
           }
         }
       }

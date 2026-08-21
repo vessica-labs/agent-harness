@@ -14,7 +14,8 @@ python3 <plugin>/scripts/bootstrap.py bootstrap \
   --child-issue-type <jira-child-type-if-needed> \
   --notion-parent-page-id <page-id> \
   --remote <remote> --base-branch <branch> \
-  --trigger-label <linear-label>
+  --linear-agent <linear-agent-name> \
+  --cloud-profile <optional-local-profile-name>
 ```
 
 The second command is preview-only until `--apply` is supplied. Conflicting files require both `--apply` and explicit `--force` approval.
@@ -58,5 +59,5 @@ The target repository contains:
 - `.harness/*.md`: repository-specific guidance linked from root `AGENTS.md`;
 - `.harness/config.yaml`: non-secret provider and repository integration settings;
 - `.harness/pipeline.yaml`: editable deterministic agent DAG, file contracts, parallelism, results, and hooks;
-- `.harness/config.yaml` may include the non-secret Linear label trigger used by the Railway cloud runner;
+- `.harness/config.yaml` may include the non-secret Linear agent app-actor trigger and a `cloud.profile` binding to this repository's named local control-plane profile;
 - ignored runtime directories for runs, worktrees, leases, and injected ADRs.

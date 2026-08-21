@@ -121,6 +121,19 @@ func (s *Server) linearWebhook(w http.ResponseWriter, r *http.Request) {
 		s.linearInputComment(w, r, parsed)
 		return
 	}
+	if strings.EqualFold(parsed.Delivery.EventType, "AgentSessionEvent") {
+		if eligible, reason := parsed.AgentSessionEligible(); !eligible {
+			duplicate, _ := s.store.RecordIgnoredLinearDelivery(r.Context(), parsed.Delivery, "", reason)
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ignored": true, "duplicate": duplicate, "reason": reason})
+			return
+		}
+		// Linear requires webhook responses within five seconds and expects the
+		// first Agent Activity within ten. Durable processing and provider calls
+		// therefore continue independently after the signed payload is accepted.
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "accepted": true})
+		go s.processLinearAgentSession(parsed)
+		return
+	}
 	repository, err := s.store.FindLinearRepository(r.Context(), parsed.Delivery.WorkspaceID,
 		parsed.Delivery.TeamID, parsed.Delivery.ProjectID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -141,70 +154,8 @@ func (s *Server) linearWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		cancel()
 	}
-	eligible, reason := parsed.Eligible(repository.TriggerLabel)
-	if !eligible {
-		duplicate, _ := s.store.RecordIgnoredLinearDelivery(r.Context(), parsed.Delivery, repository.ID, reason)
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ignored": true, "duplicate": duplicate, "reason": reason})
-		return
-	}
-	contextValue := map[string]any{"provider": "linear", "id": parsed.Delivery.IssueID,
-		"key": parsed.Delivery.IssueKey, "url": parsed.Delivery.IssueURL, "title": parsed.Delivery.IssueTitle,
-		"dependencies": parsed.Delivery.Dependencies}
-	if linearClient != nil {
-		contextCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		defer cancel()
-		issue, issueErr := linearClient.IssueContext(contextCtx, parsed.Delivery.IssueID)
-		if issueErr != nil {
-			issue, issueErr = linearClient.Issue(contextCtx, parsed.Delivery.IssueID)
-		}
-		if issueErr == nil {
-			parsed.Delivery.Dependencies = linear.DependencyIssueKeys(issue.Description)
-			contextValue = map[string]any{"provider": "linear", "id": issue.ID,
-				"key": issue.Identifier, "url": issue.URL, "title": issue.Title, "description": issue.Description,
-				"comments": issue.Comments.Nodes, "attachments": issue.Attachments.Nodes,
-				"dependencies": parsed.Delivery.Dependencies}
-		}
-	}
-	if len(parsed.Delivery.Dependencies) > 0 {
-		dependencyCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		pending, dependencyErr := s.pendingLinearDependencies(dependencyCtx, linearClient, parsed.Delivery.Dependencies)
-		cancel()
-		contextValue["pending_dependencies"] = pending
-		if dependencyErr != nil {
-			parsed.Delivery.QueueReason = "dependencies_check_failed: " + strings.Join(parsed.Delivery.Dependencies, ", ")
-			contextValue["dependency_check_error"] = dependencyErr.Error()
-		} else if len(pending) > 0 {
-			parsed.Delivery.QueueReason = "dependencies_pending: " + strings.Join(pending, ", ")
-		}
-	}
-	parsed.Delivery.SourceContext, _ = json.Marshal(contextValue)
-	result, err := s.store.AcceptLinearDelivery(r.Context(), repository, parsed.Delivery)
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, err)
-		return
-	}
-	if result.Run != nil && result.Duplicate {
-		s.appendEvent(r.Context(), model.Event{RunID: result.Run.ID, SourceIssueID: result.Run.SourceIssueID,
-			Type: "webhook.duplicate", Level: "info", Message: "Duplicate or repeated qualifying Linear webhook resolved to the existing run"})
-	}
-	if result.Run != nil && result.Run.State == "queued" && result.Run.CurrentStage == "" {
-		event := model.Event{RunID: result.Run.ID, SourceIssueID: result.Run.SourceIssueID,
-			Type: "run.queued", Level: "info", Message: "Linear issue claimed and queued"}
-		if strings.HasPrefix(result.Run.QueueReason, "dependencies_") {
-			event.Type, event.Message = "run.dependencies_waiting", "Run is waiting for Linear dependencies to reach Done"
-			event.Payload, _ = json.Marshal(map[string]any{"dependencies": parsed.Delivery.Dependencies,
-				"queue_reason": result.Run.QueueReason})
-			if !result.Duplicate {
-				_, _ = s.appendEvent(r.Context(), event)
-			}
-		}
-		if err := s.syncLinearLifecycleEvent(r.Context(), result.Run.ID, event); err != nil {
-			writeError(w, http.StatusBadGateway, fmt.Errorf("synchronize claimed Linear issue: %w", err))
-			return
-		}
-	}
-	s.broker.Notify()
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "run": result.Run, "duplicate": result.Duplicate})
+	duplicate, _ := s.store.RecordIgnoredLinearDelivery(r.Context(), parsed.Delivery, repository.ID, "not_agent_session_trigger")
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ignored": true, "duplicate": duplicate, "reason": "not_agent_session_trigger"})
 }
 
 func (s *Server) management(next http.Handler) http.Handler {
@@ -305,8 +256,8 @@ func (s *Server) repositoryLinearIssue(w http.ResponseWriter, r *http.Request) {
 		if err := decodeJSON(w, r, s.config.MaxRequestBytes, &input); err != nil {
 			return
 		}
-		issue, err := client.CreateRootIssue(r.Context(), repository.LinearTeamID, repository.LinearProjectID,
-			repository.TriggerLabel, input.Title, input.Description)
+		issue, err := client.CreateDelegatedIssue(r.Context(), repository.LinearTeamID, repository.LinearProjectID,
+			repository.LinearAgentName, input.Title, input.Description)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, fmt.Errorf("create Linear test issue: %w", err))
 			return
@@ -444,6 +395,9 @@ func (s *Server) putRepository(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSON(w, r, s.config.MaxRequestBytes, &value); err != nil {
 		return
 	}
+	if value.LinearAgentName == "" {
+		value.LinearAgentName = "Vessica"
+	}
 	if value.Name == "" || value.GitHubOwner == "" || value.GitHubRepo == "" ||
 		value.GitHubInstallation == 0 || value.LinearWorkspaceID == "" || value.LinearTeamID == "" || value.NotionParentID == "" {
 		writeError(w, http.StatusBadRequest, errors.New("name, GitHub repository and installation, Linear workspace/team, and Notion parent are required"))
@@ -483,6 +437,9 @@ func (s *Server) validateRepositoryRegistration(ctx context.Context, value model
 	linearClient := linearapi.New(linearToken)
 	if err := linearClient.ValidateRegistration(ctx, value.LinearWorkspaceID, value.LinearTeamID, value.LinearProjectID); err != nil {
 		return fmt.Errorf("Linear registration: %w", err)
+	}
+	if _, err := linearClient.ValidateAgentIdentity(ctx, value.LinearAgentName); err != nil {
+		return fmt.Errorf("Linear agent identity: %w", err)
 	}
 	if _, err := s.ensureLinearLifecycleStates(ctx, linearClient, value.LinearTeamID); err != nil {
 		return fmt.Errorf("Linear workflow: %w", err)
@@ -934,7 +891,8 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 		}
 	}
 	if value.Type == "stage.started" || value.Type == "stage.completed" || value.Type == "stage.retrying" ||
-		value.Type == "run.completed" {
+		value.Type == "human_input.requested" || value.Type == "pr.created" || value.Type == "run.completed" ||
+		value.Type == "run.failed" || value.Type == "run.paused" {
 		if err := s.syncLinearLifecycleEvent(r.Context(), runID, stored); err != nil {
 			writeError(w, http.StatusBadGateway, fmt.Errorf("synchronize Linear lifecycle: %w", err))
 			return

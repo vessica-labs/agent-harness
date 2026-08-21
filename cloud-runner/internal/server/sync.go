@@ -80,7 +80,7 @@ func (s *Server) synchronize(ctx context.Context, runID string, input syncReques
 	if err != nil {
 		return syncResponse{}, err
 	}
-	linearClient := linearapi.New(linearToken)
+	linearClient := s.linear(linearToken)
 	lifecycle, err := s.ensureLinearLifecycleStates(ctx, linearClient, repository.LinearTeamID)
 	if err != nil {
 		return syncResponse{}, fmt.Errorf("resolve Linear workflow states: %w", err)
@@ -275,6 +275,14 @@ func (s *Server) syncLinearLifecycleEvent(ctx context.Context, runID string, eve
 		return err
 	}
 	client := s.linear(token)
+	if err := s.syncLinearAgentLifecycleActivity(ctx, client, run, event); err != nil {
+		return err
+	}
+	if (event.Type == "pr.created" || event.Type == "run.completed") && run.PullRequestURL != "" {
+		if err := s.syncLinearAgentSessionLinks(ctx, client, run); err != nil {
+			return err
+		}
+	}
 	lifecycle, err := s.ensureLinearLifecycleStates(ctx, client, repository.LinearTeamID)
 	if err != nil {
 		return fmt.Errorf("resolve Linear workflow states: %w", err)
@@ -309,7 +317,88 @@ func (s *Server) syncLinearLifecycleEvent(ctx context.Context, runID string, eve
 	if !ok {
 		return nil
 	}
+	if linearAgentSessionID(run) != "" {
+		return nil
+	}
 	return s.upsertLinearActivity(ctx, client, run, logicalKey, marker, body)
+}
+
+func (s *Server) syncLinearAgentSessionLinks(ctx context.Context, client *linearapi.Client, run model.Run) error {
+	sessionID := linearAgentSessionID(run)
+	if sessionID == "" || run.PullRequestURL == "" {
+		return nil
+	}
+	const provider, logicalKey = "linear-agent", "agent:session:links"
+	marker := "agent-session:" + sessionID + ":links:" + run.PullRequestURL
+	if previous, err := s.store.GetExternalSync(ctx, run.ID, logicalKey, provider); err == nil && previous.State == "synced" && previous.Marker == marker {
+		return nil
+	}
+	if err := s.store.PutExternalSync(ctx, model.ExternalSync{RunID: run.ID, LogicalKey: logicalKey,
+		Provider: provider, State: "pending", Marker: marker, ExternalID: sessionID}); err != nil {
+		return err
+	}
+	if err := client.UpdateAgentSessionLinks(ctx, sessionID, []map[string]string{{"label": "Draft pull request", "url": run.PullRequestURL}}); err != nil {
+		return s.recordSyncFailure(ctx, run.ID, logicalKey, provider, marker, err)
+	}
+	return s.store.PutExternalSync(ctx, model.ExternalSync{RunID: run.ID, LogicalKey: logicalKey,
+		Provider: provider, State: "synced", Marker: marker, ExternalID: sessionID, ExternalURL: run.PullRequestURL})
+}
+
+func (s *Server) syncLinearAgentLifecycleActivity(ctx context.Context, client *linearapi.Client, run model.Run, event model.Event) error {
+	sessionID := linearAgentSessionID(run)
+	if sessionID == "" {
+		return nil
+	}
+	logicalKey, content, ok := linearAgentActivity(run, event)
+	if !ok {
+		return nil
+	}
+	provider := "linear-agent"
+	if previous, err := s.store.GetExternalSync(ctx, run.ID, logicalKey, provider); err == nil && previous.State == "synced" {
+		return nil
+	}
+	marker := "agent-session:" + sessionID + ":" + logicalKey
+	if err := s.store.PutExternalSync(ctx, model.ExternalSync{RunID: run.ID, LogicalKey: logicalKey,
+		Provider: provider, State: "pending", Marker: marker, ExternalID: sessionID}); err != nil {
+		return err
+	}
+	activity, err := client.CreateAgentActivity(ctx, sessionID, content)
+	if err != nil {
+		return s.recordSyncFailure(ctx, run.ID, logicalKey, provider, marker, err)
+	}
+	return s.store.PutExternalSync(ctx, model.ExternalSync{RunID: run.ID, LogicalKey: logicalKey,
+		Provider: provider, State: "synced", Marker: marker, ExternalID: activity.ID, ExternalURL: run.SourceIssueURL})
+}
+
+func linearAgentActivity(run model.Run, event model.Event) (string, map[string]any, bool) {
+	detail := strings.TrimSpace(event.Message)
+	switch event.Type {
+	case "run.queued":
+		return "agent:run:queued", map[string]any{"type": "thought", "body": "Vessica accepted this issue and queued the repository workflow."}, true
+	case "run.dependencies_waiting":
+		return "agent:run:dependencies:waiting", map[string]any{"type": "thought", "body": empty(detail, "Vessica is waiting for declared Linear dependencies.")}, true
+	case "run.dependencies_satisfied":
+		return "agent:run:dependencies:satisfied", map[string]any{"type": "thought", "body": empty(detail, "All declared Linear dependencies are complete.")}, true
+	case "stage.started":
+		return "agent:stage:" + event.Stage + ":started", map[string]any{"type": "action", "action": "Running pipeline stage", "parameter": event.Stage}, true
+	case "stage.completed":
+		return "agent:stage:" + event.Stage + ":completed", map[string]any{"type": "thought", "body": "Completed pipeline stage `" + event.Stage + "`."}, true
+	case "stage.retrying":
+		return "agent:stage:" + event.Stage + ":retrying", map[string]any{"type": "thought", "body": "Retrying pipeline stage `" + event.Stage + "`: " + detail}, true
+	case "human_input.requested":
+		return "agent:input:" + event.Stage, map[string]any{"type": "elicitation", "body": empty(detail, "Vessica needs input before the workflow can continue. Reply to the detailed question on this issue.")}, true
+	case "pr.created":
+		return "agent:pr:created", map[string]any{"type": "thought", "body": "Vessica created a draft pull request for review."}, true
+	case "run.completed":
+		body := "Vessica completed the repository workflow."
+		if run.PullRequestURL != "" {
+			body += " [Open the draft pull request](" + run.PullRequestURL + ")."
+		}
+		return "agent:run:completed", map[string]any{"type": "response", "body": body}, true
+	case "run.failed", "run.paused":
+		return "agent:" + strings.ReplaceAll(event.Type, ".", ":"), map[string]any{"type": "error", "body": empty(detail, "The repository workflow stopped before completion.")}, true
+	}
+	return "", nil, false
 }
 
 func linearActivity(run model.Run, event model.Event) (string, string, string, bool) {
@@ -378,7 +467,7 @@ func (s *Server) reconcileRunProjections(ctx context.Context, runID string) (map
 	if err != nil {
 		return nil, err
 	}
-	linearClient := linearapi.New(linearToken)
+	linearClient := s.linear(linearToken)
 	lifecycle, err := s.ensureLinearLifecycleStates(ctx, linearClient, repository.LinearTeamID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve Linear workflow states: %w", err)
@@ -421,6 +510,15 @@ func (s *Server) reconcileRunProjections(ctx context.Context, runID string) (map
 		return nil, err
 	}
 	for _, event := range eventValues {
+		if linearAgentSessionID(run) != "" {
+			if err := s.syncLinearAgentLifecycleActivity(ctx, linearClient, run, event); err != nil {
+				return nil, err
+			}
+			if _, _, ok := linearAgentActivity(run, event); ok {
+				linearActivities++
+			}
+			continue
+		}
 		logicalKey, marker, body, ok := linearActivity(run, event)
 		if !ok {
 			continue
@@ -429,6 +527,11 @@ func (s *Server) reconcileRunProjections(ctx context.Context, runID string) (map
 			return nil, err
 		}
 		linearActivities++
+	}
+	if run.PullRequestURL != "" {
+		if err := s.syncLinearAgentSessionLinks(ctx, linearClient, run); err != nil {
+			return nil, err
+		}
 	}
 	inputRequests, err := s.store.ListInputRequests(ctx, model.InputRequestFilter{RunID: runID, Status: "open", Limit: 10})
 	if err != nil {

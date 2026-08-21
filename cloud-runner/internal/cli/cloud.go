@@ -20,12 +20,19 @@ import (
 )
 
 func runCloud(ctx context.Context, args []string) error {
+	profileName, args, err := cloudCommandProfile(args)
+	if err != nil {
+		return err
+	}
+	if profileName != "" {
+		ctx = context.WithValue(ctx, cloudProfileContextKey{}, profileName)
+	}
 	if len(args) == 0 {
 		return errors.New("cloud requires profile, join, whoami, logout, team, repo, runs, or auth")
 	}
 	switch args[0] {
 	case "profile":
-		return cloudProfile(args[1:])
+		return cloudProfile(ctx, args[1:])
 	case "repo":
 		return cloudRepo(ctx, args[1:])
 	case "runs":
@@ -45,6 +52,34 @@ func runCloud(ctx context.Context, args []string) error {
 	}
 }
 
+type cloudProfileContextKey struct{}
+
+func cloudCommandProfile(args []string) (string, []string, error) {
+	if len(args) == 0 || args[0] != "--profile" {
+		return "", args, nil
+	}
+	if len(args) < 3 || strings.TrimSpace(args[1]) == "" {
+		return "", nil, errors.New("cloud --profile requires a profile name and command")
+	}
+	return strings.TrimSpace(args[1]), args[2:], nil
+}
+
+func cloudProfileName(ctx context.Context) string {
+	value, _ := ctx.Value(cloudProfileContextKey{}).(string)
+	return strings.TrimSpace(value)
+}
+
+func defaultCloudProfileName(ctx context.Context) string {
+	if value := cloudProfileName(ctx); value != "" {
+		return value
+	}
+	value, err := requestedProfileName("")
+	if err == nil && value != "" {
+		return value
+	}
+	return "default"
+}
+
 func defaultIdentity() (string, string) {
 	name := strings.TrimSpace(os.Getenv("USER"))
 	if name == "" {
@@ -59,7 +94,7 @@ func defaultIdentity() (string, string) {
 
 func cloudJoin(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("cloud join", flag.ContinueOnError)
-	profileName := flags.String("profile", "default", "local profile name")
+	profileName := flags.String("profile", defaultCloudProfileName(ctx), "local profile name")
 	defaultName, defaultDevice := defaultIdentity()
 	name := flags.String("name", defaultName, "team display name")
 	device := flags.String("device", defaultDevice, "device name")
@@ -114,7 +149,7 @@ func cloudTeam(ctx context.Context, args []string) error {
 	}
 	if args[0] == "initialize" {
 		flags := flag.NewFlagSet("cloud team initialize", flag.ContinueOnError)
-		profileName := flags.String("profile", "", "profile name")
+		profileName := flags.String("profile", cloudProfileName(ctx), "profile name")
 		defaultName, defaultDevice := defaultIdentity()
 		name := flags.String("name", defaultName, "owner display name")
 		device := flags.String("device", defaultDevice, "device name")
@@ -138,7 +173,7 @@ func cloudTeam(ctx context.Context, args []string) error {
 		fmt.Printf("Team access initialized. %s is the owner; the shared bootstrap token is no longer accepted for ordinary API calls.\n", result.Member.DisplayName)
 		return nil
 	}
-	client, err := newAPI("")
+	client, err := newAPI(cloudProfileName(ctx))
 	if err != nil {
 		return err
 	}
@@ -204,7 +239,7 @@ func cloudTeam(ctx context.Context, args []string) error {
 }
 
 func cloudWhoami(ctx context.Context) error {
-	client, err := newAPI("")
+	client, err := newAPI(cloudProfileName(ctx))
 	if err != nil {
 		return err
 	}
@@ -216,7 +251,7 @@ func cloudWhoami(ctx context.Context) error {
 }
 func cloudLogout(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("cloud logout", flag.ContinueOnError)
-	profileName := flags.String("profile", "", "profile name")
+	profileName := flags.String("profile", cloudProfileName(ctx), "profile name")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -261,12 +296,52 @@ func publicAPI(ctx context.Context, base, method, path, bearer string, input, ou
 	return json.NewDecoder(response.Body).Decode(output)
 }
 
-func cloudProfile(args []string) error {
+func cloudProfile(ctx context.Context, args []string) error {
+	if len(args) == 1 && args[0] == "list" {
+		config, err := readProfiles()
+		if err != nil {
+			return err
+		}
+		selected := cloudProfileName(ctx)
+		if selected == "" {
+			selected, err = requestedProfileName("")
+			if err != nil {
+				return err
+			}
+		}
+		if selected == "" {
+			selected = config.Current
+		}
+		if selected == "" {
+			selected = "default"
+		}
+		return printJSON(map[string]any{"current": config.Current, "selected": selected, "profiles": config.Profiles})
+	}
+	if len(args) > 0 && args[0] == "copy" {
+		flags := flag.NewFlagSet("cloud profile copy", flag.ContinueOnError)
+		from := flags.String("from", defaultCloudProfileName(ctx), "source profile name")
+		to := flags.String("to", "", "new profile name")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if strings.TrimSpace(*from) == "" || strings.TrimSpace(*to) == "" {
+			return errors.New("profile copy requires --from and --to")
+		}
+		_, urlValue, credentials, err := loadProfileSession(*from)
+		if err != nil {
+			return err
+		}
+		if err := saveSessionProfile(*to, urlValue, credentials); err != nil {
+			return err
+		}
+		fmt.Printf("Copied cloud profile %q to %q without exposing its device session.\n", *from, *to)
+		return nil
+	}
 	if len(args) == 0 || args[0] != "set" {
-		return errors.New("usage: agent-harness cloud profile set --url URL --token TOKEN")
+		return errors.New("usage: agent-harness cloud profile <list|copy --from NAME --to NAME|set --url URL --token TOKEN>")
 	}
 	flags := flag.NewFlagSet("cloud profile set", flag.ContinueOnError)
-	name, url, token := flags.String("name", "default", "profile name"), flags.String("url", "", "control-plane URL"), flags.String("token", "", "management bearer token")
+	name, url, token := flags.String("name", defaultCloudProfileName(ctx), "profile name"), flags.String("url", "", "control-plane URL"), flags.String("token", "", "management bearer token")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -280,7 +355,7 @@ func cloudRepo(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return errors.New("repo requires add, list, remove, discover-linear, or issue")
 	}
-	client, err := newAPI("")
+	client, err := newAPI(cloudProfileName(ctx))
 	if err != nil {
 		return err
 	}
@@ -315,7 +390,7 @@ func cloudRepo(ctx context.Context, args []string) error {
 		return errors.New("repo supports add, list, remove, discover-linear, or issue")
 	}
 	flags := flag.NewFlagSet("cloud repo add", flag.ContinueOnError)
-	value := model.Repository{Enabled: true, TriggerLabel: "agent-harness", BaseBranch: "main"}
+	value := model.Repository{Enabled: true, LinearAgentName: "Vessica", BaseBranch: "main"}
 	flags.StringVar(&value.ID, "id", "", "stable repository id")
 	flags.StringVar(&value.Name, "name", "", "display name")
 	flags.StringVar(&value.GitHubOwner, "github-owner", "", "GitHub owner")
@@ -325,7 +400,7 @@ func cloudRepo(ctx context.Context, args []string) error {
 	flags.StringVar(&value.LinearWorkspaceID, "linear-workspace", "", "Linear workspace/organization id")
 	flags.StringVar(&value.LinearTeamID, "linear-team", "", "Linear team id")
 	flags.StringVar(&value.LinearProjectID, "linear-project", "", "optional Linear project id")
-	flags.StringVar(&value.TriggerLabel, "trigger-label", "agent-harness", "opt-in Linear label")
+	flags.StringVar(&value.LinearAgentName, "linear-agent", "Vessica", "Linear app actor delegated repository issues")
 	flags.StringVar(&value.NotionParentID, "notion-parent", "", "Notion parent page id")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
@@ -399,7 +474,7 @@ func cloudRuns(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return errors.New("runs requires list, show, watch, input, resume, cancel, reconcile, or export")
 	}
-	client, err := newAPI("")
+	client, err := newAPI(cloudProfileName(ctx))
 	if err != nil {
 		return err
 	}
@@ -503,7 +578,7 @@ func cloudAuth(ctx context.Context, args []string) error {
 	if len(args) < 1 {
 		return errors.New("auth requires codex, github, linear, notion, or status")
 	}
-	client, err := newAPI("")
+	client, err := newAPI(cloudProfileName(ctx))
 	if err != nil {
 		return err
 	}

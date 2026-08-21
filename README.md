@@ -1,6 +1,6 @@
 # Agent Harness
 
-Agent Harness is a lean, editable issue-to-pull-request coding workflow for Codex. Each repository owns its context documents, agent definitions, deterministic pipeline YAML, architecture rules, and durable run journal. The optional Railway cloud runner watches labeled Linear issues and executes the same repository-owned workflow in isolated sandboxes.
+Agent Harness is a lean, editable issue-to-pull-request coding workflow for Codex. Each repository owns its context documents, agent definitions, deterministic pipeline YAML, architecture rules, and durable run journal. The optional Railway cloud runner appears in Linear as the **Vessica** agent app actor and executes the same repository-owned workflow when an issue is delegated to it.
 
 For the complete product, setup, workflow, operations, security, recovery, and CLI documentation, see the [Agent Harness User Guide](docs/AGENT_HARNESS_USER_GUIDE.md).
 
@@ -58,7 +58,7 @@ Download a release binary from [GitHub Releases](https://github.com/vessica-labs
 mkdir -p "$HOME/.local/bin"
 
 # Apple Silicon macOS
-curl -fL https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.26/agent-harness-darwin-arm64 \
+curl -fL https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.31/agent-harness-darwin-arm64 \
   -o "$HOME/.local/bin/agent-harness"
 
 # Intel macOS: use agent-harness-darwin-amd64
@@ -142,6 +142,15 @@ The onboarding skill performs these steps. This section is also the manual recov
 
 Provider connections used interactively by the Codex plugin and credentials used by the cloud control plane are separate boundaries. The cloud runner stores its GitHub, Linear, Notion, and Codex credentials encrypted in Postgres.
 
+Install the Codex plugin and CLI once, then give every repository its own named cloud profile and, when provider isolation matters, its own Railway control plane and Postgres database. Add the non-secret binding to that repository's `.harness/config.yaml`:
+
+```yaml
+cloud:
+  profile: agent-harness-marketing-site
+```
+
+The CLI resolves `cloud.profile` from the nearest `.harness/config.yaml`, including from a nested worktree. That profile selects a local URL and keychain-backed device session; no credential is committed. An explicit `agent-harness cloud --profile <name> ...` or `AGENT_HARNESS_PROFILE=<name>` override wins. A control plane's provider credentials are installation-wide, so use a separate control plane whenever repositories must connect to different Linear workspaces or Notion workspaces/parents.
+
 ### A. Install the repository harness
 
 The `$setup-harness` skill:
@@ -156,7 +165,7 @@ The installed repository contains:
 
 - `.agents/*.md` — stable role contracts.
 - `.harness/*.md` — repository-specific product, architecture, testing, security, and deployment guidance.
-- `.harness/config.yaml` — non-secret tracker, Notion, Git, and automation identifiers.
+- `.harness/config.yaml` — non-secret tracker, Notion, Git, automation, and optional local cloud-profile identifiers.
 - `.harness/pipeline.yaml` — editable agent DAG, inputs, outputs, parallelism, and deterministic hooks.
 - `.harness/scripts/arch-lint.py` and `.harness/arch-lint-rules.json` — deterministic architecture checks.
 - ignored runtime locations for journals, worktrees, locks, and injected ADRs.
@@ -166,7 +175,7 @@ The installed repository contains:
 Codex can create these resources, or you can create them manually:
 
 ```sh
-railway init --name agent-harness
+railway init --name <repository>-agent-harness
 railway add --service control-plane --json
 railway add --database postgres --json
 railway domain --service control-plane --json
@@ -182,7 +191,7 @@ export RAILWAY_API_TOKEN='<enter privately>'
 agent-harness railway upgrade \
   --project <railway-project-id> \
   --environment production \
-  --version v0.1.0-rc.26
+  --version v0.1.0-rc.31
 
 agent-harness railway init \
   --project <railway-project-id> \
@@ -190,7 +199,8 @@ agent-harness railway init \
   --service control-plane \
   --postgres-service Postgres \
   --url https://<control-plane-domain> \
-  --checkpoint agent-harness-worker-0.1.0-rc.26
+  --checkpoint agent-harness-worker-0.1.0-rc.31 \
+  --profile <repository-profile>
 
 agent-harness railway deploy \
   --project <railway-project-id> \
@@ -251,7 +261,9 @@ Use these Linear application settings:
 | Client credentials | Off |
 | Webhooks | On |
 | Webhook URL | `https://<control-plane-domain>/webhooks/linear` |
-| Webhook resources | `Issue`, `Comment`, `OAuthAuthorization` |
+| App name | `Vessica` |
+| OAuth actor/scopes | `actor=app`; include `app:assignable` |
+| Webhook resources | `AgentSessionEvent`, `Issue`, `Comment`, `OAuthAuthorization`, `PermissionChange` |
 
 Temporarily add the following sealed variables to the Railway `control-plane` service:
 
@@ -270,7 +282,7 @@ Approve the Linear OAuth page. Verify `linear_oauth` and `linear_webhook_secret`
 
 Repository registration idempotently creates the team-specific **Needs Input** and **For Review** states in Linear's Started category when they are absent. Existing **In Review** or **Review** states satisfy the review-state requirement and are not duplicated. The authorizing Linear member must be allowed to manage the team's workflow statuses.
 
-If the OAuth app predates human-input support, add `Comment` to its webhook resources. New manifests already subscribe to `Issue`, `Comment`, and `OAuthAuthorization`.
+If the OAuth app predates native agent dispatch, rename or recreate it as **Vessica**, add `app:assignable`, and add `AgentSessionEvent` to its webhook resources before reauthorizing it. New manifests include the complete resource set.
 
 ### E. Connect Notion
 
@@ -312,7 +324,7 @@ agent-harness cloud repo add \
   --linear-workspace <workspace-id> \
   --linear-team <team-id> \
   --linear-project <optional-project-id> \
-  --trigger-label agent-harness \
+  --linear-agent Vessica \
   --notion-parent <parent-page-id> \
   --base-branch main
 
@@ -320,7 +332,7 @@ agent-harness cloud repo list
 agent-harness cloud auth status
 ```
 
-The trigger label must match `.harness/config.yaml`. Do not add it to a real issue until all credentials, Codex slots, health checks, and repository registration are green.
+The Linear OAuth app must be installed as the assignable app actor **Vessica**, and that name must match `.harness/config.yaml`. Do not delegate a real issue until all credentials, Codex slots, health checks, and repository registration are green.
 
 ### H. Add and administer teammates
 
@@ -357,9 +369,9 @@ Every redemption creates a named member and an individually revocable device ses
 
 ### Automatic cloud execution
 
-Add the configured `agent-harness` label to an eligible root Linear issue. The webhook is acknowledged and persisted before work begins. Duplicate deliveries and later qualifying updates resolve to the existing run.
+Delegate an eligible root Linear issue to the **Vessica** agent. Linear creates a native AgentSession, and the signed webhook is acknowledged and persisted before work begins. Repeated delegation and later qualifying updates resolve to the existing run.
 
-To hold one source issue behind another, add an explicit line such as `Depends on AGE-22` to the dependent issue's description before applying the trigger label. Multiple issue keys may be comma-separated or declared on multiple `Depends on` lines. The run remains queued without consuming a sandbox until every referenced Linear issue is in a completed workflow state; a dependency update releases it automatically.
+To hold one source issue behind another, add an explicit line such as `Depends on AGE-22` to the dependent issue's description before delegating it to Vessica. Multiple issue keys may be comma-separated or declared on multiple `Depends on` lines. The run remains queued without consuming a sandbox until every referenced Linear issue is in a completed workflow state; a dependency update releases it automatically.
 
 Monitor from the CLI:
 
@@ -437,7 +449,7 @@ make release
 ```
 
 Both commands inspect the release-candidate tags on `origin` and select the next
-RC on the newest version line, such as `v0.1.0-rc.27` after `v0.1.0-rc.26`.
+RC on the newest version line, such as `v0.1.0-rc.32` after `v0.1.0-rc.31`.
 `release-check` is read-only with respect to GitHub and Railway. `release` reruns
 verification, pushes `main` and the selected version tag, waits for GitHub
 Actions to publish all release assets and the GHCR image, creates the matching
