@@ -98,7 +98,7 @@ func Parse(headers http.Header, body []byte, receivedAt time.Time) (ParsedWebhoo
 		parsed.AppUserID = coalesce(value(root, "appUserId"), value(session, "appUserId"))
 		parsed.PromptContext = strings.TrimSpace(value(root, "promptContext"))
 		parsed.Delegated = (parsed.AppUserID != "" && value(issue, "delegateId") == parsed.AppUserID) ||
-			(value(session, "commentId") == "" && value(session, "sourceCommentId") == "")
+			value(session, "sourceCommentId") == ""
 		parsed.Delivery = model.LinearDelivery{
 			DeliveryID: stringValue(headers.Get(HeaderDelivery)), EventType: eventType,
 			Action: value(root, "action"), IssueID: value(issue, "id"), IssueKey: value(issue, "identifier"),

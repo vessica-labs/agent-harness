@@ -53,6 +53,8 @@ Linear AgentSession webhook ──> control-plane service (Railway) ──> Rail
 
 One root Linear issue delegated to Vessica → one durable run; duplicate deliveries dedupe to the same run via `webhook_deliveries` + `source_claims`. The native `AgentSession` ID is stored in run metadata, and semantic Agent Activities keep Linear's agent UI current. Ordinary Issue webhooks update dependency gates but cannot dispatch runs. Completion → **draft** GitHub PR, never merged automatically. Sandboxes are disposable; recovery comes from Postgres journals + pushed branches.
 
+Linear may attach a generated session-thread `commentId` to an Agent-picker delegation. The parser distinguishes comment/mention invocation by `sourceCommentId`, then fetches the issue and requires its live delegate to be the configured app actor before claiming a run.
+
 ## 4. Control plane (`internal/server`)
 
 Routes (`server.go`):
