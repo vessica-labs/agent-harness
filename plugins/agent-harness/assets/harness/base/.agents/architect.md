@@ -17,7 +17,7 @@ Convert the approved PRD and repository evidence into one complete ADR containin
 2. Read every injected ADR and preserve decisions that remain applicable.
 3. Resolve architecture through the smallest coherent set of decisions that satisfies the PRD and repository invariants.
 4. Specify component ownership, dependency direction, interfaces, data/state changes, failure behavior, observability, security, compatibility, migration, and deployment implications.
-5. Map implementation constraints back to affected ticket keys. Express every needed path or ordering change through `required_owned_paths` and `additional_dependencies`; the orchestrator deterministically merges those fields into the ticket plan before coding. Treat the graph as reconciled when those declared additions are sufficient.
+5. Map implementation constraints back to affected ticket keys. Express every needed path or ordering change through `required_owned_paths` and `additional_dependencies`; the orchestrator deterministically merges those fields into the ticket plan before coding. When implementation requires a new or changed library, require ownership of the affected package manifest and lockfile. Treat the graph as reconciled when those declared additions are sufficient.
 6. Write one ADR using the exact template below. When a material, irreversible architecture choice cannot be made from available evidence, use the single structured input round described below.
 
 ## Boundaries

@@ -122,6 +122,11 @@ func (s *Server) linearWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.EqualFold(parsed.Delivery.EventType, "AgentSessionEvent") {
+		if strings.EqualFold(parsed.Delivery.Action, "prompted") {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "accepted": true})
+			go s.processLinearAgentPrompt(parsed)
+			return
+		}
 		if eligible, reason := parsed.AgentSessionEligible(); !eligible {
 			duplicate, _ := s.store.RecordIgnoredLinearDelivery(r.Context(), parsed.Delivery, "", reason)
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ignored": true, "duplicate": duplicate, "reason": reason})
@@ -819,6 +824,7 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 			return
 		}
 		inputRequest = &request
+		value.Payload = inputRequestEventPayload(value.Payload, request.ID)
 	}
 	stored, err := s.appendEvent(r.Context(), value)
 	if err != nil {
@@ -847,6 +853,21 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 		go s.publishPreview(runID)
 	} else if value.Type == "run.paused" || value.Type == "run.failed" {
 		_ = s.store.SetRunState(r.Context(), runID, "paused", value.Stage, value.Message)
+		if value.Stage != "" {
+			attempt := 0
+			if stages, listErr := s.store.ListStages(r.Context(), runID); listErr == nil {
+				for _, stage := range stages {
+					if stage.Stage == value.Stage {
+						attempt = stage.Attempt
+						break
+					}
+				}
+			}
+			blockedDetails, _ := json.Marshal(map[string]any{"error": value.Message})
+			details := s.mergeStageDetails(r.Context(), runID, value.Stage, blockedDetails)
+			_ = s.store.PutStage(r.Context(), model.StageState{RunID: runID, Stage: value.Stage,
+				State: "blocked", Attempt: attempt, Details: details})
+		}
 	} else if value.Type == "pipeline.stage" || value.Type == "stage.started" || value.Type == "stage.completed" || value.Type == "stage.retrying" {
 		state := map[string]string{"pipeline.stage": "pending", "stage.started": "running", "stage.completed": "completed", "stage.retrying": "pending"}[value.Type]
 		details := value.Payload
@@ -890,9 +911,7 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 			_ = s.store.SetPreview(r.Context(), runID, "ready", "", payload.Port, nil)
 		}
 	}
-	if value.Type == "stage.started" || value.Type == "stage.completed" || value.Type == "stage.retrying" ||
-		value.Type == "human_input.requested" || value.Type == "pr.created" || value.Type == "run.completed" ||
-		value.Type == "run.failed" || value.Type == "run.paused" {
+	if shouldSyncLinearLifecycleEvent(value.Type) {
 		if err := s.syncLinearLifecycleEvent(r.Context(), runID, stored); err != nil {
 			writeError(w, http.StatusBadGateway, fmt.Errorf("synchronize Linear lifecycle: %w", err))
 			return

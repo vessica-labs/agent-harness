@@ -26,6 +26,8 @@ const (
 type ParsedWebhook struct {
 	Delivery        model.LinearDelivery
 	AgentSessionID  string
+	AgentActivityID string
+	AgentPromptBody string
 	AppUserID       string
 	PromptContext   string
 	Delegated       bool
@@ -94,7 +96,16 @@ func Parse(headers http.Header, body []byte, receivedAt time.Time) (ParsedWebhoo
 	if strings.EqualFold(eventType, "AgentSessionEvent") {
 		session, _ := root["agentSession"].(map[string]any)
 		issue, _ := session["issue"].(map[string]any)
+		activity, _ := root["agentActivity"].(map[string]any)
+		activityContent, _ := activity["content"].(map[string]any)
+		actor, _ := root["actor"].(map[string]any)
+		if actor == nil {
+			actor, _ = activity["user"].(map[string]any)
+		}
 		parsed.AgentSessionID = value(session, "id")
+		parsed.AgentActivityID = value(activity, "id")
+		parsed.AgentPromptBody = strings.TrimSpace(coalesce(value(activity, "body"), value(activityContent, "body")))
+		parsed.ActorID, parsed.ActorName, parsed.ActorType = value(actor, "id"), value(actor, "name"), strings.ToLower(value(actor, "type"))
 		parsed.AppUserID = coalesce(value(root, "appUserId"), value(session, "appUserId"))
 		parsed.PromptContext = strings.TrimSpace(value(root, "promptContext"))
 		parsed.Delegated = (parsed.AppUserID != "" && value(issue, "delegateId") == parsed.AppUserID) ||
@@ -112,6 +123,12 @@ func Parse(headers http.Header, body []byte, receivedAt time.Time) (ParsedWebhoo
 		parsed.Delivery.Dependencies = DependencyIssueKeys(description)
 		hash := sha256.Sum256(body)
 		parsed.Delivery.PayloadSHA256 = hex.EncodeToString(hash[:])
+		if strings.EqualFold(parsed.Delivery.Action, "prompted") {
+			if parsed.AgentSessionID == "" || parsed.AgentPromptBody == "" {
+				return ParsedWebhook{}, errors.New("Linear prompted agent-session webhook session or activity body is missing")
+			}
+			return parsed, nil
+		}
 		if parsed.AgentSessionID == "" || parsed.Delivery.IssueID == "" || parsed.Delivery.TeamID == "" {
 			return ParsedWebhook{}, errors.New("Linear agent-session webhook session, issue, or team id is missing")
 		}

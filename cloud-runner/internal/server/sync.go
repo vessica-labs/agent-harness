@@ -207,6 +207,8 @@ func workflowStateForTicket(state string, lifecycle linearapi.LifecycleStates) l
 	switch strings.ToLower(strings.TrimSpace(state)) {
 	case "running", "in_progress", "in progress", "claimed":
 		return lifecycle.InProgress
+	case "failed", "blocked":
+		return lifecycle.NeedsInput
 	case "completed", "done":
 		return lifecycle.Done
 	default:
@@ -261,6 +263,9 @@ func (s *Server) syncLinearLifecycleEvent(ctx context.Context, runID string, eve
 	if err != nil {
 		return err
 	}
+	if strings.HasPrefix(event.Type, "codex.") && linearAgentSessionID(run) == "" {
+		return nil
+	}
 	repository, err := s.store.GetRepository(ctx, run.RepositoryID)
 	if err != nil {
 		return err
@@ -307,10 +312,27 @@ func (s *Server) syncLinearLifecycleEvent(ctx context.Context, runID string, eve
 		}
 	case "pr.merged":
 		target = &lifecycle.Done
+	case "run.failed", "run.paused":
+		target = &lifecycle.NeedsInput
 	}
 	if target != nil {
 		if err := s.setLinearIssueState(ctx, client, run.ID, "parent-state", run.SourceIssueID, *target, false); err != nil {
 			return err
+		}
+	}
+	if strings.HasPrefix(event.Type, "ticket.") {
+		var payload struct {
+			Key string `json:"ticket_key"`
+		}
+		if json.Unmarshal(event.Payload, &payload) == nil && payload.Key != "" {
+			if ticket, ok := ticketByKey(ctx, s, run.ID, payload.Key); ok {
+				if synced, syncErr := s.store.GetExternalSync(ctx, run.ID, "ticket:"+payload.Key, "linear"); syncErr == nil && synced.ExternalID != "" {
+					if err := s.setLinearIssueState(ctx, client, run.ID, "ticket-state:"+payload.Key,
+						synced.ExternalID, workflowStateForTicket(ticket.State, lifecycle), false); err != nil {
+						return err
+					}
+				}
+			}
 		}
 	}
 	logicalKey, marker, body, ok := linearActivity(run, event)
@@ -355,7 +377,7 @@ func (s *Server) syncLinearAgentLifecycleActivity(ctx context.Context, client *l
 	}
 	provider := "linear-agent"
 	if previous, err := s.store.GetExternalSync(ctx, run.ID, logicalKey, provider); err == nil && previous.State == "synced" {
-		return nil
+		return s.syncLinearAgentInputDelivery(ctx, run, event, sessionID)
 	}
 	marker := "agent-session:" + sessionID + ":" + logicalKey
 	if err := s.store.PutExternalSync(ctx, model.ExternalSync{RunID: run.ID, LogicalKey: logicalKey,
@@ -366,12 +388,22 @@ func (s *Server) syncLinearAgentLifecycleActivity(ctx context.Context, client *l
 	if err != nil {
 		return s.recordSyncFailure(ctx, run.ID, logicalKey, provider, marker, err)
 	}
-	return s.store.PutExternalSync(ctx, model.ExternalSync{RunID: run.ID, LogicalKey: logicalKey,
+	syncErr := s.store.PutExternalSync(ctx, model.ExternalSync{RunID: run.ID, LogicalKey: logicalKey,
 		Provider: provider, State: "synced", Marker: marker, ExternalID: activity.ID, ExternalURL: run.SourceIssueURL})
+	deliveryErr := s.syncLinearAgentInputDelivery(ctx, run, event, sessionID)
+	return errors.Join(syncErr, deliveryErr)
 }
 
 func linearAgentActivity(run model.Run, event model.Event) (string, map[string]any, bool) {
 	detail := strings.TrimSpace(event.Message)
+	var codexPayload struct {
+		ItemID     string   `json:"item_id"`
+		Command    string   `json:"command"`
+		Paths      []string `json:"paths"`
+		ExitCode   *int     `json:"exit_code"`
+		DurationMS int64    `json:"duration_ms"`
+	}
+	_ = json.Unmarshal(event.Payload, &codexPayload)
 	switch event.Type {
 	case "run.queued":
 		return "agent:run:queued", map[string]any{"type": "thought", "body": "Vessica accepted this issue and queued the repository workflow."}, true
@@ -385,8 +417,45 @@ func linearAgentActivity(run model.Run, event model.Event) (string, map[string]a
 		return "agent:stage:" + event.Stage + ":completed", map[string]any{"type": "thought", "body": "Completed pipeline stage `" + event.Stage + "`."}, true
 	case "stage.retrying":
 		return "agent:stage:" + event.Stage + ":retrying", map[string]any{"type": "thought", "body": "Retrying pipeline stage `" + event.Stage + "`: " + detail}, true
+	case "codex.command.started", "codex.command.completed":
+		if codexPayload.ItemID == "" {
+			return "", nil, false
+		}
+		parameter := strings.TrimSpace(codexPayload.Command)
+		if parameter == "" {
+			parameter = empty(detail, "repository command")
+		}
+		content := map[string]any{"type": "action", "action": "Run command", "parameter": parameter}
+		if event.Type == "codex.command.completed" {
+			result := "Completed"
+			if codexPayload.ExitCode != nil && *codexPayload.ExitCode != 0 {
+				result = fmt.Sprintf("Exited with status %d", *codexPayload.ExitCode)
+			}
+			if codexPayload.DurationMS > 0 {
+				result += fmt.Sprintf(" in %.1fs", float64(codexPayload.DurationMS)/1000)
+			}
+			content["result"] = result
+		}
+		return "agent:codex:command:" + codexPayload.ItemID, content, true
+	case "codex.files.started", "codex.files.completed":
+		if codexPayload.ItemID == "" || len(codexPayload.Paths) == 0 {
+			return "", nil, false
+		}
+		content := map[string]any{"type": "action", "action": "Edit", "parameter": strings.Join(codexPayload.Paths, "\n")}
+		if event.Type == "codex.files.completed" {
+			content["result"] = "Files updated"
+		}
+		return "agent:codex:files:" + codexPayload.ItemID, content, true
 	case "human_input.requested":
-		return "agent:input:" + event.Stage, map[string]any{"type": "elicitation", "body": empty(detail, "Vessica needs input before the workflow can continue. Reply to the detailed question on this issue.")}, true
+		request, err := decodeInputRequestEvent(run.ID, event.Stage, event.Payload)
+		if err != nil {
+			return "agent:input:" + event.Stage, map[string]any{"type": "elicitation", "body": empty(detail, "Vessica needs input before the workflow can continue.")}, true
+		}
+		requestKey := inputRequestID(event.Payload)
+		if requestKey == "" {
+			requestKey = event.Stage
+		}
+		return "agent:input:" + requestKey, map[string]any{"type": "elicitation", "body": renderLinearAgentInputRequest(request)}, true
 	case "pr.created":
 		return "agent:pr:created", map[string]any{"type": "thought", "body": "Vessica created a draft pull request for review."}, true
 	case "run.completed":
@@ -399,6 +468,41 @@ func linearAgentActivity(run model.Run, event model.Event) (string, map[string]a
 		return "agent:" + strings.ReplaceAll(event.Type, ".", ":"), map[string]any{"type": "error", "body": empty(detail, "The repository workflow stopped before completion.")}, true
 	}
 	return "", nil, false
+}
+
+func (s *Server) syncLinearAgentInputDelivery(ctx context.Context, run model.Run, event model.Event, sessionID string) error {
+	if event.Type != "human_input.requested" {
+		return nil
+	}
+	requestID := inputRequestID(event.Payload)
+	if requestID == "" {
+		requests, err := s.store.ListInputRequests(ctx, model.InputRequestFilter{RunID: run.ID, Status: "open", Limit: 10})
+		if err != nil {
+			return err
+		}
+		for _, request := range requests {
+			if request.Stage == event.Stage {
+				requestID = request.ID
+				break
+			}
+		}
+	}
+	if requestID == "" {
+		return nil
+	}
+	return s.store.PutInputDelivery(ctx, model.InputDelivery{RequestID: requestID, Provider: "linear-agent",
+		State: "delivered", ExternalID: sessionID, ExternalURL: run.SourceIssueURL})
+}
+
+func shouldSyncLinearLifecycleEvent(eventType string) bool {
+	switch eventType {
+	case "stage.started", "stage.completed", "stage.retrying", "human_input.requested", "pr.created",
+		"run.completed", "run.failed", "run.paused", "codex.command.started", "codex.command.completed",
+		"codex.files.started", "codex.files.completed", "ticket.started", "ticket.completed", "ticket.failed":
+		return true
+	default:
+		return false
+	}
 }
 
 func linearActivity(run model.Run, event model.Event) (string, string, string, bool) {
@@ -492,6 +596,9 @@ func (s *Server) reconcileRunProjections(ctx context.Context, runID string) (map
 		parentState = lifecycle.InProgress
 	}
 	if run.State == "awaiting_input" {
+		parentState = lifecycle.NeedsInput
+	}
+	if run.State == "paused" {
 		parentState = lifecycle.NeedsInput
 	}
 	if run.State == "completed" && allTicketsCompleted(ctx, s, runID) {

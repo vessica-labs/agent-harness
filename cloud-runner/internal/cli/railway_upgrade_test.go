@@ -18,4 +18,10 @@ func TestRailwayUpgradeCommandsUseBaseImageGitHubCLI(t *testing.T) {
 	if !strings.Contains(strings.Join(commands, "\n"), "/v0.1.0-rc.28/") {
 		t.Fatal("upgrade commands did not use the requested release version")
 	}
+	joined := strings.Join(commands, "\n")
+	for _, required := range []string{"setup_24.x", "pnpm@11.21.0", "@playwright/test@1.62.1", `"playwright":"1.62.1"`, `"chromium":"/usr/bin/chromium"`} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("worker checkpoint omitted %q", required)
+		}
+	}
 }

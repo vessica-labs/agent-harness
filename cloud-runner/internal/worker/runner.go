@@ -664,10 +664,14 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 		}
 		wait.Wait()
 		sort.Slice(runs, func(i, j int) bool { return runs[i].ticket.Key < runs[j].ticket.Key })
+		var firstTicketError error
+		integrated := false
 		for _, current := range runs {
 			if current.err != nil {
-				r.cleanupWorktrees(ctx, runs)
-				return current.err
+				if firstTicketError == nil {
+					firstTicketError = current.err
+				}
+				continue
 			}
 			if _, err := runCommand(ctx, r.repo, sanitizedEnvironment(""), orchestratorGit, "cherry-pick", current.commit); err != nil {
 				_, _ = runCommand(context.WithoutCancel(ctx), r.repo, sanitizedEnvironment(""), orchestratorGit, "cherry-pick", "--abort")
@@ -691,13 +695,19 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 			_ = r.event(ctx, "ticket.completed", "info", "Ticket commit integrated", stage.ID,
 				map[string]any{"ticket_key": current.ticket.Key, "depends_on": current.ticket.DependsOn,
 					"owner": r.config.LeaseOwner, "commit": current.commit})
+			integrated = true
 		}
 		r.cleanupWorktrees(ctx, runs)
-		if err := r.pushBranch(ctx); err != nil {
-			return err
+		if integrated {
+			if err := r.pushBranch(ctx); err != nil {
+				return err
+			}
+			if err := r.checkpoint(ctx); err != nil {
+				return err
+			}
 		}
-		if err := r.checkpoint(ctx); err != nil {
-			return err
+		if firstTicketError != nil {
+			return firstTicketError
 		}
 	}
 	return nil

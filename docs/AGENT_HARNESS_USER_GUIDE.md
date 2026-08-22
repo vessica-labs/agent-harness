@@ -2,7 +2,7 @@
 title: Agent Harness User Guide
 description: Install, configure, run, customize, monitor, and recover Agent Harness issue-to-pull-request workflows.
 product: Agent Harness
-product_version: v0.1.0-rc.32
+product_version: v0.1.0-rc.33
 release_status: Release candidate
 last_verified: 2026-08-21
 ---
@@ -13,7 +13,7 @@ Agent Harness is an editable, issue-to-pull-request software-development workflo
 
 This guide covers the complete user-facing Agent Harness platform: the Codex plugin, repository harness, local execution, Railway cloud runner, command-line interface, localhost dashboard, Linear, GitHub and Notion integrations, workflow customization, security, and recovery.
 
-> **Release status:** Agent Harness is currently a release candidate. These instructions were verified against `v0.1.0-rc.32`. Jira integration is coming soon and is not part of the supported workflow documented here.
+> **Release status:** Agent Harness is currently a release candidate. These instructions were verified against `v0.1.0-rc.33`. Jira integration is coming soon and is not part of the supported workflow documented here.
 
 ## Quickstart
 
@@ -39,7 +39,7 @@ Download Agent Harness for Apple Silicon macOS:
 ```sh
 mkdir -p "$HOME/.local/bin"
 curl -fL \
-  https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.32/agent-harness-darwin-arm64 \
+  https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.33/agent-harness-darwin-arm64 \
   -o "$HOME/.local/bin/agent-harness"
 chmod 0755 "$HOME/.local/bin/agent-harness"
 export PATH="$HOME/.local/bin:$PATH"
@@ -283,6 +283,7 @@ In **cloud execution**, Agent Harness uses the configured Linear team's real wor
 - New child tickets are created directly in the team's Todo state.
 - A coder claim moves that child to In Progress.
 - A child moves to Done after its commit is integrated.
+- A failed child and a paused parent move to Needs Input so a stopped run cannot remain visually active.
 - A completed pipeline with its pull request moves the parent to For Review.
 - A signed GitHub pull-request merge webhook moves the parent to Done.
 
@@ -303,7 +304,7 @@ Cloud repository registration and lifecycle synchronization idempotently install
 | Railway CLI | Control-plane deployment and sandbox management |
 | Python 3 | Deterministic repository helpers and architecture lint |
 
-The cloud worker checkpoint includes Git, GitHub CLI, Codex CLI, Railway CLI, Python, Node.js, and Chromium. A target repository may still require its own language runtime, package manager, services, or test dependencies.
+The cloud worker checkpoint includes Git, GitHub CLI, Codex CLI, Railway CLI, Python, Node.js 24, pnpm 11, Playwright, and Chromium. Playwright's CLI and browser runtime are warm in every sandbox, while target repositories still declare `@playwright/test` and other libraries in their own package manifests and lockfiles. A target repository may still require another language runtime, services, or project-specific dependencies.
 
 ### Account permissions
 
@@ -343,13 +344,13 @@ GitHub, Linear, Notion, and Codex credentials are scoped to a control-plane inst
 
 ### Install a release binary
 
-Release assets are published for macOS and Linux on AMD64 and ARM64. This example installs `v0.1.0-rc.32` on Apple Silicon macOS:
+Release assets are published for macOS and Linux on AMD64 and ARM64. This example installs `v0.1.0-rc.33` on Apple Silicon macOS:
 
 ```sh
 mkdir -p "$HOME/.local/bin"
 
 curl -fL \
-  https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.32/agent-harness-darwin-arm64 \
+  https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.33/agent-harness-darwin-arm64 \
   -o "$HOME/.local/bin/agent-harness"
 
 chmod 0755 "$HOME/.local/bin/agent-harness"
@@ -403,7 +404,7 @@ make release
 
 These commands read the RC tags from `origin` and automatically select the next
 number on the newest release-candidate version line. For example, an existing
-`v0.1.0-rc.32` produces `v0.1.0-rc.33`. Pass an explicit version to override the
+`v0.1.0-rc.33` produces `v0.1.0-rc.34`. Pass an explicit version to override the
 selection or start a new version line:
 
 ```sh
@@ -432,7 +433,7 @@ export RAILWAY_API_TOKEN='<enter privately>'
 agent-harness railway upgrade \
   --project <railway-project-id> \
   --environment production \
-  --version v0.1.0-rc.32
+  --version v0.1.0-rc.33
 
 agent-harness railway deploy \
   --project <railway-project-id> \
@@ -571,7 +572,7 @@ Create the worker checkpoint, configure the control plane, and deploy:
 agent-harness railway upgrade \
   --project <project-id> \
   --environment production \
-  --version v0.1.0-rc.32
+  --version v0.1.0-rc.33
 
 agent-harness railway init \
   --project <project-id> \
@@ -579,7 +580,7 @@ agent-harness railway init \
   --service control-plane \
   --postgres-service Postgres \
   --url https://<control-plane-domain> \
-  --checkpoint agent-harness-worker-0.1.0-rc.32 \
+  --checkpoint agent-harness-worker-0.1.0-rc.33 \
   --profile <repository-profile> \
   --preview-url https://<preview-edge-domain>
 
@@ -825,7 +826,9 @@ The coder stage uses `ticket_parallel` mode. Agent Harness:
 
 Each coder invocation owns exactly one ticket. The coder follows red-green-refactor TDD, runs focused checks, commits a scoped change locally, returns its exact JSON result, and leaves a clean worktree. Coder agents do not push.
 
-The orchestrator integrates successful commits into the run branch in stable logical-key order, reruns focused checks, synchronizes ticket progress, pushes the durable branch, and removes disposable ticket worktrees.
+Tickets that add or update libraries own the affected package manifests and package-manager lockfile. Coders use the repository package manager and commit both manifest and lockfile changes; undeclared global imports, hand-written type shims, and lockfile-only dependency edits are rejected by the role contract.
+
+The orchestrator integrates successful commits into the run branch in stable logical-key order, reruns focused checks, synchronizes ticket progress, pushes the durable branch, and removes disposable ticket worktrees. If a sibling in the same dependency wave fails, completed siblings are integrated and checkpointed before the stage retries, so recovery reruns only unfinished tickets.
 
 ### Lint
 
@@ -839,7 +842,7 @@ The QA agent verifies every PRD acceptance criterion and produces criterion-leve
 
 Safe, contained defects may be repaired and committed during QA. If the required change is broader, QA emits structured new tickets. A matching repair loop can return execution to coder, then lint and QA, up to the configured maximum.
 
-Cloud workers cap Playwright at two workers by default to avoid exhausting sandbox process and thread limits. Repositories should read `HARNESS_PLAYWRIGHT_WORKERS` in their Playwright configuration or pass the value as `--workers`.
+Cloud workers preinstall the Playwright CLI and system Chromium, then cap Playwright at two workers by default to avoid exhausting sandbox process and thread limits. Repositories should declare their Playwright test dependency, read `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` and `HARNESS_PLAYWRIGHT_WORKERS` in Playwright configuration, or pass the worker value as `--workers`.
 
 ### Pull request
 
@@ -907,7 +910,7 @@ Stages are registered from the repository pipeline and move through pending, run
 
 ### Automatic retry
 
-A cloud stage is attempted up to three times. Between attempts, Agent Harness persists the failure, resets the stage to pending, uploads the journal, and retries from durable state. A context cancellation, structured QA repair request, or valid Product/Architecture input request does not consume ordinary retries in the same way. A request from any other stage, or a second request round, is rejected immediately as a contract violation rather than retried as a question.
+A cloud stage is attempted up to three times. Between attempts, Agent Harness persists the failure, resets the stage to pending, uploads the journal, and retries from durable state. In a parallel ticket stage, successful sibling commits are integrated and checkpointed first, so later attempts skip them. A context cancellation, structured QA repair request, or valid Product/Architecture input request does not consume ordinary retries in the same way. A request from any other stage, or a second request round, is rejected immediately as a contract violation rather than retried as a question.
 
 After the final failed attempt, the run pauses.
 
@@ -1032,7 +1035,7 @@ The Inbox button at the top of the dashboard shows the current response count. I
 
 ### Answer a Product or Architecture question
 
-Open the dashboard Inbox and select the request, or reply directly beneath the matching Agent Harness question comment in Linear. UI answers require one response per question and accept either a listed choice or the free-text alternative. A Linear reply is treated as one complete free-text response bundle. The first accepted response wins across all channels, is recorded with its actor and channel, moves the Linear issue from Needs Input to In Progress, and automatically queues a fresh sandbox that restores the journal. Answers accepted through the web UI or another non-Linear channel such as Slack are also written to one marker-backed Linear comment. Linear-thread answers are not copied because the original reply is already the system-of-record comment.
+Open the dashboard Inbox and select the request, respond in the Linear AgentSession chat, or reply directly beneath the matching Agent Harness question comment in Linear. The complete question and its choices appear in both Linear surfaces. UI answers require one response per question and accept either a listed choice or the free-text alternative. A Linear chat or thread reply is treated as one complete free-text response bundle. The first accepted response wins across all channels, is recorded with its actor and channel, moves the Linear issue from Needs Input to In Progress, and automatically queues a fresh sandbox that restores the journal. Answers accepted through the web UI or another non-Linear channel such as Slack are also written to one marker-backed Linear comment. Linear-origin answers are not copied because the original prompt or reply is already visible in Linear.
 
 Product and Architecture are instructed to inspect the issue and repository first, bundle all material decisions into one round, recommend an option, and avoid asking when a safe reversible assumption is available. Coder, lint, documentation, QA, pull-request, and custom downstream stages cannot wait for a user and must work from their supplied context until a terminal result.
 

@@ -69,6 +69,51 @@ func decodeInputRequestEvent(runID, stage string, raw json.RawMessage) (model.In
 	return request, nil
 }
 
+func inputRequestEventPayload(raw json.RawMessage, requestID string) json.RawMessage {
+	value := map[string]any{}
+	if json.Unmarshal(raw, &value) != nil {
+		return raw
+	}
+	value["request_id"] = requestID
+	updated, err := json.Marshal(value)
+	if err != nil {
+		return raw
+	}
+	return updated
+}
+
+func inputRequestID(raw json.RawMessage) string {
+	var value struct {
+		RequestID string `json:"request_id"`
+	}
+	_ = json.Unmarshal(raw, &value)
+	return strings.TrimSpace(value.RequestID)
+}
+
+func renderLinearAgentInputRequest(request model.InputRequest) string {
+	lines := []string{"### Input needed by `" + request.Stage + "`", "", request.Summary, ""}
+	for index, question := range request.Questions {
+		lines = append(lines, fmt.Sprintf("**%d. %s**", index+1, question.Prompt))
+		if question.Why != "" {
+			lines = append(lines, question.Why)
+		}
+		for _, option := range question.Options {
+			label := option.Label
+			if option.Recommended {
+				label += " (recommended)"
+			}
+			detail := "- **" + label + "**"
+			if option.Description != "" {
+				detail += " — " + option.Description
+			}
+			lines = append(lines, detail)
+		}
+		lines = append(lines, "")
+	}
+	lines = append(lines, "Reply in this Agent Session with answers for all questions. A free-form response is welcome; the checkpointed run will resume automatically.")
+	return strings.Join(lines, "\n")
+}
+
 func (s *Server) listInputRequests(w http.ResponseWriter, r *http.Request) {
 	values, err := s.store.ListInputRequests(r.Context(), model.InputRequestFilter{
 		RunID: r.URL.Query().Get("run_id"), Status: r.URL.Query().Get("status"), Limit: queryInt(r, "limit", 100),

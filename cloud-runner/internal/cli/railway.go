@@ -195,12 +195,12 @@ func railwayUpgradeCommands(version string) []string {
 		// Railway's sandbox base already includes gh. Reinstalling it can fail when dpkg
 		// tries to create a backup hard link across overlay filesystem boundaries.
 		"apt-get update && apt-get install -y --no-install-recommends bash build-essential ca-certificates chromium curl git jq make openssh-client procps python3 ripgrep",
-		"curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource.sh && bash /tmp/nodesource.sh && apt-get install -y --no-install-recommends nodejs && rm -rf /var/lib/apt/lists/* /tmp/nodesource.sh",
+		"curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource.sh && bash /tmp/nodesource.sh && apt-get install -y --no-install-recommends nodejs && rm -rf /var/lib/apt/lists/* /tmp/nodesource.sh",
 		"curl -fsSL " + base + "/agent-harness-linux-amd64 -o /usr/local/bin/agent-harness && chmod 0755 /usr/local/bin/agent-harness",
 		"mkdir -p /opt/agent-harness && curl -fsSL " + base + "/harnessctl.py -o /opt/agent-harness/harnessctl.py && chmod 0755 /opt/agent-harness/harnessctl.py",
-		"npm install --global @openai/codex@0.144.1",
+		"npm install --global @openai/codex@0.144.1 pnpm@11.21.0 @playwright/test@1.62.1",
 		"mkdir -p /opt/agent-harness/bin && cp /usr/local/bin/agent-harness /opt/agent-harness/bin/agent-harness && sha256sum /opt/agent-harness/bin/agent-harness | awk '{print $1}' >/opt/agent-harness/bin/agent-harness.sha256",
-		"printf '%s\\n' '{\"schema\":1,\"kind\":\"agent-harness-toolchain\",\"codex\":\"0.144.1\",\"node\":\"22\"}' >/opt/agent-harness/runtime-manifest.json",
+		"printf '%s\\n' '{\"schema\":1,\"kind\":\"agent-harness-toolchain\",\"codex\":\"0.144.1\",\"node\":\"24\",\"pnpm\":\"11.21.0\",\"playwright\":\"1.62.1\",\"chromium\":\"/usr/bin/chromium\"}' >/opt/agent-harness/runtime-manifest.json",
 	}
 }
 

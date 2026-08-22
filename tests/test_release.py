@@ -2,6 +2,7 @@ import importlib.util
 from argparse import Namespace
 from pathlib import Path
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,6 +13,22 @@ SPEC.loader.exec_module(release)
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_railway_env_preserves_explicit_telemetry(self):
+        with mock.patch.dict(
+            release.os.environ,
+            {
+                "RAILWAY_CALLER": "skill:use-railway@test",
+                "RAILWAY_AGENT_SESSION": "session-test",
+            },
+        ):
+            self.assertEqual(
+                release.railway_env(),
+                {
+                    "RAILWAY_CALLER": "skill:use-railway@test",
+                    "RAILWAY_AGENT_SESSION": "session-test",
+                },
+            )
+
     def test_release_candidate_version_maps_to_artifacts(self):
         version = release.validate_version("v0.1.0-rc.27")
 
