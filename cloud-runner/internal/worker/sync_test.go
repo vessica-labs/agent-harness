@@ -36,3 +36,22 @@ func TestTicketProgressRequestReplaysTicketIdentities(t *testing.T) {
 		t.Fatalf("ticket progress missing from atomic sync: %+v", request)
 	}
 }
+
+func TestNormalizeTicketStatePrefersAuthoritativeCompletion(t *testing.T) {
+	values := []map[string]any{
+		{"key": "AGE-5-Q01", "status": "completed", "commit": "abc123"},
+		{"key": "AGE-5-Q02", "status": "running"},
+		{"key": "AGE-5-Q01", "status": "pending"},
+		{"key": "AGE-5-Q02", "status": "pending"},
+	}
+	result := normalizeTicketState(values)
+	if len(result) != 2 {
+		t.Fatalf("normalized ticket count = %d, want 2: %+v", len(result), result)
+	}
+	if result[0]["status"] != "completed" || result[0]["commit"] != "abc123" {
+		t.Fatalf("completed ticket was replaced by stale pending duplicate: %+v", result[0])
+	}
+	if result[1]["status"] != "running" {
+		t.Fatalf("running ticket was replaced by stale pending duplicate: %+v", result[1])
+	}
+}

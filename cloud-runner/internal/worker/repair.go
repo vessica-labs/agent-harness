@@ -142,9 +142,27 @@ func (r *Runner) handleRepair(ctx context.Context, stage Stage, request *repairR
 	if err := json.Unmarshal(stateBody, &state); err != nil {
 		return 0, err
 	}
-	existing, _ := state["tickets"].([]any)
+	rawExisting, _ := state["tickets"].([]any)
+	existingMaps := make([]map[string]any, 0, len(rawExisting))
+	for _, value := range rawExisting {
+		if item, ok := value.(map[string]any); ok {
+			existingMaps = append(existingMaps, item)
+		}
+	}
+	existingMaps = normalizeTicketState(existingMaps)
+	existing := make([]any, 0, len(existingMaps)+len(output.NewTickets))
+	existingKeys := map[string]bool{}
+	for _, item := range existingMaps {
+		existing = append(existing, item)
+		if key, _ := item["key"].(string); key != "" {
+			existingKeys[key] = true
+		}
+	}
 	for _, item := range output.NewTickets {
-		existing = append(existing, map[string]any{"key": item.Key, "depends_on": item.DependsOn, "status": "pending"})
+		if !existingKeys[item.Key] {
+			existing = append(existing, map[string]any{"key": item.Key, "depends_on": item.DependsOn, "status": "pending"})
+			existingKeys[item.Key] = true
+		}
 	}
 	patch := map[string]any{"tickets": existing, "repair_cycles": map[string]int{stage.ID: counts[stage.ID]}}
 	if _, err := r.harness(ctx, r.repo, "checkpoint", "--run-dir", r.runDir, "--patch-json", string(mustJSON(patch)), "--event", "qa.requeue"); err != nil {

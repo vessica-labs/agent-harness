@@ -121,6 +121,7 @@ func ticketProgressRequest(runDir, stageID string) (map[string]any, error) {
 	if err := json.Unmarshal(body, &state); err != nil {
 		return nil, err
 	}
+	state.Tickets = normalizeTicketState(state.Tickets)
 	planBody, err := os.ReadFile(filepath.Join(runDir, "artifacts", "ticket-plan.json"))
 	if err != nil {
 		return nil, err
@@ -130,6 +131,46 @@ func ticketProgressRequest(runDir, stageID string) (map[string]any, error) {
 		return nil, err
 	}
 	return map[string]any{"stage": stageID, "tickets": plan, "ticket_progress": state.Tickets}, nil
+}
+
+func normalizeTicketState(values []map[string]any) []map[string]any {
+	order := make([]string, 0, len(values))
+	selected := map[string]map[string]any{}
+	for _, value := range values {
+		key, _ := value["key"].(string)
+		if key == "" {
+			continue
+		}
+		current, exists := selected[key]
+		if !exists {
+			order = append(order, key)
+			selected[key] = value
+			continue
+		}
+		if ticketStateRank(value["status"]) > ticketStateRank(current["status"]) {
+			selected[key] = value
+		}
+	}
+	result := make([]map[string]any, 0, len(order))
+	for _, key := range order {
+		result = append(result, selected[key])
+	}
+	return result
+}
+
+func ticketStateRank(value any) int {
+	switch value {
+	case "completed":
+		return 4
+	case "running":
+		return 3
+	case "failed":
+		return 2
+	case "pending":
+		return 1
+	default:
+		return 0
+	}
 }
 
 func (r *Runner) syncStage(ctx context.Context, stage Stage) error {
