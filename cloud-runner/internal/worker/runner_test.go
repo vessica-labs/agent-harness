@@ -127,6 +127,18 @@ func TestFailedTicketEvidenceIsPreservedForRecovery(t *testing.T) {
 	}
 }
 
+func TestAgentDeclaredTicketBlockerIsNonRetryable(t *testing.T) {
+	blocker := &ticketBlockedError{ticketKey: "AGE-1-T05", blocker: "upstream schema broke the shared fixture"}
+	wrapped := errors.Join(errors.New("coordinator stopped"), blocker)
+	var detected *ticketBlockedError
+	if !errors.As(wrapped, &detected) {
+		t.Fatal("agent-declared blocker was not preserved through wrapped errors")
+	}
+	if got, want := detected.Error(), "ticket AGE-1-T05 blocked: upstream schema broke the shared fixture"; got != want {
+		t.Fatalf("blocker error = %q, want %q", got, want)
+	}
+}
+
 func TestFailedTicketStateExposesKeysAndBlockersForRetry(t *testing.T) {
 	runDir := t.TempDir()
 	state := `{"tickets":[{"key":"T02","status":"failed","blocker":"integration check failed"},{"key":"T01","status":"completed"},{"key":"T03","status":"failed","blocker":"missing owned path"}]}`
@@ -140,6 +152,22 @@ func TestFailedTicketStateExposesKeysAndBlockersForRetry(t *testing.T) {
 	}
 	if blockers["T02"] != "integration check failed" || blockers["T03"] != "missing owned path" {
 		t.Fatalf("blockers = %v", blockers)
+	}
+}
+
+func TestRepeatedIdenticalTicketBlockersAreDetected(t *testing.T) {
+	failed := []string{"T02", "T03"}
+	blockers := map[string]string{"T02": "integration check failed", "T03": "missing owned path"}
+	if !sameFailedTicketState(failed, blockers, append([]string(nil), failed...), cloneStringMap(blockers)) {
+		t.Fatal("identical ticket failure state was not detected")
+	}
+	changed := cloneStringMap(blockers)
+	changed["T03"] = "different failure"
+	if sameFailedTicketState(failed, blockers, failed, changed) {
+		t.Fatal("changed blocker was treated as identical")
+	}
+	if sameFailedTicketState(failed, blockers, []string{"T02"}, map[string]string{"T02": blockers["T02"]}) {
+		t.Fatal("changed failed-ticket set was treated as identical")
 	}
 }
 

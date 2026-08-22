@@ -558,24 +558,45 @@ func (r *Runner) runSingleStage(ctx context.Context, stage Stage) error {
 func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 	const maxTicketAttempts = 3
 	var last error
+	attempts := 0
+	var previousFailed []string
+	var previousBlockers map[string]string
 	for attempt := 1; attempt <= maxTicketAttempts; attempt++ {
+		attempts = attempt
 		last = r.runTicketStageAttempt(ctx, stage)
 		if last == nil {
 			return nil
 		}
 		var input *inputRequestSignal
 		var policy *inputPolicyError
+		var blocked *ticketBlockedError
 		if errors.As(last, &input) || errors.As(last, &policy) || ctx.Err() != nil || attempt == maxTicketAttempts {
 			break
 		}
 		failed, blockers := r.failedTicketState()
+		if errors.As(last, &blocked) {
+			_ = r.event(context.WithoutCancel(ctx), "ticket.retry_stopped", "warning", "Agent-declared blocker will not be retried", stage.ID,
+				map[string]any{"attempt": attempt, "tickets": failed, "blockers": blockers, "reason": "agent_declared_blocker", "error": last.Error()})
+			break
+		}
+		if attempt > 1 && len(blockers) > 0 && sameFailedTicketState(previousFailed, previousBlockers, failed, blockers) {
+			_ = r.event(context.WithoutCancel(ctx), "ticket.retry_stopped", "warning", "Identical ticket blockers repeated; stopping before another unchanged attempt", stage.ID,
+				map[string]any{"attempt": attempt, "tickets": failed, "blockers": blockers, "reason": "repeated_identical_blocker", "error": last.Error()})
+			break
+		}
+		previousFailed = append([]string(nil), failed...)
+		previousBlockers = cloneStringMap(blockers)
 		_ = r.event(context.WithoutCancel(ctx), "ticket.retrying", "warning", "Failed tickets will be retried from durable ticket checkpoints", stage.ID,
 			map[string]any{"attempt": attempt, "max_attempts": maxTicketAttempts, "tickets": failed, "blockers": blockers, "error": last.Error()})
 		checkpointCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 		_ = r.checkpoint(checkpointCtx)
 		cancel()
 	}
-	return fmt.Errorf("ticket stage %s still has failed tickets after %d attempts: %w", stage.ID, maxTicketAttempts, last)
+	var blocked *ticketBlockedError
+	if errors.As(last, &blocked) {
+		return last
+	}
+	return fmt.Errorf("ticket stage %s still has failed tickets after %d attempts: %w", stage.ID, attempts, last)
 }
 
 func (r *Runner) runTicketStageAttempt(ctx context.Context, stage Stage) error {
@@ -671,8 +692,13 @@ func (r *Runner) runTicketStageAttempt(ctx context.Context, stage Stage) error {
 				}
 				if output.Status != "completed" || output.Commit == "" {
 					current.blocker = ticketBlockerText(output.Blocker)
-					if current.blocker != "" {
-						current.err = fmt.Errorf("ticket %s blocked: %s", current.ticket.Key, current.blocker)
+					if output.Status == "blocked" {
+						if current.blocker == "" {
+							current.blocker = "agent reported blocked without blocker details"
+						}
+						current.err = &ticketBlockedError{ticketKey: current.ticket.Key, blocker: current.blocker}
+					} else if current.blocker != "" {
+						current.err = fmt.Errorf("ticket %s failed: %s", current.ticket.Key, current.blocker)
 					} else {
 						current.err = fmt.Errorf("ticket %s did not produce a completed commit", current.ticket.Key)
 					}
@@ -804,6 +830,31 @@ func (r *Runner) failedTicketState() ([]string, map[string]string) {
 	return keys, blockers
 }
 
+func sameFailedTicketState(leftKeys []string, leftBlockers map[string]string, rightKeys []string, rightBlockers map[string]string) bool {
+	if len(leftKeys) != len(rightKeys) || len(leftBlockers) != len(rightBlockers) {
+		return false
+	}
+	for index := range leftKeys {
+		if leftKeys[index] != rightKeys[index] {
+			return false
+		}
+	}
+	for key, value := range leftBlockers {
+		if rightBlockers[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	clone := make(map[string]string, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
+}
+
 func ticketBlockerText(value any) string {
 	if value == nil {
 		return ""
@@ -816,6 +867,15 @@ func ticketBlockerText(value any) string {
 		return strings.TrimSpace(fmt.Sprint(value))
 	}
 	return string(body)
+}
+
+type ticketBlockedError struct {
+	ticketKey string
+	blocker   string
+}
+
+func (e *ticketBlockedError) Error() string {
+	return fmt.Sprintf("ticket %s blocked: %s", e.ticketKey, e.blocker)
 }
 
 func preserveTicketResult(runDir string, stage Stage, ticketKey string, result []byte) (string, error) {
