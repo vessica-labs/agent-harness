@@ -698,7 +698,8 @@ WHERE id=$1 AND state='paused'`, id, featureRequest)
 
 func (p *Postgres) ResumeRun(ctx context.Context, id string) error {
 	tag, err := p.pool.Exec(ctx, `UPDATE runs SET state='queued', queue_reason='', error='',
-lease_owner='', lease_expires_at=NULL, updated_at=now() WHERE id=$1 AND state='paused'`, id)
+	lease_owner='', lease_expires_at=NULL, completed_at=NULL, updated_at=now() WHERE id=$1
+	AND (state='paused' OR (state='cancelled' AND attempt=0 AND queue_reason LIKE 'dependencies_pending:%'))`, id)
 	if err == nil && tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}

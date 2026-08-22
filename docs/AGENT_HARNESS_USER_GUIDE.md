@@ -904,6 +904,7 @@ Agent Harness resolves only unambiguous integration conflicts automatically. A c
 | `cancelled` | An operator explicitly cancelled a non-terminal run |
 
 A completed or cancelled run cannot be downgraded by a late worker event or recovery race.
+An operator may explicitly resume a cancelled run only when it never started and was still waiting on a Linear dependency; this clears the terminal timestamp and queues the existing source claim after the dependency is verified as complete.
 
 ### Stage states
 
@@ -1916,6 +1917,8 @@ Inspect `queue_reason` with `cloud runs show` or the dashboard:
 - `auth_slot_unavailable`: add or recover independent Codex login slots.
 - `railway_quota`: free Sandbox capacity or increase Railway quota.
 - `sandbox_lost`: the scheduler is waiting to restore the run in a new sandbox.
+
+If a never-started dependency waiter was cancelled before its blocker reached Done, re-check the dependency and run `agent-harness cloud runs resume <run-id>`. Agent Harness revives only attempt-zero runs whose persisted queue reason is `dependencies_pending`; ordinary cancellations and completed runs remain terminal.
 
 ### A run pauses
 
