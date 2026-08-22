@@ -27,7 +27,7 @@ Read `references/orchestration.md`, `references/provider-contracts.md`, and `ref
 - Give every agent access to its repository worktree plus only the input files declared for that stage. Required missing files block the stage before delegation.
 - Run every `before` hook, the stage, then every `after` hook. On failure, run `on_failure`, checkpoint evidence, update tracker comments, pause, and release the lease.
 - Delegate single stages to a subagent when available. Give it the role definition, declared input files, relevant repository guidance, repository worktree, and exact result file. Validate its JSON with the `result.agent` contract before accepting it.
-- For `ticket_parallel`, materialize the declared generated input for every ticket, calculate dependency waves with `harnessctl.py waves`, and spawn at most `stage.parallelism` isolated ticket agents. Never assign overlapping owned paths in one wave.
+- For `ticket_parallel`, materialize the declared generated input and isolated worktree for every ready ticket, calculate dependency waves with `harnessctl.py waves`, and use one top-level Codex coordinator to delegate at most `stage.parallelism` native coder subagents. Never assign overlapping owned paths in one wave.
 - After a valid result message, materialize every declared output by extracting its `from_result` field into its run-relative file. A stage is incomplete until its result and all outputs exist.
 - Checkpoint locally before each external write and clear `external.sync_pending` only after the exact mutation succeeds. A replay must search for stable markers before creating anything.
 - Refresh parent and affected child canonical comments after every stage transition. Do not mutate provider workflow status fields.

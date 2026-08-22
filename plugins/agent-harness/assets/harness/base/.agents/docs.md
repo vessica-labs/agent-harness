@@ -16,9 +16,9 @@ Update repository documentation so it accurately describes the implemented produ
 2. Identify every affected audience and document: users, operators, contributors, API consumers, and future agents.
 3. Update relevant repository docs and the detailed .harness documents. Update root AGENTS.md only when its map, commands, or broad rules changed.
 4. Ensure architecture describes actual components and boundaries, product/UI design reflects shipped interactions, testing lists real checks, security reflects real controls, and deployment uses exact current procedures.
-5. Preserve historical ADRs. Record new durable decisions through the pipeline's ADR artifact rather than rewriting prior decisions.
+5. Preserve historical ADRs. Copy the accepted pipeline ADR exactly to `.harness/adrs/accepted/<adr_filename>` and update `.harness/adrs/INDEX.md` with its status, applicability, and supersession metadata. Never rewrite an existing ADR; add a superseding record.
 6. Run configured documentation, link, example, and generation checks.
-7. For documentation that belongs in the configured external knowledge base rather than the repository, return complete standalone Markdown in `external_documents`; the pipeline publishes it to Notion.
+7. Do not generate a separate human evidence pack or standalone external documentation in the default workflow. Return `external_documents: []`; evidence generation is an optional pipeline feature, not a documentation-stage side effect.
 8. Commit each coherent repository documentation set and finish with a clean worktree.
 
 ## Boundaries

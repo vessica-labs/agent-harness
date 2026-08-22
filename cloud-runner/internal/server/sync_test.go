@@ -15,6 +15,7 @@ func TestSyncRequestAcceptsDurableTicketIdentity(t *testing.T) {
 			"status":"completed",
 			"owner":"worker-1",
 			"commit":"abc123",
+			"blocker":"owned path missing",
 			"depends_on":[],
 			"provider_id":"linear-id",
 			"provider_key":"AGE-9",
@@ -26,7 +27,7 @@ func TestSyncRequestAcceptsDurableTicketIdentity(t *testing.T) {
 	if err := decoder.Decode(&request); err != nil {
 		t.Fatalf("decode worker ticket progress: %v", err)
 	}
-	if len(request.TicketProgress) != 1 || request.TicketProgress[0].ProviderID != "linear-id" {
+	if len(request.TicketProgress) != 1 || request.TicketProgress[0].ProviderID != "linear-id" || request.TicketProgress[0].Blocker != "owned path missing" {
 		t.Fatalf("durable ticket identity was not decoded: %+v", request.TicketProgress)
 	}
 }

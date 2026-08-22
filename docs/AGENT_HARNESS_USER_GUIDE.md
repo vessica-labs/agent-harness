@@ -2,9 +2,9 @@
 title: Agent Harness User Guide
 description: Install, configure, run, customize, monitor, and recover Agent Harness issue-to-pull-request workflows.
 product: Agent Harness
-product_version: v0.1.0-rc.33
+product_version: v0.1.0-rc.36
 release_status: Release candidate
-last_verified: 2026-08-21
+last_verified: 2026-08-22
 ---
 
 # Agent Harness User Guide
@@ -13,7 +13,7 @@ Agent Harness is an editable, issue-to-pull-request software-development workflo
 
 This guide covers the complete user-facing Agent Harness platform: the Codex plugin, repository harness, local execution, Railway cloud runner, command-line interface, localhost dashboard, Linear, GitHub and Notion integrations, workflow customization, security, and recovery.
 
-> **Release status:** Agent Harness is currently a release candidate. These instructions were verified against `v0.1.0-rc.33`. Jira integration is coming soon and is not part of the supported workflow documented here.
+> **Release status:** Agent Harness is currently a release candidate. These instructions were verified against `v0.1.0-rc.36`. Jira integration is coming soon and is not part of the supported workflow documented here.
 
 ## Quickstart
 
@@ -39,7 +39,7 @@ Download Agent Harness for Apple Silicon macOS:
 ```sh
 mkdir -p "$HOME/.local/bin"
 curl -fL \
-  https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.33/agent-harness-darwin-arm64 \
+  https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.36/agent-harness-darwin-arm64 \
   -o "$HOME/.local/bin/agent-harness"
 chmod 0755 "$HOME/.local/bin/agent-harness"
 export PATH="$HOME/.local/bin:$PATH"
@@ -304,7 +304,7 @@ Cloud repository registration and lifecycle synchronization idempotently install
 | Railway CLI | Control-plane deployment and sandbox management |
 | Python 3 | Deterministic repository helpers and architecture lint |
 
-The cloud worker checkpoint includes Git, GitHub CLI, Codex CLI, Railway CLI, Python, Node.js 24, pnpm 11, Playwright, and Chromium. Playwright's CLI and browser runtime are warm in every sandbox, while target repositories still declare `@playwright/test` and other libraries in their own package manifests and lockfiles. A target repository may still require another language runtime, services, or project-specific dependencies.
+The cloud worker checkpoint includes Git, GitHub CLI, ripgrep, jq, curl, Make, Codex CLI, Railway CLI, Python 3 with pip and venv, Node.js 24 with npm and pnpm 11, Playwright, Chromium, zip/unzip, file, and patch. The checkpoint builder executes every advertised command, verifies pip and venv support, and records the resolved binary paths in `/opt/agent-harness/runtime-manifest.json` before capture. A failed smoke check prevents creation of a checkpoint that overstates its runtime. Playwright's CLI and browser runtime are warm in every sandbox, while target repositories still declare `@playwright/test` and other libraries in their own package manifests and lockfiles. A target repository may still require another language runtime, services, or project-specific dependencies.
 
 ### Account permissions
 
@@ -344,13 +344,13 @@ GitHub, Linear, Notion, and Codex credentials are scoped to a control-plane inst
 
 ### Install a release binary
 
-Release assets are published for macOS and Linux on AMD64 and ARM64. This example installs `v0.1.0-rc.33` on Apple Silicon macOS:
+Release assets are published for macOS and Linux on AMD64 and ARM64. This example installs `v0.1.0-rc.36` on Apple Silicon macOS:
 
 ```sh
 mkdir -p "$HOME/.local/bin"
 
 curl -fL \
-  https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.33/agent-harness-darwin-arm64 \
+  https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.36/agent-harness-darwin-arm64 \
   -o "$HOME/.local/bin/agent-harness"
 
 chmod 0755 "$HOME/.local/bin/agent-harness"
@@ -404,7 +404,7 @@ make release
 
 These commands read the RC tags from `origin` and automatically select the next
 number on the newest release-candidate version line. For example, an existing
-`v0.1.0-rc.33` produces `v0.1.0-rc.34`. Pass an explicit version to override the
+`v0.1.0-rc.36` produces `v0.1.0-rc.37`. Pass an explicit version to override the
 selection or start a new version line:
 
 ```sh
@@ -433,7 +433,7 @@ export RAILWAY_API_TOKEN='<enter privately>'
 agent-harness railway upgrade \
   --project <railway-project-id> \
   --environment production \
-  --version v0.1.0-rc.33
+  --version v0.1.0-rc.36
 
 agent-harness railway deploy \
   --project <railway-project-id> \
@@ -572,7 +572,7 @@ Create the worker checkpoint, configure the control plane, and deploy:
 agent-harness railway upgrade \
   --project <project-id> \
   --environment production \
-  --version v0.1.0-rc.33
+  --version v0.1.0-rc.36
 
 agent-harness railway init \
   --project <project-id> \
@@ -580,7 +580,7 @@ agent-harness railway init \
   --service control-plane \
   --postgres-service Postgres \
   --url https://<control-plane-domain> \
-  --checkpoint agent-harness-worker-0.1.0-rc.33 \
+  --checkpoint agent-harness-worker-0.1.0-rc.36 \
   --profile <repository-profile> \
   --preview-url https://<preview-edge-domain>
 
@@ -793,7 +793,7 @@ The product agent converts the feature request and repository evidence into:
 - Risks, assumptions, and constraints.
 - A dependency-aware logical ticket plan.
 
-Each ticket includes an objective, acceptance criteria, owned paths, dependencies, and focused verification commands. Agent Harness validates the ticket graph before accepting it.
+Each ticket includes an objective, acceptance criteria, owned paths, dependencies, and tiered verification. `iteration_checks` are the smallest useful feedback loop while coding, `ticket_gate` is the ticket-level proof run once before handoff, and `pipeline_gates` are repository-wide or browser checks assigned to lint or QA. Agent Harness validates graph safety, requirement/acceptance coverage, path ownership, and verification ownership before accepting the plan. Legacy tickets with `focused_checks` remain valid during upgrades.
 
 The PRD is published to Notion and the ticket plan is synchronized as Linear child issues.
 
@@ -810,35 +810,36 @@ The architecture agent creates an ADR covering:
 - Deployment and compatibility.
 - Consequences, alternatives, tradeoffs, and risks.
 
-It may add ticket dependencies and owned-path constraints. Agent Harness applies those constraints to the logical ticket plan, rejects unknown ticket references, and revalidates the graph and path ownership before coding.
+It may add ticket dependencies, owned-path constraints, tiered verification requirements, and compact implementation constraints. Agent Harness applies them to the logical ticket plan, rejects unknown ticket references, revalidates the graph and path ownership, and generates a ticket-specific context packet before coding.
 
-Applicable ADRs are materialized into the run worktree under `.harness/adrs/`, and the run ADR is published to Notion.
+The architect reads `.harness/adrs/INDEX.md` first and lists only accepted, non-superseded ADRs applicable to the affected paths/components. Durable ADRs include explicit applicability and supersession metadata. Runtime ADR context is materialized under `.harness/adrs/`, and the run ADR is published to Notion.
 
 ### Coder
 
 The coder stage uses `ticket_parallel` mode. Agent Harness:
 
-1. Materializes one declared JSON input per logical ticket.
+1. Materializes one compact context packet per logical ticket, containing the ticket, mapped requirement and acceptance excerpts, architecture constraints, applicable ADR filenames, and pointers to full sources.
 2. Computes dependency waves.
 3. Prevents overlapping owned paths in the same wave.
 4. Creates an isolated Git worktree per runnable ticket.
-5. Runs no more than the stage's declared parallelism.
+5. Starts one top-level Codex coordinator for the ready wave.
+6. Has that coordinator delegate one native coder subagent per ticket, with no more than the stage's declared parallelism active at once.
 
-Each coder invocation owns exactly one ticket. The coder follows red-green-refactor TDD, runs focused checks, commits a scoped change locally, returns its exact JSON result, and leaves a clean worktree. Coder agents do not push.
+Each coder subagent owns exactly one ticket. The coordinator does not implement ticket code; it supplies the isolated assignment, waits for every subagent, and reports the wave result. Verification is risk-proportionate: bugs and new behavioral contracts use a failing test first when practical, while documentation, configuration, generated files, and behavior-neutral refactors may use regression coverage or deterministic checks. The coder runs narrow iteration checks only as needed, does not repeat an unchanged passing command, and runs the ticket gate once before handoff. Repository-wide and browser gates remain assigned to lint or QA. Each coder commits a scoped change locally, returns its exact verification evidence, and leaves a clean worktree. Neither the coordinator nor coder subagents push.
 
 Tickets that add or update libraries own the affected package manifests and package-manager lockfile. Coders use the repository package manager and commit both manifest and lockfile changes; undeclared global imports, hand-written type shims, and lockfile-only dependency edits are rejected by the role contract.
 
-The orchestrator integrates successful commits into the run branch in stable logical-key order, reruns focused checks, synchronizes ticket progress, pushes the durable branch, and removes disposable ticket worktrees. If a sibling in the same dependency wave fails, completed siblings are integrated and checkpointed before the stage retries, so recovery reruns only unfinished tickets.
+The orchestrator integrates successful commits into the run branch in stable logical-key order, synchronizes ticket progress, pushes the durable branch, and removes disposable ticket worktrees. If a sibling fails, completed siblings are integrated and checkpointed first. The worker retries only failed tickets and emits their keys and blockers; an agent-declared blocker is terminal, an identical blocker repeated on attempt two stops before a third unchanged run, and other transient failures may use up to three attempts. It does not wrap the whole coder stage in generic stage retries. Execution failures remain In Progress in Linear; Needs Input is reserved for a durable Product or Architecture question that appears in the Inbox.
 
 ### Lint
 
-The lint stage runs repository lint and build commands, repairs deterministic failures when safely contained, and creates scoped repair commits. It also runs the repository's architecture-lint script.
+The lint stage reads every ticket's lint-owned `pipeline_gates`, deduplicates identical commands, and runs them on the integrated branch alongside the repository lint, build, and architecture checks. It repairs deterministic failures when safely contained, creates scoped repair commits, and reruns only gates affected by a repair or previously failing.
 
 After the agent finishes, the pipeline's `architecture-lint` after-hook runs the deterministic check again. That hook result—not the agent's narrative—is the authoritative architecture gate.
 
 ### QA
 
-The QA agent verifies every PRD acceptance criterion and produces criterion-level evidence. For user-facing behavior it uses Playwright and records the route, action, expected result, actual result, and evidence.
+The QA agent reads every ticket's QA-owned `pipeline_gates`, deduplicates identical commands, verifies every PRD acceptance criterion, and produces criterion-level evidence. For user-facing behavior it uses Playwright and records the route, action, expected result, actual result, and evidence.
 
 Safe, contained defects may be repaired and committed during QA. If the required change is broader, QA emits structured new tickets. A matching repair loop can return execution to coder, then lint and QA, up to the configured maximum.
 
@@ -879,9 +880,9 @@ Stable child markers and persisted provider IDs allow recovery to update the sam
 
 ### Dependency waves
 
-Tickets run only when all declared dependencies are complete. Within a wave, Agent Harness enforces the coder stage's parallelism and rejects overlapping owned paths. Later waves start from the updated integration head.
+Tickets run only when all declared dependencies are complete. Within a wave, one Codex coordinator enforces the coder stage's native-subagent parallelism and Agent Harness rejects overlapping owned paths. Later waves start from the updated integration head.
 
-The default coder parallelism is three. This is separate from the default maximum of three simultaneously active source-issue runs.
+The default coder-subagent parallelism is three. This is separate from the default maximum of three simultaneously active source-issue runs, each of which owns one Railway sandbox, one top-level Codex execution lane, and one independently leased Codex auth slot.
 
 ### Branches and commits
 
@@ -910,7 +911,7 @@ Stages are registered from the repository pipeline and move through pending, run
 
 ### Automatic retry
 
-A cloud stage is attempted up to three times. Between attempts, Agent Harness persists the failure, resets the stage to pending, uploads the journal, and retries from durable state. In a parallel ticket stage, successful sibling commits are integrated and checkpointed first, so later attempts skip them. If an operator repairs the isolated run branch before resuming, the worker can adopt a completed agent result whose commit is already an ancestor of the run branch instead of failing on an empty cherry-pick. A context cancellation, structured QA repair request, or valid Product/Architecture input request does not consume ordinary retries in the same way. A request from any other stage, or a second request round, is rejected immediately as a contract violation rather than retried as a question.
+A single cloud stage is attempted up to three times. Between attempts, Agent Harness persists the failure, resets the stage to pending, uploads the journal, and retries from durable state. A ticket-parallel stage instead retries only failed logical tickets from durable checkpoints while retaining successful siblings. An explicit Coder `blocked` result is not retried. If the same failed tickets report the same non-empty blockers on the second attempt, the worker stops before a third unchanged attempt; other transient failures may use up to three attempts. If an operator repairs the isolated run branch before resuming, the worker can adopt a completed result whose commit is already an ancestor of the run branch. A context cancellation, structured QA repair request, or valid Product/Architecture input request does not consume ordinary retries in the same way. A request from any other stage, or a second request round, is rejected immediately as a contract violation rather than retried as a question.
 
 After the final failed attempt, the run pauses.
 
@@ -1142,7 +1143,9 @@ The root guide gives every agent the project purpose, repository map, sources of
 
 ### `ARCHITECTURE.md`
 
-Documents system context, components, dependency rules, critical flows, external interfaces, invariants, constraints, and the `.harness/adrs/` decision-record directory.
+Documents system context, components, dependency rules, critical flows, external interfaces, invariants, constraints, and the indexed `.harness/adrs/accepted/` decision record. The documentation stage updates current-state architecture and the ADR index after QA, and PR preparation cannot proceed when that stage blocks.
+
+The default documentation stage does not generate a separate human evidence pack or standalone external documentation. That is reserved for a future optional pipeline feature so projects that do not need regulatory evidence do not pay its context and generation cost.
 
 ### `DESIGN.md`
 
@@ -1178,9 +1181,9 @@ Safe customization may add repository-specific expectations, but should not tran
 
 - Product must return stable requirements, acceptance criteria, and a valid ticket graph.
 - Architect may constrain known tickets but may not silently invent implementation work outside the plan.
-- Coder owns one ticket, follows TDD, commits locally, and does not push.
-- Lint must report every configured deterministic gate.
-- QA must report every acceptance criterion and emit structured repair tickets when necessary.
+- Coder owns one ticket, uses test-first development when it adds signal, runs its narrow ticket-owned verification, commits locally, and does not push.
+- Lint must deduplicate and report every configured lint-owned pipeline gate.
+- QA must deduplicate QA-owned pipeline gates, report every acceptance criterion, and emit structured repair tickets when necessary.
 - PR prepares delivery content; the orchestrator owns credentials, push, and canonical PR creation.
 - Documentation is optional and must be explicitly added to the pipeline.
 
@@ -1219,7 +1222,7 @@ The pipeline is a declarative DAG. A stage declares:
 ### Stage modes
 
 - `single` runs one agent invocation.
-- `ticket_parallel` materializes one invocation per ticket and executes dependency waves up to the declared parallelism.
+- `ticket_parallel` materializes one assignment and isolated worktree per ticket, then invokes one Codex coordinator per dependency-ready wave. The coordinator uses native coder subagents up to the declared parallelism.
 
 Parallelism must be between 1 and 16. Dependencies must reference known stages and form a valid DAG.
 
@@ -1436,7 +1439,7 @@ The default maximum is three active source runs. When that limit is reached, add
 
 ### Heartbeats
 
-The worker renews its control-plane lease while it runs. The scheduler also checks sandbox health. If a sandbox disappears, the run is requeued with `sandbox_lost`, its uncertain auth slots are quarantined, and a future sandbox restores the journal and branch.
+The worker renews its control-plane lease while it runs. The scheduler also checks sandbox health. If a sandbox disappears, the run is requeued with `sandbox_lost`, its uncertain auth slot is quarantined, and a future sandbox restores the journal and branch.
 
 ### Recovery authority
 
@@ -1506,7 +1509,7 @@ agent-harness cloud logout [--profile NAME]
 
 ```text
 agent-harness cloud auth status
-agent-harness cloud auth codex add [--slots 3] [--verify-parallel 3]
+agent-harness cloud auth codex add [--slots 3]
 agent-harness cloud auth github --manifest-owner OWNER [--name NAME]
 agent-harness cloud auth github upgrade-webhook
 GITHUB_WEBHOOK_SECRET=... agent-harness cloud auth github --app-id ID --private-key-file FILE
@@ -1813,9 +1816,9 @@ Run exactly one control-plane replica. Postgres owns scheduling claims, but the 
 
 Plan four related capacities separately:
 
-1. `HARNESS_MAX_ACTIVE_RUNS`: simultaneous source-issue pipelines.
-2. Codex authentication slots: independent login capacity.
-3. Pipeline `parallelism`: simultaneous tickets inside one run.
+1. `HARNESS_MAX_ACTIVE_RUNS`: simultaneous source-issue pipelines and Railway sandboxes.
+2. Codex authentication slots: independent top-level run capacity; one slot is leased per active source issue.
+3. Pipeline `parallelism`: simultaneous native coder subagents inside one run's coordinator.
 4. `HARNESS_PLAYWRIGHT_WORKERS`: browser workers inside each sandbox.
 
 Railway Sandbox quota is an additional external limit. Runs wait with a visible queue reason rather than silently disappearing.

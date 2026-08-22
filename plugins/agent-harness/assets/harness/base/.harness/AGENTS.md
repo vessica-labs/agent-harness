@@ -31,7 +31,7 @@ If a section does not apply, retain it and state why.
 | Testing | [`.harness/TESTING.md`](.harness/TESTING.md) |
 | Security | [`.harness/SECURITY.md`](.harness/SECURITY.md) |
 | Deployment | [`.harness/DEPLOY.md`](.harness/DEPLOY.md) |
-| Relevant architecture decisions | [`.harness/adrs/`](.harness/adrs/) |
+| Relevant architecture decisions | [`.harness/adrs/INDEX.md`](.harness/adrs/INDEX.md) |
 
 ## Essential Commands
 
@@ -50,11 +50,11 @@ If a section does not apply, retain it and state why.
 
 ## Change Workflow
 
-<!-- Define the required sequence from understanding the task through implementation, verification, and handoff. -->
+<!-- Define the required sequence from understanding the task through implementation, verification, and handoff. Coder agents run ticket-declared iteration checks and the ticket gate. The lint and QA stages own repository-wide and browser/acceptance pipeline gates; do not require every ticket to rerun them. -->
 
 ## Definition of Done
 
-<!-- List the evidence and checks required before an agent may report completion. -->
+<!-- List the evidence and checks required before an agent may report completion. Distinguish a coder ticket's gate from the full pipeline's terminal gates. -->
 
 ## Escalation Conditions
 

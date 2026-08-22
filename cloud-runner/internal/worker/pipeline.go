@@ -27,6 +27,7 @@ type RepairLoop struct {
 type Stage struct {
 	ID          string         `yaml:"id"`
 	Agent       string         `yaml:"agent"`
+	Model       string         `yaml:"model"`
 	Needs       []string       `yaml:"needs"`
 	Mode        string         `yaml:"mode"`
 	Parallelism int            `yaml:"parallelism"`

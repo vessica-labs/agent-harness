@@ -117,7 +117,7 @@ Send the returned magic link privately. Use `cloud team members`, `cloud team se
 
 1. Run `agent-harness cloud auth codex add --slots <max-active-runs>`; default to three slots.
 2. Walk the user through each isolated device-login session.
-3. Let the CLI test whether one session can safely serve the configured coder concurrency. Preserve the CLI's safer one-slot-per-process fallback.
+3. Explain that each active source-issue run leases one slot; ticket concurrency inside a run uses native Codex subagents and does not consume more auth slots.
 4. Require the expected number of ready, unleased slots before enabling automation.
 
 ## 7. Register and verify

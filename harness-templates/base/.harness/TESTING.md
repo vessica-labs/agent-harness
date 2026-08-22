@@ -30,13 +30,15 @@ If a section does not apply, retain it and state why.
 
 <!-- Define the minimum tests for bugs, features, refactors, migrations, dependencies, and infrastructure changes. -->
 
+Use test-first red-green-refactor for bugs and new behavioral contracts when practical, not as a ritual for every edit. Ticket plans separate fast `iteration_checks`, a one-time affected-package `ticket_gate`, and downstream `pipeline_gates`. Coder agents must not run full repository or browser suites unless the ticket explicitly owns that boundary; lint and QA deduplicate and run their assigned pipeline gates.
+
 ## Test Data and Dependencies
 
 <!-- Define fixtures, mocks, containers, credentials, external services, and cleanup requirements. -->
 
 ## Determinism and Flake Policy
 
-<!-- Define isolation, retry limits, prohibited nondeterminism, and how flaky tests are handled. -->
+<!-- Define isolation, retry limits, prohibited nondeterminism, and how flaky tests are handled. The same unchanged command/failure pair must not be repeated more than twice without a causal diagnosis. -->
 
 For Playwright, make the worker count configurable through `HARNESS_PLAYWRIGHT_WORKERS`; cloud sandboxes set this value to a resource-safe parallel limit. Do not hard-code a higher worker count in the Playwright configuration or package scripts.
 

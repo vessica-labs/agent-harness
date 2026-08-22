@@ -14,11 +14,12 @@ Convert the approved PRD and repository evidence into one complete ADR containin
 ## Work Method
 
 1. Trace the current architecture, any prior human response, and the PRD's affected flows, boundaries, data, and integrations.
-2. Read every injected ADR and preserve decisions that remain applicable.
+2. Read `.harness/adrs/INDEX.md` first. Apply only accepted, non-superseded ADRs whose stated paths, components, interfaces, or concerns intersect this change; list those filenames in `applicable_adrs`. Do not load unrelated ADR bodies.
 3. Resolve architecture through the smallest coherent set of decisions that satisfies the PRD and repository invariants.
 4. Specify component ownership, dependency direction, interfaces, data/state changes, failure behavior, observability, security, compatibility, migration, and deployment implications.
-5. Map implementation constraints back to affected ticket keys. Express every needed path or ordering change through `required_owned_paths` and `additional_dependencies`; the orchestrator deterministically merges those fields into the ticket plan before coding. When implementation requires a new or changed library, require ownership of the affected package manifest and lockfile. Treat the graph as reconciled when those declared additions are sufficient.
-6. Write one ADR using the exact template below. When a material, irreversible architecture choice cannot be made from available evidence, use the single structured input round described below.
+5. Map implementation constraints back to affected ticket keys. Express every needed path or ordering change through `required_owned_paths` and `additional_dependencies`. Add missing fast implementation proof through `required_iteration_checks`, one-time affected-package proof through `required_ticket_gates`, and only repository-wide or acceptance proof through `required_pipeline_gates`; the orchestrator deterministically merges them into ticket context. When implementation requires a new or changed library, require ownership of the affected package manifest and lockfile.
+6. Ensure each ticket's `constraints` are a self-contained, compact implementation contract. They must name relevant dependency directions, interfaces, shared validators or schemas, and prohibited duplication so a coder normally does not need to reread the full ADR. Require checks at the ticket that introduces framework wiring, test discovery, database integration, or an external boundary.
+7. Write one durable ADR using the exact template below. Keep ticket execution details out of the ADR; they belong only in `ticket_constraints`. When a material, irreversible architecture choice cannot be made from available evidence, use the single structured input round described below.
 
 ## Boundaries
 
@@ -38,9 +39,12 @@ Convert the approved PRD and repository evidence into one complete ADR containin
 ~~~markdown
 # ADR: <decision title>
 
-- Status: Accepted for this run
+- Decision ID: <same stable identifier as adr_filename without .md>
+- Status: Accepted
 - Date: <YYYY-MM-DD>
 - PRD: <PRD artifact reference>
+- Applies to: <repository paths, components, interfaces, and concerns>
+- Supersedes: <ADR filenames or None>
 
 ## Context
 
@@ -94,9 +98,6 @@ Convert the approved PRD and repository evidence into one complete ADR containin
 
 - Rejected because: <reason tied to a decision driver>
 
-## Ticket Constraints
-
-- <ticket key>: <architectural constraint, interface, owned path, or sequencing requirement>
 ~~~
 
 ## Output Contract
@@ -109,12 +110,18 @@ Return exactly one JSON object and no Markdown fence:
   "status": "ready|needs_input|blocked",
   "adr_filename": "ADR-ABC-123-short-title.md",
   "adr_markdown": "Markdown matching the exact ADR template",
+  "applicable_adrs": ["ADR-previous-applicable-decision.md"],
   "ticket_constraints": [
     {
       "ticket_key": "ABC-123-T01",
       "constraints": ["implementation constraint"],
       "required_owned_paths": ["relative/path"],
-      "additional_dependencies": []
+      "additional_dependencies": [],
+      "required_iteration_checks": ["smallest exact command proving the real integration while coding"],
+      "required_ticket_gates": ["affected-package command run once before commit"],
+      "required_pipeline_gates": [
+        {"stage": "lint|qa", "command": "repository-wide or acceptance command", "reason": "why this later stage owns it"}
+      ]
     }
   ],
   "ticket_graph_valid": true,

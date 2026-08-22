@@ -128,17 +128,10 @@ func (s *Scheduler) launch(ctx context.Context, run model.Run) {
 		Type: "run.infrastructure.stage", Level: "info", Message: "Startup phase completed",
 		Payload: mustJSON(map[string]any{"stage": "control_plane_queue", "duration_ms": max(time.Since(run.CreatedAt).Milliseconds(), 0), "status": "completed"})})
 	authStarted := time.Now()
-	parallelSafe := false
-	if credential, getErr := s.store.GetCredential(ctx, "codex_parallel_safe"); getErr == nil {
-		if plaintext, openErr := s.box.Open(credential.Ciphertext, secure.Purpose("credential", "codex_parallel_safe")); openErr == nil {
-			parallelSafe = strings.EqualFold(string(plaintext), "true")
-		}
-	}
-	neededSlots := 1
-	if !parallelSafe {
-		neededSlots = 3
-	}
-	slots, err := s.store.LeaseAuthSlots(ctx, run.ID, neededSlots, s.config.AuthLeaseDuration)
+	// A source-issue run owns exactly one top-level Codex session. Independent
+	// source issues scale through MaxActiveRuns and independent auth slots;
+	// ticket-level fan-out happens inside that session through native subagents.
+	slots, err := s.store.LeaseAuthSlots(ctx, run.ID, 1, s.config.AuthLeaseDuration)
 	if errors.Is(err, store.ErrNoAuthSlot) {
 		s.authRetryAt.Store(time.Now().Add(30 * time.Second).UnixNano())
 		_ = s.store.RequeueRun(ctx, run.ID, "auth_slot_unavailable")
@@ -216,7 +209,6 @@ func (s *Scheduler) launch(ctx context.Context, run model.Run) {
 		"HARNESS_CODEX_SESSIONS_B64":  base64.StdEncoding.EncodeToString(sessionsJSON),
 		"HARNESS_CODEX_AUTH_B64":      base64.StdEncoding.EncodeToString(sessions[0].Auth),
 		"HARNESS_CODEX_AUTH_SLOT":     sessions[0].ID, "HARNESS_ATTEMPT": strconv.Itoa(run.Attempt),
-		"HARNESS_CODEX_PARALLEL_SAFE":         strconv.FormatBool(parallelSafe),
 		"HARNESS_CODEX_MODEL":                 s.config.CodexModel,
 		"HARNESS_PLAYWRIGHT_WORKERS":          strconv.Itoa(s.config.PlaywrightWorkers),
 		"PLAYWRIGHT_WORKERS":                  strconv.Itoa(s.config.PlaywrightWorkers),

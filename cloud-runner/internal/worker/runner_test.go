@@ -107,6 +107,80 @@ func TestTicketWavesResumeCompletedTickets(t *testing.T) {
 	}
 }
 
+func TestFailedTicketEvidenceIsPreservedForRecovery(t *testing.T) {
+	runDir := t.TempDir()
+	stage := Stage{Result: FileContract{File: "agent-output/coder/{ticket_key}.json"}}
+	result := []byte(`{"agent":"coder","status":"blocked","commit":null,"blocker":{"reason":"owned path missing","path":"package.json"}}`)
+	path, err := preserveTicketResult(runDir, stage, "AGE-1-T05", result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stored) != string(result) {
+		t.Fatalf("preserved result = %s, want %s", stored, result)
+	}
+	if got := ticketBlockerText(map[string]any{"reason": "owned path missing", "path": "package.json"}); got != `{"path":"package.json","reason":"owned path missing"}` {
+		t.Fatalf("structured blocker = %q", got)
+	}
+}
+
+func TestAgentDeclaredTicketBlockerIsNonRetryable(t *testing.T) {
+	blocker := &ticketBlockedError{ticketKey: "AGE-1-T05", blocker: "upstream schema broke the shared fixture"}
+	wrapped := errors.Join(errors.New("coordinator stopped"), blocker)
+	var detected *ticketBlockedError
+	if !errors.As(wrapped, &detected) {
+		t.Fatal("agent-declared blocker was not preserved through wrapped errors")
+	}
+	if got, want := detected.Error(), "ticket AGE-1-T05 blocked: upstream schema broke the shared fixture"; got != want {
+		t.Fatalf("blocker error = %q, want %q", got, want)
+	}
+}
+
+func TestFailedTicketStateExposesKeysAndBlockersForRetry(t *testing.T) {
+	runDir := t.TempDir()
+	state := `{"tickets":[{"key":"T02","status":"failed","blocker":"integration check failed"},{"key":"T01","status":"completed"},{"key":"T03","status":"failed","blocker":"missing owned path"}]}`
+	if err := os.WriteFile(filepath.Join(runDir, "state.json"), []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &Runner{runDir: runDir}
+	keys, blockers := runner.failedTicketState()
+	if len(keys) != 2 || keys[0] != "T02" || keys[1] != "T03" {
+		t.Fatalf("failed keys = %v", keys)
+	}
+	if blockers["T02"] != "integration check failed" || blockers["T03"] != "missing owned path" {
+		t.Fatalf("blockers = %v", blockers)
+	}
+}
+
+func TestRepeatedIdenticalTicketBlockersAreDetected(t *testing.T) {
+	failed := []string{"T02", "T03"}
+	blockers := map[string]string{"T02": "integration check failed", "T03": "missing owned path"}
+	if !sameFailedTicketState(failed, blockers, append([]string(nil), failed...), cloneStringMap(blockers)) {
+		t.Fatal("identical ticket failure state was not detected")
+	}
+	changed := cloneStringMap(blockers)
+	changed["T03"] = "different failure"
+	if sameFailedTicketState(failed, blockers, failed, changed) {
+		t.Fatal("changed blocker was treated as identical")
+	}
+	if sameFailedTicketState(failed, blockers, []string{"T02"}, map[string]string{"T02": blockers["T02"]}) {
+		t.Fatal("changed failed-ticket set was treated as identical")
+	}
+}
+
+func TestStageModelFallsBackToRunnerDefault(t *testing.T) {
+	runner := &Runner{config: Config{CodexModel: "default-model"}}
+	if got := runner.stageModel(Stage{}); got != "default-model" {
+		t.Fatalf("default model = %q", got)
+	}
+	if got := runner.stageModel(Stage{Model: " stage-model "}); got != "stage-model" {
+		t.Fatalf("stage model = %q", got)
+	}
+}
+
 func TestPipelineValidatesRepairLoops(t *testing.T) {
 	root := t.TempDir()
 	valid := `version: 1

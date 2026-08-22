@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/model"
@@ -31,7 +30,6 @@ type Runner struct {
 	runDir          string
 	codexHome       string
 	codexSessions   []runtimeCodexSession
-	codexPool       chan runtimeCodexSession
 	pipeline        Pipeline
 	localLease      string
 	githubToken     string
@@ -197,7 +195,12 @@ func (r *Runner) executeStageWithRetries(ctx context.Context, stage Stage) error
 	} else if recovered != nil {
 		return recovered
 	}
-	const maxAttempts = 3
+	maxAttempts := 3
+	if stage.Mode == "ticket_parallel" {
+		// Ticket-parallel stages retry failed tickets internally. Wrapping them in
+		// stage retries obscures the blocker and repeats coordinator setup.
+		maxAttempts = 1
+	}
 	var last error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		last = r.executeStage(ctx, stage)
@@ -232,7 +235,9 @@ func (r *Runner) prepareFilesystem() error {
 	if len(r.config.CodexSessions) == 0 {
 		return errors.New("Codex authentication slot is empty")
 	}
-	r.codexPool = make(chan runtimeCodexSession, len(r.config.CodexSessions))
+	if len(r.config.CodexSessions) != 1 {
+		return errors.New("a worker must receive exactly one top-level Codex authentication slot")
+	}
 	for index, configured := range r.config.CodexSessions {
 		if configured.ID == "" || len(configured.Auth) == 0 {
 			return errors.New("Codex authentication session is incomplete")
@@ -246,7 +251,6 @@ func (r *Runner) prepareFilesystem() error {
 		}
 		session := runtimeCodexSession{id: configured.ID, home: home, auth: configured.Auth}
 		r.codexSessions = append(r.codexSessions, session)
-		r.codexPool <- session
 	}
 	r.codexHome = r.codexSessions[0].home
 	return nil
@@ -499,7 +503,7 @@ func (r *Runner) runSingleStage(ctx context.Context, stage Stage) error {
 	resultPath := filepath.Join(r.runDir, filepath.FromSlash(stage.Result.File))
 	extra := ""
 	if stage.ID == "arch" {
-		extra = "The orchestrator will merge every required_owned_paths and additional_dependencies entry from a ready result into the product ticket plan and validate the revised DAG. Treat those declared additions as applied. The downstream docs stage owns documentation artifacts and the downstream QA stage owns Playwright acceptance evidence, so do not block solely because coder tickets omit those paths."
+		extra = "The orchestrator will merge every constraints, required_owned_paths, additional_dependencies, required_iteration_checks, required_ticket_gates, and required_pipeline_gates entry from a ready result into compact per-ticket context and validate the revised DAG. Legacy required_focused_checks remains supported for installed repositories. Treat declared additions as applied. The downstream docs stage owns documentation artifacts, while lint and QA own their assigned pipeline gates and final acceptance evidence, so do not duplicate those commands in coder ticket gates or block solely because coder tickets omit downstream paths."
 	}
 	if stage.ID == "pr" {
 		_, fetchErr := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), orchestratorGit, "fetch", "origin", r.config.BaseBranch)
@@ -552,6 +556,50 @@ func (r *Runner) runSingleStage(ctx context.Context, stage Stage) error {
 }
 
 func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
+	const maxTicketAttempts = 3
+	var last error
+	attempts := 0
+	var previousFailed []string
+	var previousBlockers map[string]string
+	for attempt := 1; attempt <= maxTicketAttempts; attempt++ {
+		attempts = attempt
+		last = r.runTicketStageAttempt(ctx, stage)
+		if last == nil {
+			return nil
+		}
+		var input *inputRequestSignal
+		var policy *inputPolicyError
+		var blocked *ticketBlockedError
+		if errors.As(last, &input) || errors.As(last, &policy) || ctx.Err() != nil || attempt == maxTicketAttempts {
+			break
+		}
+		failed, blockers := r.failedTicketState()
+		if errors.As(last, &blocked) {
+			_ = r.event(context.WithoutCancel(ctx), "ticket.retry_stopped", "warning", "Agent-declared blocker will not be retried", stage.ID,
+				map[string]any{"attempt": attempt, "tickets": failed, "blockers": blockers, "reason": "agent_declared_blocker", "error": last.Error()})
+			break
+		}
+		if attempt > 1 && len(blockers) > 0 && sameFailedTicketState(previousFailed, previousBlockers, failed, blockers) {
+			_ = r.event(context.WithoutCancel(ctx), "ticket.retry_stopped", "warning", "Identical ticket blockers repeated; stopping before another unchanged attempt", stage.ID,
+				map[string]any{"attempt": attempt, "tickets": failed, "blockers": blockers, "reason": "repeated_identical_blocker", "error": last.Error()})
+			break
+		}
+		previousFailed = append([]string(nil), failed...)
+		previousBlockers = cloneStringMap(blockers)
+		_ = r.event(context.WithoutCancel(ctx), "ticket.retrying", "warning", "Failed tickets will be retried from durable ticket checkpoints", stage.ID,
+			map[string]any{"attempt": attempt, "max_attempts": maxTicketAttempts, "tickets": failed, "blockers": blockers, "error": last.Error()})
+		checkpointCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		_ = r.checkpoint(checkpointCtx)
+		cancel()
+	}
+	var blocked *ticketBlockedError
+	if errors.As(last, &blocked) {
+		return last
+	}
+	return fmt.Errorf("ticket stage %s still has failed tickets after %d attempts: %w", stage.ID, attempts, last)
+}
+
+func (r *Runner) runTicketStageAttempt(ctx context.Context, stage Stage) error {
 	pipelinePath := filepath.Join(r.repo, ".harness", "pipeline.yaml")
 	if _, err := r.harness(ctx, r.repo, "materialize-generated-inputs", "--pipeline", pipelinePath,
 		"--run-dir", r.runDir, "--stage", stage.ID); err != nil {
@@ -576,7 +624,7 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 	if err != nil {
 		return err
 	}
-	for _, wave := range waves {
+	for waveIndex, wave := range waves {
 		runs := make([]*ticketRun, 0, len(wave))
 		for _, item := range wave {
 			worktree := filepath.Join(r.config.Workspace, "worktrees", safeName(item.Key))
@@ -590,79 +638,104 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 			}
 			runs = append(runs, &ticketRun{ticket: item, worktree: worktree})
 		}
-		parallelism := stage.Parallelism
-		if !r.config.CodexParallelSafe && parallelism > len(r.codexSessions) {
-			parallelism = len(r.codexSessions)
+		if err := r.recordTicketWaveStarted(ctx, wave); err != nil {
+			r.cleanupWorktrees(ctx, runs)
+			return fmt.Errorf("claim ticket wave: %w", err)
 		}
-		semaphore := make(chan struct{}, parallelism)
-		var wait sync.WaitGroup
-		var progressMu sync.Mutex
+		if err := r.syncTicketProgress(ctx, stage.ID); err != nil {
+			r.cleanupWorktrees(ctx, runs)
+			return err
+		}
 		for _, current := range runs {
-			wait.Add(1)
-			go func(current *ticketRun) {
-				defer wait.Done()
-				defer func() {
-					if current.err != nil {
-						_ = r.event(context.WithoutCancel(ctx), "ticket.failed", "error", current.err.Error(), stage.ID,
-							map[string]any{"ticket_key": current.ticket.Key, "depends_on": current.ticket.DependsOn, "owner": r.config.LeaseOwner})
-					}
-				}()
-				semaphore <- struct{}{}
-				defer func() { <-semaphore }()
-				progressMu.Lock()
-				claimErr := r.recordTicketWaveStarted(ctx, []ticket{current.ticket})
-				if claimErr == nil {
-					claimErr = r.syncTicketProgress(ctx, stage.ID)
-				}
-				progressMu.Unlock()
-				if claimErr != nil {
-					current.err = fmt.Errorf("claim ticket %s: %w", current.ticket.Key, claimErr)
-					return
-				}
-				if err := r.event(ctx, "ticket.started", "info", "Coder agent claimed ticket", stage.ID,
-					map[string]any{"ticket_key": current.ticket.Key, "depends_on": current.ticket.DependsOn, "owner": r.config.LeaseOwner}); err != nil {
-					current.err = err
-					return
-				}
+			if err := r.event(ctx, "ticket.started", "info", "Coder subagent claimed ticket", stage.ID,
+				map[string]any{"ticket_key": current.ticket.Key, "depends_on": current.ticket.DependsOn, "owner": r.config.LeaseOwner}); err != nil {
+				current.err = err
+			}
+			if current.err == nil {
 				worktreeRun := runDirectory(current.worktree, r.pipeline, r.config.RunID)
 				if err := r.requireInputs(stage, worktreeRun, current.ticket.Key); err != nil {
 					current.err = err
-					return
 				}
+			}
+		}
+		var coordinatorErr error
+		if firstTicketRunError(runs) == nil {
+			coordinatorErr = r.runCodexTicketWave(ctx, stage, waveIndex+1, runs)
+		}
+		for _, current := range runs {
+			if current.err == nil {
+				worktreeRun := runDirectory(current.worktree, r.pipeline, r.config.RunID)
 				resultPath := filepath.Join(worktreeRun, filepath.FromSlash(replaceTicket(stage.Result.File, current.ticket.Key)))
-				if err := r.runCodex(ctx, current.worktree, stage, current.ticket.Key, resultPath, "Implement only this claimed ticket and do not push."); err != nil {
-					current.err = err
-					return
-				}
 				if err := r.detectInputRequest(stage, resultPath); err != nil {
 					current.err = err
-					return
+				}
+				if current.err != nil {
+					continue
+				}
+				current.result, current.err = os.ReadFile(resultPath)
+				if current.err != nil {
+					continue
 				}
 				if _, err := r.harness(ctx, current.worktree, "materialize-result", "--pipeline", filepath.Join(current.worktree, ".harness", "pipeline.yaml"),
 					"--run-dir", worktreeRun, "--stage", stage.ID, "--input", resultPath, "--ticket-key", current.ticket.Key); err != nil {
 					current.err = err
-					return
-				}
-				current.result, current.err = os.ReadFile(resultPath)
-				if current.err != nil {
-					return
+					continue
 				}
 				var output struct {
-					Status string `json:"status"`
-					Commit string `json:"commit"`
+					Status  string `json:"status"`
+					Commit  string `json:"commit"`
+					Blocker any    `json:"blocker"`
 				}
 				if err := json.Unmarshal(current.result, &output); err != nil {
 					current.err = err
-					return
+					continue
 				}
 				if output.Status != "completed" || output.Commit == "" {
-					current.err = fmt.Errorf("ticket %s did not produce a completed commit", current.ticket.Key)
-					return
+					current.blocker = ticketBlockerText(output.Blocker)
+					if output.Status == "blocked" {
+						if current.blocker == "" {
+							current.blocker = "agent reported blocked without blocker details"
+						}
+						current.err = &ticketBlockedError{ticketKey: current.ticket.Key, blocker: current.blocker}
+					} else if current.blocker != "" {
+						current.err = fmt.Errorf("ticket %s failed: %s", current.ticket.Key, current.blocker)
+					} else {
+						current.err = fmt.Errorf("ticket %s did not produce a completed commit", current.ticket.Key)
+					}
+					continue
 				}
 				current.commit = output.Commit
-			}(current)
+			}
+			if current.err != nil {
+				if coordinatorErr != nil {
+					current.err = errors.Join(current.err, fmt.Errorf("coder coordinator: %w", coordinatorErr))
+				}
+				if current.blocker == "" {
+					current.blocker = current.err.Error()
+				}
+				if len(current.result) > 0 {
+					if _, err := preserveTicketResult(r.runDir, stage, current.ticket.Key, current.result); err != nil {
+						current.err = errors.Join(current.err, fmt.Errorf("preserve ticket result: %w", err))
+					}
+				}
+				if err := r.recordTicketFailure(context.WithoutCancel(ctx), current.ticket, current.blocker); err != nil {
+					current.err = errors.Join(current.err, fmt.Errorf("checkpoint ticket failure: %w", err))
+				}
+				_ = r.event(context.WithoutCancel(ctx), "ticket.failed", "error", current.err.Error(), stage.ID,
+					map[string]any{"ticket_key": current.ticket.Key, "depends_on": current.ticket.DependsOn,
+						"owner": r.config.LeaseOwner, "blocker": current.blocker})
+			}
 		}
-		wait.Wait()
+		if firstTicketRunError(runs) != nil {
+			if err := r.syncTicketProgress(context.WithoutCancel(ctx), stage.ID); err != nil {
+				for _, current := range runs {
+					if current.err != nil {
+						current.err = errors.Join(current.err, fmt.Errorf("sync ticket failure: %w", err))
+						break
+					}
+				}
+			}
+		}
 		sort.Slice(runs, func(i, j int) bool { return runs[i].ticket.Key < runs[j].ticket.Key })
 		var firstTicketError error
 		integrated := false
@@ -709,6 +782,8 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 					"owner": r.config.LeaseOwner, "commit": current.commit})
 			integrated = true
 		}
+		// Per-ticket results are authoritative. A malformed aggregate summary is
+		// not a reason to rerun tickets whose valid commits were integrated.
 		r.cleanupWorktrees(ctx, runs)
 		if integrated {
 			if err := r.pushBranch(ctx); err != nil {
@@ -720,6 +795,101 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 		}
 		if firstTicketError != nil {
 			return firstTicketError
+		}
+	}
+	return nil
+}
+
+func (r *Runner) failedTicketState() ([]string, map[string]string) {
+	body, err := os.ReadFile(filepath.Join(r.runDir, "state.json"))
+	if err != nil {
+		return nil, nil
+	}
+	var state struct {
+		Tickets []map[string]any `json:"tickets"`
+	}
+	if json.Unmarshal(body, &state) != nil {
+		return nil, nil
+	}
+	var keys []string
+	blockers := map[string]string{}
+	for _, item := range state.Tickets {
+		if item["status"] != "failed" {
+			continue
+		}
+		key, _ := item["key"].(string)
+		if key == "" {
+			continue
+		}
+		keys = append(keys, key)
+		if blocker, ok := item["blocker"].(string); ok && blocker != "" {
+			blockers[key] = blocker
+		}
+	}
+	sort.Strings(keys)
+	return keys, blockers
+}
+
+func sameFailedTicketState(leftKeys []string, leftBlockers map[string]string, rightKeys []string, rightBlockers map[string]string) bool {
+	if len(leftKeys) != len(rightKeys) || len(leftBlockers) != len(rightBlockers) {
+		return false
+	}
+	for index := range leftKeys {
+		if leftKeys[index] != rightKeys[index] {
+			return false
+		}
+	}
+	for key, value := range leftBlockers {
+		if rightBlockers[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	clone := make(map[string]string, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
+}
+
+func ticketBlockerText(value any) string {
+	if value == nil {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text)
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		return strings.TrimSpace(fmt.Sprint(value))
+	}
+	return string(body)
+}
+
+type ticketBlockedError struct {
+	ticketKey string
+	blocker   string
+}
+
+func (e *ticketBlockedError) Error() string {
+	return fmt.Sprintf("ticket %s blocked: %s", e.ticketKey, e.blocker)
+}
+
+func preserveTicketResult(runDir string, stage Stage, ticketKey string, result []byte) (string, error) {
+	resultPath := filepath.Join(runDir, filepath.FromSlash(replaceTicket(stage.Result.File, ticketKey)))
+	if err := os.MkdirAll(filepath.Dir(resultPath), 0o700); err != nil {
+		return resultPath, err
+	}
+	return resultPath, os.WriteFile(resultPath, result, 0o600)
+}
+
+func firstTicketRunError(runs []*ticketRun) error {
+	for _, current := range runs {
+		if current.err != nil {
+			return current.err
 		}
 	}
 	return nil

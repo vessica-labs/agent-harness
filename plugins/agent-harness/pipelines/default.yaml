@@ -84,12 +84,12 @@ stages:
     mode: ticket_parallel
     parallelism: 3
     inputs:
-      - id: ticket
-        file: inputs/tickets/{ticket_key}.json
+      - id: ticket_context
+        file: inputs/ticket-context/{ticket_key}.json
         format: json
         required: true
         generated_from:
-          file: artifacts/ticket-plan.json
+          file: artifacts/ticket-contexts.json
           collection: $
           key: key
     outputs:
@@ -110,7 +110,11 @@ stages:
     needs: [coder]
     mode: single
     parallelism: 1
-    inputs: []
+    inputs:
+      - id: ticket_contexts
+        file: artifacts/ticket-contexts.json
+        format: json
+        required: true
     outputs:
       - id: lint_report
         file: artifacts/lint-report.json
@@ -138,6 +142,22 @@ stages:
         file: artifacts/prd.md
         format: markdown
         required: true
+      - id: adr
+        file: artifacts/adr.md
+        format: markdown
+        required: true
+      - id: ticket_results
+        file: artifacts/ticket-results/*.json
+        format: json
+        required: true
+      - id: lint_report
+        file: artifacts/lint-report.json
+        format: json
+        required: true
+      - id: ticket_contexts
+        file: artifacts/ticket-contexts.json
+        format: json
+        required: true
     outputs:
       - id: qa_evidence
         file: artifacts/qa-evidence.json
@@ -151,9 +171,52 @@ stages:
       before: []
       after: []
       on_failure: []
+  - id: docs
+    agent: .agents/docs.md
+    needs: [qa]
+    mode: single
+    parallelism: 1
+    inputs:
+      - id: prd
+        file: artifacts/prd.md
+        format: markdown
+        required: true
+      - id: adr
+        file: artifacts/adr.md
+        format: markdown
+        required: true
+      - id: architecture_result
+        file: agent-output/arch.json
+        format: json
+        required: true
+      - id: ticket_results
+        file: artifacts/ticket-results/*.json
+        format: json
+        required: true
+      - id: lint_report
+        file: artifacts/lint-report.json
+        format: json
+        required: true
+      - id: qa_evidence
+        file: artifacts/qa-evidence.json
+        format: json
+        required: true
+    outputs:
+      - id: documentation_result
+        file: artifacts/documentation-result.json
+        format: json
+        from_result: $
+    result:
+      file: agent-output/docs.json
+      format: json
+      agent: docs
+    hooks:
+      before: []
+      after: []
+      on_failure: []
   - id: pr
     agent: .agents/pr.md
-    needs: [qa]
+    needs: [docs]
     mode: single
     parallelism: 1
     inputs:
@@ -175,6 +238,10 @@ stages:
         required: true
       - id: qa_evidence
         file: artifacts/qa-evidence.json
+        format: json
+        required: true
+      - id: documentation_result
+        file: artifacts/documentation-result.json
         format: json
         required: true
     outputs:

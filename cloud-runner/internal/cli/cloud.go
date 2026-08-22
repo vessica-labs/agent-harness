@@ -13,7 +13,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/model"
@@ -602,11 +601,10 @@ func cloudAuth(ctx context.Context, args []string) error {
 		}
 		flags := flag.NewFlagSet("cloud auth codex add", flag.ContinueOnError)
 		slots := flags.Int("slots", 3, "independent Codex login sessions")
-		verifyParallel := flags.Int("verify-parallel", 3, "simultaneous Codex processes used to verify one shared session")
+		_ = flags.Int("verify-parallel", 0, "deprecated compatibility flag; ticket concurrency uses native Codex subagents")
 		if err := flags.Parse(args[2:]); err != nil {
 			return err
 		}
-		parallelSafe := true
 		for index := 1; index <= *slots; index++ {
 			home, err := os.MkdirTemp("", "agent-harness-codex-login-*")
 			if err != nil {
@@ -619,9 +617,6 @@ func cloudAuth(ctx context.Context, args []string) error {
 				os.RemoveAll(home)
 				return err
 			}
-			if index == 1 && *verifyParallel > 1 {
-				parallelSafe = verifyCodexParallel(ctx, home, *verifyParallel) == nil
-			}
 			auth, err := os.ReadFile(filepath.Join(home, "auth.json"))
 			os.RemoveAll(home)
 			if err != nil {
@@ -633,12 +628,6 @@ func cloudAuth(ctx context.Context, args []string) error {
 				return err
 			}
 			printJSON(result)
-		}
-		if err := putCredential(ctx, client, "codex_parallel_safe", fmt.Sprint(parallelSafe)); err != nil {
-			return err
-		}
-		if !parallelSafe {
-			fmt.Fprintln(os.Stderr, "Codex session sharing was not safe; coder execution will serialize to one process per leased session.")
 		}
 		return nil
 	case "github":
@@ -706,27 +695,3 @@ func printJSON(value any) error {
 }
 
 func mustMarshal(value any) []byte { body, _ := json.Marshal(value); return body }
-
-func verifyCodexParallel(ctx context.Context, home string, parallel int) error {
-	var wait sync.WaitGroup
-	errorsFound := make(chan error, parallel)
-	for index := 0; index < parallel; index++ {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			command := exec.CommandContext(ctx, "codex", "exec", "--json", "--ignore-user-config", "--sandbox", "read-only", "-")
-			command.Env = append(os.Environ(), "CODEX_HOME="+home)
-			command.Stdin = strings.NewReader("Reply with the single word OK. Do not use tools.")
-			command.Stdout, command.Stderr = io.Discard, io.Discard
-			if err := command.Run(); err != nil {
-				errorsFound <- err
-			}
-		}()
-	}
-	wait.Wait()
-	close(errorsFound)
-	for err := range errorsFound {
-		return err
-	}
-	return nil
-}

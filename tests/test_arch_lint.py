@@ -39,7 +39,7 @@ class ArchitectureLintTests(unittest.TestCase):
         self.assertEqual(0, process.returncode, process.stderr)
         result = json.loads(process.stdout)
         self.assertTrue(result["ok"])
-        self.assertEqual(3, result["rules"])
+        self.assertEqual(4, result["rules"])
         self.assertEqual([], result["violations"])
 
     def test_standard_baseline_limits_source_lines_and_blocks_dotenv(self) -> None:
@@ -49,18 +49,21 @@ class ArchitectureLintTests(unittest.TestCase):
             (root / ".harness" / "ARCHITECTURE.md").write_text("# Architecture\n", encoding="utf-8")
             (root / "at-limit.py").write_text("line\n" * 800, encoding="utf-8")
             (root / "too-large.py").write_text("line\n" * 801, encoding="utf-8")
+            (root / "too-large.ts").write_text("line\n" * 501, encoding="utf-8")
             (root / ".env").write_text("SECRET=value\n", encoding="utf-8")
             (root / ".env.example").write_text("SECRET=\n", encoding="utf-8")
             process = run_lint(root, RULES)
             self.assertEqual(1, process.returncode, process.stderr)
             result = json.loads(process.stdout)
             self.assertEqual(
-                ["source-files-under-800-lines", "no-committed-environment-files"],
+                ["typescript-javascript-files-under-500-lines", "other-source-files-under-800-lines", "no-committed-environment-files"],
                 [violation["rule"] for violation in result["violations"]],
             )
-            self.assertEqual("too-large.py", result["violations"][0]["path"])
-            self.assertEqual(801, result["violations"][0]["line"])
-            self.assertEqual(".env", result["violations"][1]["path"])
+            self.assertEqual("too-large.ts", result["violations"][0]["path"])
+            self.assertEqual(501, result["violations"][0]["line"])
+            self.assertEqual("too-large.py", result["violations"][1]["path"])
+            self.assertEqual(801, result["violations"][1]["line"])
+            self.assertEqual(".env", result["violations"][2]["path"])
 
     def test_standard_baseline_ignores_top_level_dependency_trees(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

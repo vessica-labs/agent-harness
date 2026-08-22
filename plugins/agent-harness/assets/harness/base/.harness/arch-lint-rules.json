@@ -8,7 +8,34 @@
       "message": "The repository must retain its architecture document."
     },
     {
-      "id": "source-files-under-800-lines",
+      "id": "typescript-javascript-files-under-500-lines",
+      "type": "max_file_lines",
+      "globs": [
+        "**/*.js",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.tsx"
+      ],
+      "exclude": [
+        "**/node_modules/**",
+        "**/vendor/**",
+        "**/.venv/**",
+        "**/venv/**",
+        "**/dist/**",
+        "**/build/**",
+        "**/coverage/**",
+        "**/generated/**",
+        "**/gen/**",
+        "**/migrations/**",
+        "**/*.generated.*",
+        "**/*.min.js",
+        "**/*.min.css"
+      ],
+      "max_lines": 500,
+      "message": "Split large TypeScript or JavaScript files along a clear responsibility boundary."
+    },
+    {
+      "id": "other-source-files-under-800-lines",
       "type": "max_file_lines",
       "globs": [
         "**/*.c",
@@ -21,8 +48,6 @@
         "**/*.hpp",
         "**/*.html",
         "**/*.java",
-        "**/*.js",
-        "**/*.jsx",
         "**/*.kt",
         "**/*.kts",
         "**/*.php",
@@ -35,8 +60,6 @@
         "**/*.sql",
         "**/*.svelte",
         "**/*.swift",
-        "**/*.ts",
-        "**/*.tsx",
         "**/*.vue"
       ],
       "exclude": [

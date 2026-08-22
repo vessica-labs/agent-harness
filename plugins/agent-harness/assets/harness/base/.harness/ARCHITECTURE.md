@@ -36,7 +36,7 @@ If a section does not apply, retain it and state why.
 
 ## Architectural Invariants
 
-<!-- List rules that must remain true across implementations and how each is enforced. The standard architecture-document, 800-line source-file, and environment-file checks live in .harness/arch-lint-rules.json. Add deterministic path, dependency-text, and required-boundary checks specific to this repository. -->
+<!-- List rules that must remain true across implementations and how each is enforced. The standard architecture-document, 500-line TypeScript/JavaScript, 800-line other-source, and environment-file checks live in .harness/arch-lint-rules.json. Add deterministic path, dependency-text, shared-schema, and required-boundary checks specific to this repository. -->
 
 ## Known Constraints
 
@@ -44,4 +44,4 @@ If a section does not apply, retain it and state why.
 
 ## Architecture Decision Records
 
-Relevant ADRs for the current run are injected into [`.harness/adrs/`](./adrs/). Treat the directory contents as run-specific architectural context. Do not add individual ADR links here.
+The applicability and supersession index is [`.harness/adrs/INDEX.md`](./adrs/INDEX.md). Durable accepted records live in `.harness/adrs/accepted/`; ignored runtime-injected records may also appear directly under `.harness/adrs/`. Read the index first and load only accepted, non-superseded decisions that intersect the affected paths, components, interfaces, or concerns.

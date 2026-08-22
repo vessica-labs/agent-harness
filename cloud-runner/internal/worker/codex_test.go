@@ -59,7 +59,7 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_
 	}
 
 	runner := &Runner{
-		config:   Config{RunID: "run_test", CodexBinary: fakeCodex, CodexModel: "gpt-5.6-sol", CodexParallelSafe: true, PlaywrightWorkers: 2},
+		config:   Config{RunID: "run_test", CodexBinary: fakeCodex, CodexModel: "gpt-5.6-sol", PlaywrightWorkers: 2},
 		client:   &controlClient{baseURL: server.URL, token: "test", runID: "run_test", http: server.Client()},
 		pipeline: Pipeline{RunRoot: ".harness/runs/{run_id}"},
 	}
@@ -72,5 +72,73 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_
 	}
 	if elapsed := time.Since(started); elapsed >= 3*time.Second {
 		t.Fatalf("runCodex waited for leaked stdout after terminal event: %s", elapsed)
+	}
+}
+
+func TestCoderWaveUsesOneMultiAgentCoordinatorForMultipleTickets(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/events") {
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	repo := t.TempDir()
+	rolePath := filepath.Join(repo, ".agents", "coder.md")
+	if err := os.MkdirAll(filepath.Dir(rolePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rolePath, []byte("Delegate every assignment to one native coder subagent."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runDir := filepath.Join(repo, ".harness", "runs", "run_test")
+	argsPath := filepath.Join(repo, "codex-args.txt")
+	promptPath := filepath.Join(repo, "codex-prompt.txt")
+	summaryPath := filepath.Join(runDir, "agent-output", "coder-wave-01.json")
+	worktreeA, worktreeB := filepath.Join(repo, "worktree-a"), filepath.Join(repo, "worktree-b")
+	resultA := filepath.Join(worktreeA, ".harness", "runs", "run_test", "agent-output", "coder", "ISS-1-T01.json")
+	resultB := filepath.Join(worktreeB, ".harness", "runs", "run_test", "agent-output", "coder", "ISS-1-T02.json")
+	fakeCodex := filepath.Join(repo, "fake-codex")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$@\" > '" + argsPath + "'\n" +
+		"cat > '" + promptPath + "'\n" +
+		"mkdir -p '" + filepath.Dir(summaryPath) + "'\n" +
+		"printf '%s\\n' '{\"agent\":\"coder\",\"status\":\"completed\",\"tickets\":[{\"ticket_key\":\"ISS-1-T01\",\"status\":\"completed\",\"result_file\":\"" + resultA + "\"},{\"ticket_key\":\"ISS-1-T02\",\"status\":\"completed\",\"result_file\":\"" + resultB + "\"}],\"blocker\":null}' > '" + summaryPath + "'\n" +
+		"printf '%s\\n' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"cached_input_tokens\":0,\"output_tokens\":1,\"reasoning_output_tokens\":0}}'\n"
+	if err := os.WriteFile(fakeCodex, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &Runner{
+		config: Config{RunID: "run_test", Workspace: repo, CodexBinary: fakeCodex, CodexModel: "gpt-5.6-sol", PlaywrightWorkers: 2},
+		client: &controlClient{baseURL: server.URL, token: "test", runID: "run_test", http: server.Client()},
+		repo:   repo, runDir: runDir, pipeline: Pipeline{RunRoot: ".harness/runs/{run_id}"},
+	}
+	stage := Stage{ID: "coder", Agent: ".agents/coder.md", Parallelism: 3,
+		Inputs: []FileContract{{File: "generated/coder/{ticket_key}.json"}}, Result: FileContract{File: "agent-output/coder/{ticket_key}.json"}}
+	runs := []*ticketRun{
+		{ticket: ticket{Key: "ISS-1-T01", OwnedPaths: []string{"apps/a/**"}}, worktree: worktreeA},
+		{ticket: ticket{Key: "ISS-1-T02", OwnedPaths: []string{"apps/b/**"}}, worktree: worktreeB},
+	}
+	if err := runner.runCodexTicketWave(context.Background(), stage, 1, runs); err != nil {
+		t.Fatal(err)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(args), "--enable\nmulti_agent") {
+		t.Fatalf("coordinator did not explicitly enable native multi-agent support: %s", args)
+	}
+	prompt, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"ISS-1-T01", "ISS-1-T02", worktreeA, worktreeB, "Maximum simultaneously active coder subagents: 3"} {
+		if !strings.Contains(string(prompt), expected) {
+			t.Fatalf("coordinator prompt missing %q: %s", expected, prompt)
+		}
 	}
 }

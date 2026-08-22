@@ -98,7 +98,7 @@ func TestLinearParentLifecycleFollowsRunAndMergeEvents(t *testing.T) {
 			t.Fatalf("sync %s: %v", event.Type, err)
 		}
 	}
-	if strings.Join(transitions, ",") != "todo,progress,input,progress,input,progress,review,done" {
+	if strings.Join(transitions, ",") != "todo,progress,input,progress,review,done" {
 		t.Fatalf("unexpected lifecycle transitions: %v", transitions)
 	}
 	for _, key := range []string{"activity:run:queued", "activity:stage:product:started", "activity:stage:product:completed", "activity:run:completed", "activity:pr:merged"} {
@@ -109,13 +109,13 @@ func TestLinearParentLifecycleFollowsRunAndMergeEvents(t *testing.T) {
 	}
 }
 
-func TestFailedTicketUsesNeedsInputLifecycle(t *testing.T) {
+func TestFailedTicketRemainsInProgress(t *testing.T) {
 	lifecycle := linearapi.LifecycleStates{
 		Todo: linearapi.WorkflowState{ID: "todo"}, NeedsInput: linearapi.WorkflowState{ID: "input"},
 		InProgress: linearapi.WorkflowState{ID: "progress"}, Done: linearapi.WorkflowState{ID: "done"},
 	}
-	if got := workflowStateForTicket("failed", lifecycle); got.ID != "input" {
-		t.Fatalf("failed ticket state = %q, want Needs Input", got.ID)
+	if got := workflowStateForTicket("failed", lifecycle); got.ID != "progress" {
+		t.Fatalf("failed ticket state = %q, want In Progress", got.ID)
 	}
 	for _, eventType := range []string{"ticket.started", "ticket.completed", "ticket.failed"} {
 		if !shouldSyncLinearLifecycleEvent(eventType) {

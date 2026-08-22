@@ -7,8 +7,42 @@
     "status": {"enum": ["ready", "blocked"]},
     "source_issue": {"type": "object", "required": ["key", "url", "title"]},
     "prd_markdown": {"type": "string"},
-    "tickets": {"type": "array"},
+    "tickets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "type", "title", "objective", "acceptance_criteria", "owned_paths", "depends_on", "commit_message", "complexity"],
+        "properties": {
+          "focused_checks": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+          "verification": {"$ref": "#/$defs/ticketVerification"}
+        },
+        "anyOf": [
+          {"required": ["verification"]},
+          {"required": ["focused_checks"]}
+        ]
+      }
+    },
     "coverage": {"type": "array"},
     "blockers": {"type": "array"}
+  },
+  "$defs": {
+    "pipelineGate": {
+      "type": "object",
+      "required": ["stage", "command", "reason"],
+      "properties": {
+        "stage": {"enum": ["lint", "qa"]},
+        "command": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    },
+    "ticketVerification": {
+      "type": "object",
+      "required": ["iteration_checks", "ticket_gate", "pipeline_gates"],
+      "properties": {
+        "iteration_checks": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "ticket_gate": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "pipeline_gates": {"type": "array", "items": {"$ref": "#/$defs/pipelineGate"}}
+      }
+    }
   }
 }

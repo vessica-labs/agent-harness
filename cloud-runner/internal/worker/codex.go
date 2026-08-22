@@ -17,17 +17,6 @@ import (
 const codexTerminalExitGrace = time.Second
 
 func (r *Runner) runCodex(ctx context.Context, repo string, stage Stage, ticketKey, resultPath string, extra string) error {
-	codexHome := r.codexHome
-	var leased runtimeCodexSession
-	if !r.config.CodexParallelSafe {
-		select {
-		case leased = <-r.codexPool:
-			codexHome = leased.home
-			defer func() { r.codexPool <- leased }()
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
 	role, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(stage.Agent)))
 	if err != nil {
 		return err
@@ -37,6 +26,10 @@ func (r *Runner) runCodex(ctx context.Context, repo string, stage Stage, ticketK
 	for _, input := range stage.Inputs {
 		file := replaceTicket(input.File, ticketKey)
 		inputs = append(inputs, "- "+filepath.Join(runDir, filepath.FromSlash(file)))
+	}
+	runtimeGuidance := extra
+	if stage.ID == "qa" {
+		runtimeGuidance += fmt.Sprintf(" In this Railway sandbox, Playwright and Chromium are preinstalled. Repository tests must still declare their Playwright package dependency in the appropriate package manifest and lockfile. Configure Playwright to use PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH when it is set. Every Playwright invocation must explicitly use at most %d workers. HARNESS_PLAYWRIGHT_WORKERS contains this limit.", r.config.PlaywrightWorkers)
 	}
 	prompt := fmt.Sprintf(`You are the Agent Harness %s stage. Follow this role definition exactly:
 
@@ -51,22 +44,154 @@ Execution context:
 
 Work directly in the supplied repository. Do not edit pipeline state or provider credentials. Write the exact JSON output contract to the required result file. Human input policy: only the product and arch stages may return status needs_input, at most once per stage. Every other stage must use the available context and continue to a terminal result; it may never ask a question or wait for a user. %s`,
 		stage.ID, string(role), repo, runDir, strings.Join(inputs, "\n"), resultPath,
-		extra+fmt.Sprintf(" In this Railway sandbox, Playwright and Chromium are preinstalled. Repository tests must still declare their Playwright package dependency in the appropriate package manifest and lockfile. Configure Playwright to use PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH when it is set. Every Playwright invocation must explicitly use at most %d workers (for example: npm run test:e2e -- --workers=%d). HARNESS_PLAYWRIGHT_WORKERS contains this limit.", r.config.PlaywrightWorkers, r.config.PlaywrightWorkers))
+		runtimeGuidance)
+	return r.runCodexPrompt(ctx, repo, stage.ID, ticketKey, resultPath, prompt, false, stage.ID+"-"+ticketKey, r.stageModel(stage))
+}
+
+type coderWaveAssignment struct {
+	TicketKey      string   `json:"ticket_key"`
+	Worktree       string   `json:"worktree"`
+	RunJournal     string   `json:"run_journal"`
+	DeclaredInputs []string `json:"declared_inputs"`
+	ResultFile     string   `json:"result_file"`
+	DependsOn      []string `json:"depends_on"`
+	OwnedPaths     []string `json:"owned_paths"`
+}
+
+func (r *Runner) runCodexTicketWave(ctx context.Context, stage Stage, waveNumber int, runs []*ticketRun) error {
+	role, err := os.ReadFile(filepath.Join(r.repo, filepath.FromSlash(stage.Agent)))
+	if err != nil {
+		return err
+	}
+	assignments := make([]coderWaveAssignment, 0, len(runs))
+	for _, current := range runs {
+		worktreeRun := runDirectory(current.worktree, r.pipeline, r.config.RunID)
+		inputs := make([]string, 0, len(stage.Inputs))
+		for _, input := range stage.Inputs {
+			inputs = append(inputs, filepath.Join(worktreeRun, filepath.FromSlash(replaceTicket(input.File, current.ticket.Key))))
+		}
+		resultPath := filepath.Join(worktreeRun, filepath.FromSlash(replaceTicket(stage.Result.File, current.ticket.Key)))
+		if err := os.MkdirAll(filepath.Dir(resultPath), 0o700); err != nil {
+			return err
+		}
+		if err := os.Remove(resultPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove stale ticket result: %w", err)
+		}
+		assignments = append(assignments, coderWaveAssignment{
+			TicketKey: current.ticket.Key, Worktree: current.worktree, RunJournal: worktreeRun,
+			DeclaredInputs: inputs, ResultFile: resultPath, DependsOn: current.ticket.DependsOn, OwnedPaths: current.ticket.OwnedPaths,
+		})
+	}
+	assignmentJSON, err := json.MarshalIndent(assignments, "", "  ")
+	if err != nil {
+		return err
+	}
+	summaryPath := filepath.Join(r.runDir, "agent-output", fmt.Sprintf("coder-wave-%02d.json", waveNumber))
+	prompt := fmt.Sprintf(`You are the Agent Harness %s stage coordinator. You orchestrate coder subagents and never implement a ticket yourself.
+
+Coder subagent role definition (give this complete contract to every coder subagent):
+
+%s
+
+Execution context:
+- Integration repository: %s
+- Integration run journal: %s
+- Maximum simultaneously active coder subagents: %d
+- Ready ticket assignments (absolute paths):
+%s
+- Required coordinator result JSON file: %s
+
+Use Codex native subagent delegation for every ticket assignment, including a one-ticket wave. Give each coder subagent exactly one assignment, the coder role above, and its isolated worktree, inputs, and result path. Never implement ticket code in the coordinator. Keep no more than the declared maximum active at once and wait for every subagent. Every subagent must write the coder role's exact ticket JSON contract to its assigned result path. Do not push, merge, cherry-pick, edit pipeline state, or access provider credentials. This stage may not request human input or wait for a user.
+
+After every subagent reaches a terminal state, write exactly this coordinator JSON shape to the required coordinator result file and return it without a Markdown fence:
+{
+  "agent": "coder",
+  "status": "completed|blocked",
+  "tickets": [
+    {"ticket_key": "the assigned key", "status": "completed|blocked", "result_file": "the assigned absolute result path"}
+  ],
+  "blocker": null
+}
+
+Set coordinator status to completed only when every assignment completed and wrote its result. Only when a ticket explicitly owns a Playwright ticket gate, use the preinstalled Chromium and cap Playwright at %d workers.`,
+		stage.ID, string(role), r.repo, r.runDir, stage.Parallelism, string(assignmentJSON), summaryPath, r.config.PlaywrightWorkers)
+	if err := r.runCodexPrompt(ctx, r.repo, stage.ID, "", summaryPath, prompt, true, fmt.Sprintf("%s-wave-%02d", stage.ID, waveNumber), r.stageModel(stage)); err != nil {
+		return err
+	}
+	return validateCoderWaveSummary(summaryPath, assignments)
+}
+
+func validateCoderWaveSummary(path string, assignments []coderWaveAssignment) error {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var summary struct {
+		Agent   string `json:"agent"`
+		Status  string `json:"status"`
+		Tickets []struct {
+			TicketKey  string `json:"ticket_key"`
+			Status     string `json:"status"`
+			ResultFile string `json:"result_file"`
+		} `json:"tickets"`
+		Blocker any `json:"blocker"`
+	}
+	if err := json.Unmarshal(body, &summary); err != nil {
+		return fmt.Errorf("decode coder wave summary: %w", err)
+	}
+	if summary.Agent != "coder" || summary.Status != "completed" {
+		return fmt.Errorf("coder wave did not complete: agent=%s status=%s blocker=%v", summary.Agent, summary.Status, summary.Blocker)
+	}
+	if len(summary.Tickets) != len(assignments) {
+		return fmt.Errorf("coder wave reported %d tickets, expected %d", len(summary.Tickets), len(assignments))
+	}
+	expected := make(map[string]string, len(assignments))
+	for _, assignment := range assignments {
+		expected[assignment.TicketKey] = filepath.Clean(assignment.ResultFile)
+	}
+	for _, result := range summary.Tickets {
+		resultPath, ok := expected[result.TicketKey]
+		if !ok {
+			return fmt.Errorf("coder wave reported unknown ticket %s", result.TicketKey)
+		}
+		if result.Status != "completed" || filepath.Clean(result.ResultFile) != resultPath {
+			return fmt.Errorf("coder wave ticket %s has invalid status or result path", result.TicketKey)
+		}
+		delete(expected, result.TicketKey)
+	}
+	if len(expected) != 0 {
+		return fmt.Errorf("coder wave omitted ticket results: %v", expected)
+	}
+	return nil
+}
+
+func (r *Runner) stageModel(stage Stage) string {
+	if strings.TrimSpace(stage.Model) != "" {
+		return strings.TrimSpace(stage.Model)
+	}
+	return r.config.CodexModel
+}
+
+func (r *Runner) runCodexPrompt(ctx context.Context, repo, stageID, ticketKey, resultPath, prompt string, multiAgent bool, logKey, model string) error {
 	if err := os.MkdirAll(filepath.Dir(resultPath), 0o700); err != nil {
 		return err
 	}
 	if err := os.Remove(resultPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove stale agent result: %w", err)
 	}
-	lastMessage := filepath.Join(runDir, "logs", "codex-"+safeName(stage.ID+"-"+ticketKey)+"-last.txt")
-	logPath := filepath.Join(runDir, "logs", "codex-"+safeName(stage.ID+"-"+ticketKey)+".jsonl")
+	runDir := runDirectory(repo, r.pipeline, r.config.RunID)
+	lastMessage := filepath.Join(runDir, "logs", "codex-"+safeName(logKey)+"-last.txt")
+	logPath := filepath.Join(runDir, "logs", "codex-"+safeName(logKey)+".jsonl")
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		return err
 	}
-	command := exec.CommandContext(ctx, r.config.CodexBinary, "exec", "--json", "--model", r.config.CodexModel,
-		"--dangerously-bypass-approvals-and-sandbox", "--ignore-user-config", "-C", repo,
-		"--output-last-message", lastMessage, "-")
-	command.Env = sanitizedEnvironment(codexHome)
+	args := []string{"exec", "--json", "--model", model, "--dangerously-bypass-approvals-and-sandbox", "--ignore-user-config"}
+	if multiAgent {
+		args = append(args, "--enable", "multi_agent")
+	}
+	args = append(args, "-C", repo, "--output-last-message", lastMessage, "-")
+	command := exec.CommandContext(ctx, r.config.CodexBinary, args...)
+	command.Env = sanitizedEnvironment(r.codexHome)
 	command.Stdin = strings.NewReader(prompt)
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -105,7 +230,7 @@ Work directly in the supplied repository. Do not edit pipeline state or provider
 		if message := codexErrorMessage(line); message != "" {
 			lastCodexError = message
 		}
-		if usage, ok := parseCodexUsage(line, r.config.CodexModel); ok {
+		if usage, ok := parseCodexUsage(line, model); ok {
 			terminalCompleted = true
 			if terminalTimer == nil {
 				terminalTimer = time.AfterFunc(codexTerminalExitGrace, func() {
@@ -119,7 +244,7 @@ Work directly in the supplied repository. Do not edit pipeline state or provider
 					}
 				})
 			}
-			if err := r.event(context.WithoutCancel(ctx), "codex.usage", "info", "Codex turn usage recorded", stage.ID, usage); err != nil {
+			if err := r.event(context.WithoutCancel(ctx), "codex.usage", "info", "Codex turn usage recorded", stageID, usage); err != nil {
 				_ = command.Process.Kill()
 				_ = stdout.Close()
 				_ = command.Wait()
@@ -152,7 +277,7 @@ Work directly in the supplied repository. Do not edit pipeline state or provider
 			if activity.ExitCode != nil {
 				payload["exit_code"] = *activity.ExitCode
 			}
-			_ = r.event(context.WithoutCancel(ctx), activity.Type, activity.Level, activity.Message, stage.ID, payload)
+			_ = r.event(context.WithoutCancel(ctx), activity.Type, activity.Level, activity.Message, stageID, payload)
 		}
 	}
 	scanErr := scanner.Err()
@@ -170,10 +295,10 @@ Work directly in the supplied repository. Do not edit pipeline state or provider
 	closeErr := logFile.Close()
 	stderrBody, _ := os.ReadFile(stderrPath)
 	if runErr != nil && !(terminalCompleted && forcedAfterTerminal) {
-		return fmt.Errorf("Codex %s failed: %w: %s", stage.ID, runErr, tail(codexFailureDetail(string(stderrBody), lastCodexError), 3000))
+		return fmt.Errorf("Codex %s failed: %w: %s", stageID, runErr, tail(codexFailureDetail(string(stderrBody), lastCodexError), 3000))
 	}
 	if scanErr != nil && !(terminalCompleted && forcedAfterTerminal) {
-		return fmt.Errorf("read Codex %s event stream: %w", stage.ID, scanErr)
+		return fmt.Errorf("read Codex %s event stream: %w", stageID, scanErr)
 	}
 	if stderrCloseErr != nil {
 		return stderrCloseErr
