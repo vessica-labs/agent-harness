@@ -58,7 +58,7 @@ Download a release binary from [GitHub Releases](https://github.com/vessica-labs
 mkdir -p "$HOME/.local/bin"
 
 # Apple Silicon macOS
-curl -fL https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.36/agent-harness-darwin-arm64 \
+curl -fL https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.37/agent-harness-darwin-arm64 \
   -o "$HOME/.local/bin/agent-harness"
 
 # Intel macOS: use agent-harness-darwin-amd64
@@ -193,7 +193,7 @@ export RAILWAY_API_TOKEN='<enter privately>'
 agent-harness railway upgrade \
   --project <railway-project-id> \
   --environment production \
-  --version v0.1.0-rc.36
+  --version v0.1.0-rc.37
 
 agent-harness railway init \
   --project <railway-project-id> \
@@ -201,7 +201,7 @@ agent-harness railway init \
   --service control-plane \
   --postgres-service Postgres \
   --url https://<control-plane-domain> \
-  --checkpoint agent-harness-worker-0.1.0-rc.36 \
+  --checkpoint agent-harness-worker-0.1.0-rc.37 \
   --profile <repository-profile>
 
 agent-harness railway deploy \
@@ -451,7 +451,7 @@ make release
 ```
 
 Both commands inspect the release-candidate tags on `origin` and select the next
-RC on the newest version line, such as `v0.1.0-rc.37` after `v0.1.0-rc.36`.
+RC on the newest version line, such as `v0.1.0-rc.38` after `v0.1.0-rc.37`.
 `release-check` is read-only with respect to GitHub and Railway. `release` reruns
 verification, pushes `main` and the selected version tag, waits for GitHub
 Actions to publish all release assets and the GHCR image, creates the matching

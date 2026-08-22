@@ -2,7 +2,7 @@
 title: Agent Harness User Guide
 description: Install, configure, run, customize, monitor, and recover Agent Harness issue-to-pull-request workflows.
 product: Agent Harness
-product_version: v0.1.0-rc.36
+product_version: v0.1.0-rc.37
 release_status: Release candidate
 last_verified: 2026-08-22
 ---
@@ -13,7 +13,7 @@ Agent Harness is an editable, issue-to-pull-request software-development workflo
 
 This guide covers the complete user-facing Agent Harness platform: the Codex plugin, repository harness, local execution, Railway cloud runner, command-line interface, localhost dashboard, Linear, GitHub and Notion integrations, workflow customization, security, and recovery.
 
-> **Release status:** Agent Harness is currently a release candidate. These instructions were verified against `v0.1.0-rc.36`. Jira integration is coming soon and is not part of the supported workflow documented here.
+> **Release status:** Agent Harness is currently a release candidate. These instructions were verified against `v0.1.0-rc.37`. Jira integration is coming soon and is not part of the supported workflow documented here.
 
 ## Quickstart
 
@@ -39,7 +39,7 @@ Download Agent Harness for Apple Silicon macOS:
 ```sh
 mkdir -p "$HOME/.local/bin"
 curl -fL \
-  https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.36/agent-harness-darwin-arm64 \
+  https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.37/agent-harness-darwin-arm64 \
   -o "$HOME/.local/bin/agent-harness"
 chmod 0755 "$HOME/.local/bin/agent-harness"
 export PATH="$HOME/.local/bin:$PATH"
@@ -344,13 +344,13 @@ GitHub, Linear, Notion, and Codex credentials are scoped to a control-plane inst
 
 ### Install a release binary
 
-Release assets are published for macOS and Linux on AMD64 and ARM64. This example installs `v0.1.0-rc.36` on Apple Silicon macOS:
+Release assets are published for macOS and Linux on AMD64 and ARM64. This example installs `v0.1.0-rc.37` on Apple Silicon macOS:
 
 ```sh
 mkdir -p "$HOME/.local/bin"
 
 curl -fL \
-  https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.36/agent-harness-darwin-arm64 \
+  https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.37/agent-harness-darwin-arm64 \
   -o "$HOME/.local/bin/agent-harness"
 
 chmod 0755 "$HOME/.local/bin/agent-harness"
@@ -404,7 +404,7 @@ make release
 
 These commands read the RC tags from `origin` and automatically select the next
 number on the newest release-candidate version line. For example, an existing
-`v0.1.0-rc.36` produces `v0.1.0-rc.37`. Pass an explicit version to override the
+`v0.1.0-rc.37` produces `v0.1.0-rc.38`. Pass an explicit version to override the
 selection or start a new version line:
 
 ```sh
@@ -433,7 +433,7 @@ export RAILWAY_API_TOKEN='<enter privately>'
 agent-harness railway upgrade \
   --project <railway-project-id> \
   --environment production \
-  --version v0.1.0-rc.36
+  --version v0.1.0-rc.37
 
 agent-harness railway deploy \
   --project <railway-project-id> \
@@ -572,7 +572,7 @@ Create the worker checkpoint, configure the control plane, and deploy:
 agent-harness railway upgrade \
   --project <project-id> \
   --environment production \
-  --version v0.1.0-rc.36
+  --version v0.1.0-rc.37
 
 agent-harness railway init \
   --project <project-id> \
@@ -580,7 +580,7 @@ agent-harness railway init \
   --service control-plane \
   --postgres-service Postgres \
   --url https://<control-plane-domain> \
-  --checkpoint agent-harness-worker-0.1.0-rc.36 \
+  --checkpoint agent-harness-worker-0.1.0-rc.37 \
   --profile <repository-profile> \
   --preview-url https://<preview-edge-domain>
 
