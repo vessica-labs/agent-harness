@@ -588,11 +588,12 @@ func (m *Memory) ResumeRun(_ context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	value, ok := m.runs[id]
-	if !ok || value.State != "paused" {
+	dependencyCancelled := ok && value.State == "cancelled" && value.Attempt == 0 && strings.HasPrefix(value.QueueReason, "dependencies_pending:")
+	if !ok || (value.State != "paused" && !dependencyCancelled) {
 		return ErrNotFound
 	}
 	value.State, value.Error, value.QueueReason, value.LeaseOwner = "queued", "", "", ""
-	value.LeaseExpiresAt, value.UpdatedAt = nil, time.Now().UTC()
+	value.LeaseExpiresAt, value.CompletedAt, value.UpdatedAt = nil, nil, time.Now().UTC()
 	m.runs[id] = value
 	return nil
 }

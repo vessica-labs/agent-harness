@@ -206,6 +206,46 @@ func TestTerminalRunStateCannotBeDowngraded(t *testing.T) {
 	}
 }
 
+func TestResumeRunRecoversOnlyNeverStartedDependencyCancellation(t *testing.T) {
+	ctx := context.Background()
+	memory := NewMemory()
+	repo := repository(t, memory)
+	result, err := memory.AcceptLinearDelivery(ctx, repo, model.LinearDelivery{
+		DeliveryID: "dependency-cancel-delivery", IssueID: "dependency-cancel-issue", IssueKey: "AGE-10",
+		IssueTitle: "Waiting run", QueueReason: "dependencies_pending: AGE-9", ReceivedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.CancelRun(ctx, result.Run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.ResumeRun(ctx, result.Run.ID); err != nil {
+		t.Fatalf("resume dependency-cancelled run: %v", err)
+	}
+	resumed, err := memory.GetRun(ctx, result.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.State != "queued" || resumed.QueueReason != "" || resumed.CompletedAt != nil {
+		t.Fatalf("unexpected resumed run: %+v", resumed)
+	}
+
+	ordinary, err := memory.AcceptLinearDelivery(ctx, repo, model.LinearDelivery{
+		DeliveryID: "ordinary-cancel-delivery", IssueID: "ordinary-cancel-issue", IssueKey: "AGE-11",
+		IssueTitle: "Ordinary run", ReceivedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.CancelRun(ctx, ordinary.Run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.ResumeRun(ctx, ordinary.Run.ID); err != ErrNotFound {
+		t.Fatalf("ordinary cancelled run resumed: %v", err)
+	}
+}
+
 func TestRunUsageIsAccumulatedAndReported(t *testing.T) {
 	ctx := context.Background()
 	memory := NewMemory()

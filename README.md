@@ -404,6 +404,8 @@ agent-harness cloud runs cancel <run-id>
 agent-harness cloud runs export <run-id> --repo /path/to/repository
 ```
 
+`resume` accepts paused runs and never-started cancelled runs that still carry a `dependencies_pending` queue reason. It does not reopen completed runs or ordinary operator cancellations.
+
 ### Local execution from Codex
 
 Examples after the plugin is installed:
