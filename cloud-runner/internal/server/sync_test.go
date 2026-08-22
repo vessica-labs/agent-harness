@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/vessica-labs/agent-harness/cloud-runner/internal/model"
 )
 
 func TestSyncRequestAcceptsDurableTicketIdentity(t *testing.T) {
@@ -64,5 +66,16 @@ func TestSyncRequestAcceptsQARepairTicketContract(t *testing.T) {
 	}
 	if len(request.Tickets) != 1 || request.Tickets[0].Type != "bug" || request.Tickets[0].FailureEvidence == "" {
 		t.Fatalf("QA repair metadata was not decoded: %+v", request.Tickets)
+	}
+}
+
+func TestReconciledTicketStateTreatsCommitAsCompletionEvidence(t *testing.T) {
+	stale := model.TicketState{LogicalKey: "AGE-5-Q01", State: "pending", CommitSHA: "abc123"}
+	if got := reconciledTicketState(stale); got.State != "completed" {
+		t.Fatalf("reconciled state = %q, want completed", got.State)
+	}
+	withoutCommit := model.TicketState{LogicalKey: "AGE-5-Q02", State: "pending"}
+	if got := reconciledTicketState(withoutCommit); got.State != "pending" {
+		t.Fatalf("uncommitted state = %q, want pending", got.State)
 	}
 }

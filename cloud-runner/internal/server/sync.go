@@ -589,6 +589,13 @@ func (s *Server) reconcileRunProjections(ctx context.Context, runID string) (map
 		if ticket.ProviderIssueID == "" {
 			continue
 		}
+		reconciled := reconciledTicketState(ticket)
+		if reconciled.State != ticket.State {
+			ticket = reconciled
+			if err := s.store.PutTicket(ctx, ticket); err != nil {
+				return nil, err
+			}
+		}
 		if err := s.setLinearIssueState(ctx, linearClient, runID, "ticket-state:"+ticket.LogicalKey,
 			ticket.ProviderIssueID, workflowStateForTicket(ticket.State, lifecycle), true); err != nil {
 			return nil, err
@@ -699,6 +706,13 @@ func (s *Server) reconcileRunProjections(ctx context.Context, runID string) (map
 	return map[string]any{"ok": true, "linear_issues_updated": linearUpdated,
 		"linear_activities_updated": linearActivities, "input_requests_updated": len(inputRequests),
 		"input_answers_updated": inputAnswersUpdated, "notion_pages_restored": notionRestored}, nil
+}
+
+func reconciledTicketState(ticket model.TicketState) model.TicketState {
+	if ticket.CommitSHA != "" {
+		ticket.State = "completed"
+	}
+	return ticket
 }
 
 func (s *Server) linearAccessToken(ctx context.Context) (string, error) {
