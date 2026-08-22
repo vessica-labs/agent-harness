@@ -167,6 +167,39 @@ func (s *Server) processLinearAgentSession(parsed linear.ParsedWebhook) {
 	s.broker.Notify()
 }
 
+// processLinearAgentPrompt accepts a human prompt from the native Linear
+// AgentSession only when that session is currently waiting on a durable input
+// request. The same first-answer-wins store transition is used by the web UI
+// and Linear issue-comment reply path.
+func (s *Server) processLinearAgentPrompt(parsed linear.ParsedWebhook) {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	request, err := s.store.FindInputRequestByDelivery(ctx, "linear-agent", parsed.AgentSessionID)
+	if errors.Is(err, store.ErrNotFound) {
+		s.logger.Info("ignore Linear agent prompt without an open input request", "agent_session_id", parsed.AgentSessionID)
+		return
+	}
+	if err != nil {
+		s.logger.Error("resolve Linear agent prompt", "agent_session_id", parsed.AgentSessionID, "error", err)
+		return
+	}
+	externalID := parsed.AgentActivityID
+	if externalID == "" {
+		externalID = parsed.Delivery.DeliveryID
+	}
+	response := model.InputResponse{Channel: "linear", ActorID: parsed.ActorID, ActorName: parsed.ActorName,
+		ExternalID: externalID, Answers: []model.InputAnswer{{QuestionID: "linear_reply", Text: parsed.AgentPromptBody}}}
+	request, response, err = s.store.ResolveInputRequest(ctx, request.ID, response)
+	if errors.Is(err, store.ErrConflict) {
+		return
+	}
+	if err != nil {
+		s.logger.Error("accept Linear agent prompt", "agent_session_id", parsed.AgentSessionID, "request_id", request.ID, "error", err)
+		return
+	}
+	s.recordInputAnswered(ctx, request, response)
+}
+
 func (s *Server) reportLinearAgentSessionError(ctx context.Context, client *linearapi.Client, sessionID, message string, cause error) {
 	s.logger.Error("Linear agent session", "agent_session_id", sessionID, "error", cause)
 	if client == nil || sessionID == "" {

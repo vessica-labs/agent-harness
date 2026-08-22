@@ -456,10 +456,18 @@ func (m *Memory) ListInputDeliveries(_ context.Context, requestID string) ([]mod
 func (m *Memory) FindInputRequestByDelivery(_ context.Context, provider, externalID string) (model.InputRequest, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	var result model.InputRequest
+	found := false
 	for _, delivery := range m.inputDeliveries {
 		if delivery.Provider == provider && delivery.ExternalID == externalID {
-			return m.inputRequests[delivery.RequestID], nil
+			request, ok := m.inputRequests[delivery.RequestID]
+			if ok && (provider != "linear-agent" || request.Status == "open") && (!found || request.CreatedAt.After(result.CreatedAt)) {
+				result, found = request, true
+			}
 		}
+	}
+	if found {
+		return result, nil
 	}
 	return model.InputRequest{}, ErrNotFound
 }

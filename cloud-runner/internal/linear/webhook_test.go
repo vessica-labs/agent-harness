@@ -113,6 +113,21 @@ func TestParseDelegatedAgentSessionWithGeneratedThreadComment(t *testing.T) {
 	}
 }
 
+func TestParsePromptedAgentSessionMessage(t *testing.T) {
+	now := time.Now()
+	body := []byte(`{"action":"prompted","type":"AgentSessionEvent","organizationId":"org-1","appUserId":"vessica-user","actor":{"id":"user-1","name":"Taylor","type":"user"},"agentSession":{"id":"session-2","appUserId":"vessica-user"},"agentActivity":{"id":"prompt-1","body":"Use the recommended option."}}`)
+	headers := signedHeaders(body, "s", now)
+	headers.Set(HeaderEvent, "AgentSessionEvent")
+	parsed, err := Parse(headers, body, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.AgentSessionID != "session-2" || parsed.AgentActivityID != "prompt-1" ||
+		parsed.AgentPromptBody != "Use the recommended option." || parsed.ActorID != "user-1" {
+		t.Fatalf("bad prompted agent session parse: %+v", parsed)
+	}
+}
+
 func TestMentionedAgentSessionIsNotDispatchEligible(t *testing.T) {
 	now := time.Now()
 	body := []byte(`{"action":"created","type":"AgentSessionEvent","organizationId":"org-1","appUserId":"vessica-user","agentSession":{"id":"session-3","appUserId":"vessica-user","commentId":"session-thread-comment","sourceCommentId":"mention-comment","issue":{"id":"issue-3","identifier":"ENG-46","title":"Question","url":"https://linear.app/ENG-46","teamId":"team-1"}}}`)

@@ -122,6 +122,11 @@ func (s *Server) linearWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.EqualFold(parsed.Delivery.EventType, "AgentSessionEvent") {
+		if strings.EqualFold(parsed.Delivery.Action, "prompted") {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "accepted": true})
+			go s.processLinearAgentPrompt(parsed)
+			return
+		}
 		if eligible, reason := parsed.AgentSessionEligible(); !eligible {
 			duplicate, _ := s.store.RecordIgnoredLinearDelivery(r.Context(), parsed.Delivery, "", reason)
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ignored": true, "duplicate": duplicate, "reason": reason})
@@ -819,6 +824,7 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 			return
 		}
 		inputRequest = &request
+		value.Payload = inputRequestEventPayload(value.Payload, request.ID)
 	}
 	stored, err := s.appendEvent(r.Context(), value)
 	if err != nil {
@@ -890,9 +896,7 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 			_ = s.store.SetPreview(r.Context(), runID, "ready", "", payload.Port, nil)
 		}
 	}
-	if value.Type == "stage.started" || value.Type == "stage.completed" || value.Type == "stage.retrying" ||
-		value.Type == "human_input.requested" || value.Type == "pr.created" || value.Type == "run.completed" ||
-		value.Type == "run.failed" || value.Type == "run.paused" {
+	if shouldSyncLinearLifecycleEvent(value.Type) {
 		if err := s.syncLinearLifecycleEvent(r.Context(), runID, stored); err != nil {
 			writeError(w, http.StatusBadGateway, fmt.Errorf("synchronize Linear lifecycle: %w", err))
 			return

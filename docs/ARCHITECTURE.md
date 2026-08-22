@@ -53,7 +53,7 @@ Linear AgentSession webhook ──> control-plane service (Railway) ──> Rail
 
 One root Linear issue delegated to Vessica → one durable run; duplicate deliveries dedupe to the same run via `webhook_deliveries` + `source_claims`. The native `AgentSession` ID is stored in run metadata, and semantic Agent Activities keep Linear's agent UI current. Ordinary Issue webhooks update dependency gates but cannot dispatch runs. Completion → **draft** GitHub PR, never merged automatically. Sandboxes are disposable; recovery comes from Postgres journals + pushed branches.
 
-Linear may attach a generated session-thread `commentId` to an Agent-picker delegation. The parser distinguishes comment/mention invocation by `sourceCommentId`, then fetches the issue and requires its live delegate to be the configured app actor before claiming a run.
+Linear may attach a generated session-thread `commentId` to an Agent-picker delegation. The parser distinguishes comment/mention invocation by `sourceCommentId`, then fetches the issue and requires its live delegate to be the configured app actor before claiming a run. Native AgentSession activity includes pipeline stages plus redacted Codex command and file-edit actions; start/completion events share a logical key so each repository action is projected once.
 
 ## 4. Control plane (`internal/server`)
 
@@ -86,7 +86,7 @@ Internal worker API surface: append events, journal upload/download, heartbeat, 
 
 **External projection is idempotent by marker or provider identity** (`sync.go`): every Linear comment / Notion page is upserted by an HTML marker (`<!-- agent-harness:run:<id> -->`, `:child:`, `:ticket:`, `:summary:`, `:activity:`, `:input:`, `notion-artifact:`); native Linear Agent Activities use the AgentSession ID plus a durable logical key. All projections are tracked in `external_sync` with `pending`/`synced`/`failed`. `reconcileRunProjections` can force-replay everything. Linear workflow states are resolved/created once per team (`EnsureLifecycleStates`: Todo, InProgress, NeedsInput, ForReview, Done).
 
-**Human input** (`input.go`) is deliberately constrained: only `product` and `arch`, one round each, 1–3 questions, each with 2–3 options, exactly one marked recommended, free-text allowed. Answers arrive from the dashboard Inbox or a reply in the exact Linear question thread (`FindInputRequestByDelivery`); the first accepted answer wins (`ResolveInputRequest` returns `ErrConflict` for the rest) and queues a resumed run.
+**Human input** (`input.go`) is deliberately constrained: only `product` and `arch`, one round each, 1–3 questions, each with 2–3 options, exactly one marked recommended, free-text allowed. Each request is delivered to the dashboard Inbox, an issue question thread, and the native AgentSession as an `elicitation`. Answers arrive from the Inbox, a reply in the exact issue thread, or the AgentSession chat's `prompted` webhook (`FindInputRequestByDelivery`); the first accepted answer wins (`ResolveInputRequest` returns `ErrConflict` for the rest) and queues a resumed run.
 
 ## 5. Persistence (`internal/store`)
 

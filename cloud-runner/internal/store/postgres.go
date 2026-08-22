@@ -361,7 +361,9 @@ FROM input_deliveries WHERE request_id=$1 ORDER BY provider`, requestID)
 
 func (p *Postgres) FindInputRequestByDelivery(ctx context.Context, provider, externalID string) (model.InputRequest, error) {
 	value, err := scanInputRequest(p.pool.QueryRow(ctx, `SELECT `+qualifiedInputRequestColumns+` FROM input_requests r
-JOIN input_deliveries d ON d.request_id=r.id WHERE d.provider=$1 AND d.external_id=$2`, provider, externalID))
+	JOIN input_deliveries d ON d.request_id=r.id WHERE d.provider=$1 AND d.external_id=$2
+	AND ($1 <> 'linear-agent' OR r.status='open')
+	ORDER BY r.created_at DESC LIMIT 1`, provider, externalID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return value, ErrNotFound
 	}

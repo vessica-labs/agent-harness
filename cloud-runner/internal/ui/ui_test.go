@@ -46,6 +46,11 @@ func TestLocalUIKeepsBearerTokenServerSide(t *testing.T) {
 			t.Fatalf("runner input UI is missing %q", expected)
 		}
 	}
+	for _, expected := range []string{".ticket.running", "ticket-active-pulse", "prefers-reduced-motion:reduce"} {
+		if !strings.Contains(root.Body.String(), expected) {
+			t.Fatalf("runner active-ticket motion is missing %q", expected)
+		}
+	}
 	for _, expected := range []string{`id="mascot"`, `id="mascot-cat"`, "cat-tail", "cat-rump", "@keyframes swish", "mascotSayNext", "mascotReact(parsed)", "mascot-dismissed"} {
 		if !strings.Contains(root.Body.String(), expected) {
 			t.Fatalf("runner mascot is missing %q", expected)

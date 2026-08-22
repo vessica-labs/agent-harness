@@ -91,7 +91,7 @@
     .ticket-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:7px }
     .ticket { min-width:0; padding:9px 10px; color:var(--text); text-decoration:none; transition:border-color .15s ease,background .15s ease }
     a.ticket:hover { background:#16212f; border-color:#4a5d78 }
-    .ticket.running { border-color:var(--accent); background:#16322f; box-shadow:0 0 0 3px #75e4bc20; animation:pulse 1.6s ease-in-out infinite }
+    .ticket.running { border-color:var(--accent); background:#16322f; box-shadow:0 0 0 2px #75e4bc18; animation:ticket-active-pulse 2.4s ease-in-out infinite }
     .artifact-list { display:flex; flex-wrap:wrap; gap:7px }
     .artifact { padding:8px 10px; color:var(--accent); text-decoration:none }
     .artifact:hover { border-color:#4a5d78; background:#16212f }
@@ -151,7 +151,7 @@
 	.mascot-cat:hover .cat-rump { animation-duration:.8s }
 	@keyframes swish { 0%,100% { transform:rotate(-13deg) } 50% { transform:rotate(15deg) } }
 	@keyframes wiggle { 0%,100% { transform:rotate(-2.5deg) translateY(0) } 50% { transform:rotate(2.5deg) translateY(-1.5px) } }
-    @keyframes pulse { 50% { box-shadow:0 0 0 6px #75e4bc0a } }
+    @keyframes ticket-active-pulse { 50% { border-color:#a6f1d6; background:#183a34; box-shadow:0 0 0 5px #75e4bc0b } }
 	@media (max-width:900px) { header,main { width:min(100% - 24px,760px) } .grid,.team-grid { grid-template-columns:1fr } .events-panel { position:static } .events { max-height:480px } .invite-form { grid-template-columns:1fr 1fr } }
     @media (max-width:580px) { header { align-items:start; flex-direction:column; padding-top:26px } .connection { align-self:stretch; justify-content:center } .panel-head { padding-inline:13px } .run { padding-inline:14px } .run-top,.detail-head { align-items:start; flex-wrap:wrap } .run-top strong { flex:1 1 220px } .meta span:last-child { flex-basis:100%; margin-top:3px } .meta span:nth-last-child(2)::after { content:''; padding:0 } .detail { padding-inline:13px } .metrics { grid-template-columns:repeat(2,minmax(0,1fr)) } .facts { grid-template-columns:minmax(0,1fr); gap:2px } .facts dd { max-width:100%; margin-bottom:7px } .dag { grid-template-columns:repeat(2,minmax(0,1fr)) } .activity-action { flex-wrap:wrap } .activity-duration { margin-left:24px } .mascot { right:8px; bottom:8px } .mascot-bubble { max-width:170px } .mascot-cat { width:46px; height:46px } }
     @media (prefers-reduced-motion:reduce) { * { scroll-behavior:auto!important; animation:none!important; transition:none!important } }
