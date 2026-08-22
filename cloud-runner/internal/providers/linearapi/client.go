@@ -131,12 +131,32 @@ type IssueLabel struct {
 }
 
 type Ticket struct {
-	Key                string   `json:"key"`
-	Title              string   `json:"title"`
-	Objective          string   `json:"objective"`
-	AcceptanceCriteria []string `json:"acceptance_criteria"`
-	OwnedPaths         []string `json:"owned_paths"`
-	DependsOn          []string `json:"depends_on"`
+	Key                      string             `json:"key"`
+	Type                     string             `json:"type,omitempty"`
+	Title                    string             `json:"title"`
+	Objective                string             `json:"objective"`
+	SourceAcceptanceCriteria []string           `json:"source_acceptance_criteria,omitempty"`
+	AcceptanceCriteria       []string           `json:"acceptance_criteria"`
+	OwnedPaths               []string           `json:"owned_paths"`
+	DependsOn                []string           `json:"depends_on"`
+	FocusedChecks            []string           `json:"focused_checks,omitempty"`
+	Verification             TicketVerification `json:"verification,omitempty"`
+	CommitMessage            string             `json:"commit_message,omitempty"`
+	Complexity               string             `json:"complexity,omitempty"`
+	FailureEvidence          string             `json:"failure_evidence,omitempty"`
+	ArchitectureConstraints  []string           `json:"architecture_constraints,omitempty"`
+}
+
+type TicketVerification struct {
+	IterationChecks []string       `json:"iteration_checks"`
+	TicketGate      []string       `json:"ticket_gate"`
+	PipelineGates   []PipelineGate `json:"pipeline_gates"`
+}
+
+type PipelineGate struct {
+	Stage   string `json:"stage"`
+	Command string `json:"command"`
+	Reason  string `json:"reason"`
 }
 
 func New(token string) *Client {
@@ -586,11 +606,27 @@ func (c *Client) updateChild(ctx context.Context, id, title, description string,
 }
 
 func ticketDescription(marker string, ticket Ticket) string {
-	lines := []string{marker, "", ticket.Objective, "", "## Acceptance criteria"}
+	lines := []string{marker, "", ticket.Objective}
+	if len(ticket.SourceAcceptanceCriteria) > 0 {
+		lines = append(lines, "", "## Source acceptance criteria")
+		for _, value := range ticket.SourceAcceptanceCriteria {
+			lines = append(lines, "- `"+value+"`")
+		}
+	}
+	lines = append(lines, "", "## Acceptance criteria")
 	for _, value := range ticket.AcceptanceCriteria {
 		lines = append(lines, "- "+value)
 	}
+	if ticket.FailureEvidence != "" {
+		lines = append(lines, "", "## Failure evidence", ticket.FailureEvidence)
+	}
 	lines = append(lines, "", "## Harness execution", "- Logical key: `"+ticket.Key+"`", "- Depends on: "+empty(strings.Join(ticket.DependsOn, ", "), "None"), "- Owned paths: "+empty(strings.Join(ticket.OwnedPaths, ", "), "None"))
+	if ticket.Type != "" {
+		lines = append(lines, "- Type: "+ticket.Type)
+	}
+	if ticket.Complexity != "" {
+		lines = append(lines, "- Complexity: "+ticket.Complexity)
+	}
 	return strings.Join(lines, "\n") + "\n"
 }
 
