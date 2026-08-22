@@ -28,6 +28,7 @@ type ticketProgress struct {
 	State       string   `json:"status"`
 	Owner       string   `json:"owner"`
 	Commit      string   `json:"commit"`
+	Blocker     string   `json:"blocker,omitempty"`
 	DependsOn   []string `json:"depends_on"`
 	ProviderID  string   `json:"provider_id,omitempty"`
 	ProviderKey string   `json:"provider_key,omitempty"`
@@ -133,6 +134,9 @@ func (s *Server) synchronize(ctx context.Context, runID string, input syncReques
 		marker := fmt.Sprintf("<!-- agent-harness:ticket:%s:%s -->", runID, progress.Key)
 		body := marker + "\n\n## Agent Harness ticket `" + progress.Key + "`\n\n- Run: `" + runID + "`\n- Status: " + progress.State +
 			"\n- Depends on: " + emptyJoin(progress.DependsOn) + "\n- Owner: " + empty(progress.Owner, "Unclaimed") + "\n- Commit: " + empty(progress.Commit, "Pending") + "\n"
+		if progress.Blocker != "" {
+			body += "- Blocker: " + progress.Blocker + "\n"
+		}
 		comment, err := linearClient.UpsertComment(ctx, synced.ExternalID, marker, body)
 		if err != nil {
 			return result, s.recordSyncFailure(ctx, runID, "ticket-progress:"+progress.Key, "linear", marker, err)
@@ -205,10 +209,8 @@ func ticketByKey(ctx context.Context, s *Server, runID, key string) (model.Ticke
 
 func workflowStateForTicket(state string, lifecycle linearapi.LifecycleStates) linearapi.WorkflowState {
 	switch strings.ToLower(strings.TrimSpace(state)) {
-	case "running", "in_progress", "in progress", "claimed":
+	case "running", "in_progress", "in progress", "claimed", "failed", "blocked":
 		return lifecycle.InProgress
-	case "failed", "blocked":
-		return lifecycle.NeedsInput
 	case "completed", "done":
 		return lifecycle.Done
 	default:
@@ -313,7 +315,9 @@ func (s *Server) syncLinearLifecycleEvent(ctx context.Context, runID string, eve
 	case "pr.merged":
 		target = &lifecycle.Done
 	case "run.failed", "run.paused":
-		target = &lifecycle.NeedsInput
+		// A stopped execution is still unresolved work. Needs Input is reserved
+		// for a durable, open human-input request projected by input.go.
+		target = &lifecycle.InProgress
 	}
 	if target != nil {
 		if err := s.setLinearIssueState(ctx, client, run.ID, "parent-state", run.SourceIssueID, *target, false); err != nil {
@@ -591,14 +595,15 @@ func (s *Server) reconcileRunProjections(ctx context.Context, runID string) (map
 		}
 		linearUpdated++
 	}
+	inputRequests, err := s.store.ListInputRequests(ctx, model.InputRequestFilter{RunID: runID, Status: "open", Limit: 10})
+	if err != nil {
+		return nil, err
+	}
 	parentState := lifecycle.Todo
 	if run.State == "running" || run.CurrentStage != "" || len(tickets) > 0 {
 		parentState = lifecycle.InProgress
 	}
-	if run.State == "awaiting_input" {
-		parentState = lifecycle.NeedsInput
-	}
-	if run.State == "paused" {
+	if len(inputRequests) > 0 {
 		parentState = lifecycle.NeedsInput
 	}
 	if run.State == "completed" && allTicketsCompleted(ctx, s, runID) {
@@ -639,10 +644,6 @@ func (s *Server) reconcileRunProjections(ctx context.Context, runID string) (map
 		if err := s.syncLinearAgentSessionLinks(ctx, linearClient, run); err != nil {
 			return nil, err
 		}
-	}
-	inputRequests, err := s.store.ListInputRequests(ctx, model.InputRequestFilter{RunID: runID, Status: "open", Limit: 10})
-	if err != nil {
-		return nil, err
 	}
 	for _, request := range inputRequests {
 		if err := s.syncLinearInputRequested(ctx, request); err != nil {

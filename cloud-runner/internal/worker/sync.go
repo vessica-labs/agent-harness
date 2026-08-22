@@ -41,11 +41,37 @@ func (r *Runner) recordTicketCompletion(ctx context.Context, completed ticket, c
 			value["status"] = "completed"
 			value["owner"] = r.config.LeaseOwner
 			value["commit"] = commit
+			delete(value, "blocker")
 		}
 	}
 	_, err = r.harness(ctx, r.repo, "checkpoint", "--run-dir", r.runDir, "--patch-json",
 		string(mustJSON(map[string]any{"tickets": state.Tickets})), "--event", "ticket.completed",
 		"--event-details-json", string(mustJSON(map[string]any{"ticket_key": completed.Key, "commit": commit})))
+	return err
+}
+
+func (r *Runner) recordTicketFailure(ctx context.Context, failed ticket, blocker string) error {
+	body, err := os.ReadFile(filepath.Join(r.runDir, "state.json"))
+	if err != nil {
+		return err
+	}
+	var state struct {
+		Tickets []map[string]any `json:"tickets"`
+	}
+	if err := json.Unmarshal(body, &state); err != nil {
+		return err
+	}
+	for _, value := range state.Tickets {
+		if value["key"] == failed.Key {
+			value["status"] = "failed"
+			value["owner"] = r.config.LeaseOwner
+			value["commit"] = nil
+			value["blocker"] = blocker
+		}
+	}
+	_, err = r.harness(ctx, r.repo, "checkpoint", "--run-dir", r.runDir, "--patch-json",
+		string(mustJSON(map[string]any{"tickets": state.Tickets})), "--event", "ticket.failed",
+		"--event-details-json", string(mustJSON(map[string]any{"ticket_key": failed.Key, "blocker": blocker})))
 	return err
 }
 
@@ -68,6 +94,7 @@ func (r *Runner) recordTicketWaveStarted(ctx context.Context, wave []ticket) err
 		if key, _ := value["key"].(string); ready[key] {
 			value["status"] = "running"
 			value["owner"] = r.config.LeaseOwner
+			delete(value, "blocker")
 		}
 	}
 	_, err = r.harness(ctx, r.repo, "checkpoint", "--run-dir", r.runDir, "--patch-json",

@@ -829,7 +829,7 @@ Each coder subagent owns exactly one ticket. The coordinator does not implement 
 
 Tickets that add or update libraries own the affected package manifests and package-manager lockfile. Coders use the repository package manager and commit both manifest and lockfile changes; undeclared global imports, hand-written type shims, and lockfile-only dependency edits are rejected by the role contract.
 
-The orchestrator integrates successful commits into the run branch in stable logical-key order, reruns focused checks, synchronizes ticket progress, pushes the durable branch, and removes disposable ticket worktrees. If a sibling in the same dependency wave fails, completed siblings are integrated and checkpointed before the stage retries, so recovery reruns only unfinished tickets.
+The orchestrator integrates successful commits into the run branch in stable logical-key order, reruns focused checks, synchronizes ticket progress, pushes the durable branch, and removes disposable ticket worktrees. If a sibling in the same dependency wave fails, completed siblings are integrated and checkpointed before the stage retries, so recovery reruns only unfinished tickets. The failed ticket's result and blocker are preserved in the root journal and child-ticket progress before its disposable worktree is removed. Execution failures remain In Progress in Linear; Needs Input is reserved for a durable Product or Architecture question that appears in the Inbox.
 
 ### Lint
 

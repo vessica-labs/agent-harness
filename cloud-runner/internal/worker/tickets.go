@@ -20,6 +20,7 @@ type ticketRun struct {
 	worktree string
 	result   []byte
 	commit   string
+	blocker  string
 	err      error
 }
 

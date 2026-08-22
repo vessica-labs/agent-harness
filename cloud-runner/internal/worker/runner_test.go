@@ -107,6 +107,26 @@ func TestTicketWavesResumeCompletedTickets(t *testing.T) {
 	}
 }
 
+func TestFailedTicketEvidenceIsPreservedForRecovery(t *testing.T) {
+	runDir := t.TempDir()
+	stage := Stage{Result: FileContract{File: "agent-output/coder/{ticket_key}.json"}}
+	result := []byte(`{"agent":"coder","status":"blocked","commit":null,"blocker":{"reason":"owned path missing","path":"package.json"}}`)
+	path, err := preserveTicketResult(runDir, stage, "AGE-1-T05", result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stored) != string(result) {
+		t.Fatalf("preserved result = %s, want %s", stored, result)
+	}
+	if got := ticketBlockerText(map[string]any{"reason": "owned path missing", "path": "package.json"}); got != `{"path":"package.json","reason":"owned path missing"}` {
+		t.Fatalf("structured blocker = %q", got)
+	}
+}
+
 func TestPipelineValidatesRepairLoops(t *testing.T) {
 	root := t.TempDir()
 	valid := `version: 1

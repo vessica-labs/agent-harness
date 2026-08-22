@@ -626,32 +626,60 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 				if current.err != nil {
 					continue
 				}
+				current.result, current.err = os.ReadFile(resultPath)
+				if current.err != nil {
+					continue
+				}
 				if _, err := r.harness(ctx, current.worktree, "materialize-result", "--pipeline", filepath.Join(current.worktree, ".harness", "pipeline.yaml"),
 					"--run-dir", worktreeRun, "--stage", stage.ID, "--input", resultPath, "--ticket-key", current.ticket.Key); err != nil {
 					current.err = err
 					continue
 				}
-				current.result, current.err = os.ReadFile(resultPath)
-				if current.err != nil {
-					continue
-				}
 				var output struct {
-					Status string `json:"status"`
-					Commit string `json:"commit"`
+					Status  string `json:"status"`
+					Commit  string `json:"commit"`
+					Blocker any    `json:"blocker"`
 				}
 				if err := json.Unmarshal(current.result, &output); err != nil {
 					current.err = err
 					continue
 				}
 				if output.Status != "completed" || output.Commit == "" {
-					current.err = fmt.Errorf("ticket %s did not produce a completed commit", current.ticket.Key)
+					current.blocker = ticketBlockerText(output.Blocker)
+					if current.blocker != "" {
+						current.err = fmt.Errorf("ticket %s blocked: %s", current.ticket.Key, current.blocker)
+					} else {
+						current.err = fmt.Errorf("ticket %s did not produce a completed commit", current.ticket.Key)
+					}
 					continue
 				}
 				current.commit = output.Commit
 			}
 			if current.err != nil {
+				if current.blocker == "" {
+					current.blocker = current.err.Error()
+				}
+				if len(current.result) > 0 {
+					if _, err := preserveTicketResult(r.runDir, stage, current.ticket.Key, current.result); err != nil {
+						current.err = errors.Join(current.err, fmt.Errorf("preserve ticket result: %w", err))
+					}
+				}
+				if err := r.recordTicketFailure(context.WithoutCancel(ctx), current.ticket, current.blocker); err != nil {
+					current.err = errors.Join(current.err, fmt.Errorf("checkpoint ticket failure: %w", err))
+				}
 				_ = r.event(context.WithoutCancel(ctx), "ticket.failed", "error", current.err.Error(), stage.ID,
-					map[string]any{"ticket_key": current.ticket.Key, "depends_on": current.ticket.DependsOn, "owner": r.config.LeaseOwner})
+					map[string]any{"ticket_key": current.ticket.Key, "depends_on": current.ticket.DependsOn,
+						"owner": r.config.LeaseOwner, "blocker": current.blocker})
+			}
+		}
+		if firstTicketRunError(runs) != nil {
+			if err := r.syncTicketProgress(context.WithoutCancel(ctx), stage.ID); err != nil {
+				for _, current := range runs {
+					if current.err != nil {
+						current.err = errors.Join(current.err, fmt.Errorf("sync ticket failure: %w", err))
+						break
+					}
+				}
 			}
 		}
 		sort.Slice(runs, func(i, j int) bool { return runs[i].ticket.Key < runs[j].ticket.Key })
@@ -717,6 +745,28 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 		}
 	}
 	return nil
+}
+
+func ticketBlockerText(value any) string {
+	if value == nil {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text)
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		return strings.TrimSpace(fmt.Sprint(value))
+	}
+	return string(body)
+}
+
+func preserveTicketResult(runDir string, stage Stage, ticketKey string, result []byte) (string, error) {
+	resultPath := filepath.Join(runDir, filepath.FromSlash(replaceTicket(stage.Result.File, ticketKey)))
+	if err := os.MkdirAll(filepath.Dir(resultPath), 0o700); err != nil {
+		return resultPath, err
+	}
+	return resultPath, os.WriteFile(resultPath, result, 0o600)
 }
 
 func firstTicketRunError(runs []*ticketRun) error {
