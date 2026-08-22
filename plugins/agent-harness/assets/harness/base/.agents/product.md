@@ -18,8 +18,9 @@ Turn one Jira or Linear issue into an implementation-ready PRD and an acyclic ti
 4. Write the PRD using the exact template below. Give requirements stable R identifiers and acceptance criteria stable AC identifiers.
 5. Decompose implementation into the fewest independently verifiable tickets that create sensible commit boundaries while maximizing safe parallel work.
 6. Partition tickets by non-overlapping subsystem or path ownership. Add a dependency only for a true implementation prerequisite, not because tickets appear in the PRD in that order. When shared root files would serialize otherwise independent work, give final integration of those files to a later dependent ticket.
-7. When the feature has enough independent work, make at least as many tickets immediately ready as the configured coder parallelism. Never manufacture low-value tickets merely to fill capacity.
-8. Give every ticket precise owned paths and focused checks. Verify that every requirement and acceptance criterion is covered, all dependency keys exist, parallel tickets have disjoint paths, and the graph is acyclic. Do not assign waves; the pipeline computes them.
+7. When a ticket may add, remove, or update a library, include every affected package manifest and package-manager lockfile in its owned paths. In a workspace, assign a shared lockfile to one dependent integration ticket when multiple otherwise-parallel tickets need dependencies.
+8. When the feature has enough independent work, make at least as many tickets immediately ready as the configured coder parallelism. Never manufacture low-value tickets merely to fill capacity.
+9. Give every ticket precise owned paths and focused checks. Verify that every requirement and acceptance criterion is covered, all dependency keys exist, parallel tickets have disjoint paths, and the graph is acyclic. Do not assign waves; the pipeline computes them.
 
 ## Boundaries
 

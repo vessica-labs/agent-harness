@@ -58,7 +58,7 @@ Download a release binary from [GitHub Releases](https://github.com/vessica-labs
 mkdir -p "$HOME/.local/bin"
 
 # Apple Silicon macOS
-curl -fL https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.32/agent-harness-darwin-arm64 \
+curl -fL https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.33/agent-harness-darwin-arm64 \
   -o "$HOME/.local/bin/agent-harness"
 
 # Intel macOS: use agent-harness-darwin-amd64
@@ -124,6 +124,8 @@ Railway control-plane service ---- Railway Postgres
 ```
 
 The default limit is three simultaneous source-ticket runs. One source Linear issue has one permanent claim and one resumable run ID. A completed pipeline creates a draft GitHub pull request and never merges automatically.
+
+The versioned worker checkpoint includes Node.js 24, pnpm 11, Playwright, and Chromium. Project libraries remain repository dependencies: planning assigns the relevant package manifests and lockfile to the implementing ticket, and the Codex worker may install and commit them normally.
 
 The localhost UI connects through an authenticated local proxy. The browser never receives the device access or refresh token.
 
@@ -191,7 +193,7 @@ export RAILWAY_API_TOKEN='<enter privately>'
 agent-harness railway upgrade \
   --project <railway-project-id> \
   --environment production \
-  --version v0.1.0-rc.32
+  --version v0.1.0-rc.33
 
 agent-harness railway init \
   --project <railway-project-id> \
@@ -199,7 +201,7 @@ agent-harness railway init \
   --service control-plane \
   --postgres-service Postgres \
   --url https://<control-plane-domain> \
-  --checkpoint agent-harness-worker-0.1.0-rc.32 \
+  --checkpoint agent-harness-worker-0.1.0-rc.33 \
   --profile <repository-profile>
 
 agent-harness railway deploy \
@@ -449,7 +451,7 @@ make release
 ```
 
 Both commands inspect the release-candidate tags on `origin` and select the next
-RC on the newest version line, such as `v0.1.0-rc.33` after `v0.1.0-rc.32`.
+RC on the newest version line, such as `v0.1.0-rc.34` after `v0.1.0-rc.33`.
 `release-check` is read-only with respect to GitHub and Railway. `release` reruns
 verification, pushes `main` and the selected version tag, waits for GitHub
 Actions to publish all release assets and the GHCR image, creates the matching

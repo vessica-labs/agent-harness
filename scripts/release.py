@@ -35,10 +35,16 @@ EXPECTED_ASSETS = frozenset(
 FAILED_DEPLOYMENT_STATES = frozenset(
     {"CANCELLED", "CRASHED", "FAILED", "REMOVED", "SKIPPED"}
 )
-RAILWAY_ENV = {
-    "RAILWAY_CALLER": "agent-harness-release",
-    "RAILWAY_AGENT_SESSION": "railway-skill-agent-harness-release",
-}
+
+
+def railway_env() -> dict[str, str]:
+    """Preserve caller-provided Railway telemetry while supplying release defaults."""
+    return {
+        "RAILWAY_CALLER": os.environ.get("RAILWAY_CALLER", "agent-harness-release"),
+        "RAILWAY_AGENT_SESSION": os.environ.get(
+            "RAILWAY_AGENT_SESSION", "railway-skill-agent-harness-release"
+        ),
+    }
 
 
 class ReleaseError(RuntimeError):
@@ -69,7 +75,7 @@ def command(
 
 
 def json_command(args: list[str], *, railway: bool = False) -> Any:
-    raw = command(args, capture=True, env=RAILWAY_ENV if railway else None)
+    raw = command(args, capture=True, env=railway_env() if railway else None)
     try:
         return json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -369,7 +375,7 @@ def set_checkpoint_variable(args: argparse.Namespace, version: str) -> None:
             "--skip-deploys",
             "--json",
         ],
-        env=RAILWAY_ENV,
+        env=railway_env(),
     )
 
 
@@ -418,7 +424,7 @@ def deploy(args: argparse.Namespace) -> None:
         if status_name in FAILED_DEPLOYMENT_STATES:
             command(
                 ["railway", "redeploy", *railway_args(args), "--from-source", "--yes", "--json"],
-                env=RAILWAY_ENV,
+                env=railway_env(),
             )
             excluded_id = str(previous.get("id") or "")
         else:
@@ -426,7 +432,7 @@ def deploy(args: argparse.Namespace) -> None:
     else:
         command(
             connect_image_command(args, image),
-            env=RAILWAY_ENV,
+            env=railway_env(),
         )
         excluded_id = str(previous.get("id") or "")
     deployed = wait_for_deployment(args, image, excluded_id)

@@ -51,7 +51,7 @@ Execution context:
 
 Work directly in the supplied repository. Do not edit pipeline state or provider credentials. Write the exact JSON output contract to the required result file. Human input policy: only the product and arch stages may return status needs_input, at most once per stage. Every other stage must use the available context and continue to a terminal result; it may never ask a question or wait for a user. %s`,
 		stage.ID, string(role), repo, runDir, strings.Join(inputs, "\n"), resultPath,
-		extra+fmt.Sprintf(" In this Railway sandbox, every Playwright invocation must explicitly use at most %d workers (for example: npm run test:e2e -- --workers=%d). HARNESS_PLAYWRIGHT_WORKERS contains this limit.", r.config.PlaywrightWorkers, r.config.PlaywrightWorkers))
+		extra+fmt.Sprintf(" In this Railway sandbox, Playwright and Chromium are preinstalled. Repository tests must still declare their Playwright package dependency in the appropriate package manifest and lockfile. Configure Playwright to use PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH when it is set. Every Playwright invocation must explicitly use at most %d workers (for example: npm run test:e2e -- --workers=%d). HARNESS_PLAYWRIGHT_WORKERS contains this limit.", r.config.PlaywrightWorkers, r.config.PlaywrightWorkers))
 	if err := os.MkdirAll(filepath.Dir(resultPath), 0o700); err != nil {
 		return err
 	}

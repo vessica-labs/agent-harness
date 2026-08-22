@@ -66,6 +66,8 @@ func TestLinearParentLifecycleFollowsRunAndMergeEvents(t *testing.T) {
 		{Type: "run.queued", Message: "claimed"},
 		{Type: "stage.started", Stage: "product", Message: "started"},
 		{Type: "stage.completed", Stage: "product", Message: "completed"},
+		{Type: "run.paused", Stage: "coder", Message: "dependency contract failed"},
+		{Type: "stage.started", Stage: "coder", Message: "recovered"},
 		{Type: "run.completed", Message: "complete"},
 		{Type: "pr.merged", Stage: "pr", Message: "merged"},
 	}
@@ -96,13 +98,28 @@ func TestLinearParentLifecycleFollowsRunAndMergeEvents(t *testing.T) {
 			t.Fatalf("sync %s: %v", event.Type, err)
 		}
 	}
-	if strings.Join(transitions, ",") != "todo,progress,input,progress,review,done" {
+	if strings.Join(transitions, ",") != "todo,progress,input,progress,input,progress,review,done" {
 		t.Fatalf("unexpected lifecycle transitions: %v", transitions)
 	}
 	for _, key := range []string{"activity:run:queued", "activity:stage:product:started", "activity:stage:product:completed", "activity:run:completed", "activity:pr:merged"} {
 		projection, err := memory.GetExternalSync(ctx, claimed.Run.ID, key, "linear")
 		if err != nil || projection.State != "synced" {
 			t.Fatalf("activity %s was not durably synchronized: %+v %v", key, projection, err)
+		}
+	}
+}
+
+func TestFailedTicketUsesNeedsInputLifecycle(t *testing.T) {
+	lifecycle := linearapi.LifecycleStates{
+		Todo: linearapi.WorkflowState{ID: "todo"}, NeedsInput: linearapi.WorkflowState{ID: "input"},
+		InProgress: linearapi.WorkflowState{ID: "progress"}, Done: linearapi.WorkflowState{ID: "done"},
+	}
+	if got := workflowStateForTicket("failed", lifecycle); got.ID != "input" {
+		t.Fatalf("failed ticket state = %q, want Needs Input", got.ID)
+	}
+	for _, eventType := range []string{"ticket.started", "ticket.completed", "ticket.failed"} {
+		if !shouldSyncLinearLifecycleEvent(eventType) {
+			t.Fatalf("%s must synchronize its Linear child state", eventType)
 		}
 	}
 }

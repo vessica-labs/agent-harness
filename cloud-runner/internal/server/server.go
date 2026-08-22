@@ -853,6 +853,21 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 		go s.publishPreview(runID)
 	} else if value.Type == "run.paused" || value.Type == "run.failed" {
 		_ = s.store.SetRunState(r.Context(), runID, "paused", value.Stage, value.Message)
+		if value.Stage != "" {
+			attempt := 0
+			if stages, listErr := s.store.ListStages(r.Context(), runID); listErr == nil {
+				for _, stage := range stages {
+					if stage.Stage == value.Stage {
+						attempt = stage.Attempt
+						break
+					}
+				}
+			}
+			blockedDetails, _ := json.Marshal(map[string]any{"error": value.Message})
+			details := s.mergeStageDetails(r.Context(), runID, value.Stage, blockedDetails)
+			_ = s.store.PutStage(r.Context(), model.StageState{RunID: runID, Stage: value.Stage,
+				State: "blocked", Attempt: attempt, Details: details})
+		}
 	} else if value.Type == "pipeline.stage" || value.Type == "stage.started" || value.Type == "stage.completed" || value.Type == "stage.retrying" {
 		state := map[string]string{"pipeline.stage": "pending", "stage.started": "running", "stage.completed": "completed", "stage.retrying": "pending"}[value.Type]
 		details := value.Payload

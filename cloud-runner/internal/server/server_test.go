@@ -193,6 +193,21 @@ func TestIssueWebhookDoesNotDispatchAndManagementIsProtected(t *testing.T) {
 	if measured.CodexModel != "gpt-5.3-codex" || measured.InputTokens != 120 || measured.EstimatedCostUSD != 0.001 {
 		t.Fatalf("usage event was not projected: %+v", measured)
 	}
+	pausedBody := bytes.NewBufferString(`{"stage":"coder","type":"run.paused","level":"error","message":"dependency contract failed"}`)
+	pausedRequest, _ := http.NewRequest(http.MethodPost, host.URL+"/internal/v1/runs/"+runs[0].ID+"/events", pausedBody)
+	pausedRequest.Header.Set("Authorization", "Bearer "+capability)
+	pausedRequest.Header.Set("Content-Type", "application/json")
+	pausedResponse, err := http.DefaultClient.Do(pausedRequest)
+	if err != nil || pausedResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("pause projection failed: %v status=%v", err, pausedResponse.StatusCode)
+	}
+	pausedResponse.Body.Close()
+	paused, _ := memory.GetRun(ctx, runs[0].ID)
+	stages, _ := memory.ListStages(ctx, runs[0].ID)
+	if paused.State != "paused" || len(stages) != 1 || stages[0].Stage != "coder" || stages[0].State != "blocked" ||
+		!strings.Contains(string(stages[0].Details), "dependency contract failed") {
+		t.Fatalf("paused stage was not durably blocked: run=%+v stages=%+v", paused, stages)
+	}
 	response, err := http.Get(host.URL + "/v1/runs")
 	if err != nil {
 		t.Fatal(err)

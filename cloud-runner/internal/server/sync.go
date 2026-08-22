@@ -207,6 +207,8 @@ func workflowStateForTicket(state string, lifecycle linearapi.LifecycleStates) l
 	switch strings.ToLower(strings.TrimSpace(state)) {
 	case "running", "in_progress", "in progress", "claimed":
 		return lifecycle.InProgress
+	case "failed", "blocked":
+		return lifecycle.NeedsInput
 	case "completed", "done":
 		return lifecycle.Done
 	default:
@@ -310,10 +312,27 @@ func (s *Server) syncLinearLifecycleEvent(ctx context.Context, runID string, eve
 		}
 	case "pr.merged":
 		target = &lifecycle.Done
+	case "run.failed", "run.paused":
+		target = &lifecycle.NeedsInput
 	}
 	if target != nil {
 		if err := s.setLinearIssueState(ctx, client, run.ID, "parent-state", run.SourceIssueID, *target, false); err != nil {
 			return err
+		}
+	}
+	if strings.HasPrefix(event.Type, "ticket.") {
+		var payload struct {
+			Key string `json:"ticket_key"`
+		}
+		if json.Unmarshal(event.Payload, &payload) == nil && payload.Key != "" {
+			if ticket, ok := ticketByKey(ctx, s, run.ID, payload.Key); ok {
+				if synced, syncErr := s.store.GetExternalSync(ctx, run.ID, "ticket:"+payload.Key, "linear"); syncErr == nil && synced.ExternalID != "" {
+					if err := s.setLinearIssueState(ctx, client, run.ID, "ticket-state:"+payload.Key,
+						synced.ExternalID, workflowStateForTicket(ticket.State, lifecycle), false); err != nil {
+						return err
+					}
+				}
+			}
 		}
 	}
 	logicalKey, marker, body, ok := linearActivity(run, event)
@@ -479,7 +498,7 @@ func shouldSyncLinearLifecycleEvent(eventType string) bool {
 	switch eventType {
 	case "stage.started", "stage.completed", "stage.retrying", "human_input.requested", "pr.created",
 		"run.completed", "run.failed", "run.paused", "codex.command.started", "codex.command.completed",
-		"codex.files.started", "codex.files.completed":
+		"codex.files.started", "codex.files.completed", "ticket.started", "ticket.completed", "ticket.failed":
 		return true
 	default:
 		return false
@@ -577,6 +596,9 @@ func (s *Server) reconcileRunProjections(ctx context.Context, runID string) (map
 		parentState = lifecycle.InProgress
 	}
 	if run.State == "awaiting_input" {
+		parentState = lifecycle.NeedsInput
+	}
+	if run.State == "paused" {
 		parentState = lifecycle.NeedsInput
 	}
 	if run.State == "completed" && allTicketsCompleted(ctx, s, runID) {
