@@ -137,7 +137,7 @@ The onboarding skill performs these steps. This section is also the manual recov
 
 - Railway account with Sandboxes enabled through Priority Boarding.
 - Permission to create a Railway project, service, Postgres database, public domain, and workspace-scoped token.
-- GitHub organization permission to create and install a GitHub App on selected repositories.
+- GitHub organization permission to create and install a GitHub App on selected repositories. The App uses Metadata read plus Contents, Pull requests, and Workflows write so agents can add or update repository-owned CI files.
 - Linear workspace permission to create a private OAuth application and webhook.
 - Notion workspace permission to create an internal connection and share a parent page.
 - Enough Codex accounts or sessions for the desired number of independent authentication slots.

@@ -312,7 +312,7 @@ For the cloud runner, the operator needs:
 
 - Railway permission to create a project, service, Postgres database, domain, variables, and Sandboxes.
 - A workspace-scoped Railway token that can manage Sandboxes.
-- GitHub permission to create a GitHub App and install it on selected repositories.
+- GitHub permission to create a GitHub App and install it on selected repositories. The App needs Metadata read plus Contents, Pull requests, and Workflows write; GitHub treats workflow-file pushes as a separate permission from ordinary contents writes.
 - Linear permission to create a private OAuth application and webhook.
 - Notion permission to create an internal connection and share a parent page.
 - Enough Codex login sessions for the desired concurrent capacity.
@@ -1963,7 +1963,7 @@ Reconciliation uses durable ticket identities and current team workflow-state ID
 Check:
 
 - GitHub App installation still covers the repository.
-- Contents and pull-request permissions are unchanged.
+- Contents, pull-request, and workflow permissions are unchanged. If a push that adds or edits `.github/workflows/*` is rejected, grant the App **Workflows: Read and write**, approve the installation's updated permissions, and resume from the paused journal.
 - Base branch exists.
 - Integration worktree is clean.
 - Required PR inputs and verification results exist.

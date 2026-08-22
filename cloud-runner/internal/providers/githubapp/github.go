@@ -100,7 +100,7 @@ func (c *Client) MintInstallationToken(ctx context.Context, installationID int64
 	}
 	body, _ := json.Marshal(map[string]any{
 		"repositories": []string{repo},
-		"permissions":  map[string]string{"contents": "write", "pull_requests": "write", "metadata": "read"},
+		"permissions":  map[string]string{"contents": "write", "pull_requests": "write", "workflows": "write", "metadata": "read"},
 	})
 	url := fmt.Sprintf("%s/app/installations/%d/access_tokens", c.baseURL, installationID)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
