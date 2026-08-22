@@ -100,10 +100,10 @@ Defaults: `MaxActiveRuns 3`, run lease 15m, auth lease 24h, poll 2s, heartbeat 5
 
 Loop: `ClaimNextRun` → for each claim, `launch()`:
 1. emit infrastructure events;
-2. lease Codex auth slots (1 if `codex_parallel_safe`, else 3 independent slots);
+2. lease exactly one Codex auth slot for the top-level source-issue run;
 3. decrypt slots only for sandbox handoff;
 4. mint run-scoped capability;
-5. build sandbox env (run/repo IDs, feature request, source issue, human input, Codex sessions, model, Playwright cap);
+5. build sandbox env (run/repo IDs, feature request, source issue, human input, the run's Codex session, model, Playwright cap);
 6. pick toolchain or repo-specific checkpoint (`HARNESS_SANDBOX_CHECKPOINT`, `HARNESS_REPOSITORY_CHECKPOINTS`);
 7. create Railway sandbox, start worker detached, record sandbox identity.
 
@@ -119,12 +119,12 @@ Writes a 0600 env file, `railway sandbox create --json` (optionally with a check
 
 - **Retries**: up to 3 attempts per stage; repair/input/policy errors and cancellation are not retried; each retry resets the stage to `pending` and checkpoints. A ticket-parallel attempt integrates and checkpoints successful siblings before returning a sibling failure, so the next attempt skips durable ticket results.
 - **Repair loops** (`repair.go`) honor `max_reentries` from YAML (default: qa → coder through qa, 2) and recover a validated QA `requeue` result from a blocked checkpoint before starting a new QA invocation.
-- **Ticket parallelism** (`runTicketStage`): read `artifacts/ticket-plan.json`, compute dependency waves (`harnessctl.py waves`), one detached git worktree per ticket with a copy of the journal, concurrency bounded by `min(stage.parallelism, available Codex sessions)`, every ticket must produce a completed result + commit, then successful commits are cherry-picked into the run worktree in deterministic ticket-key order, results materialized into the main journal, worktrees removed, branch pushed, and the journal checkpointed even when a sibling failed. If an operator repaired the isolated run branch before resuming, an agent result may reference that already-ancestor commit; the worker adopts it idempotently instead of attempting an empty cherry-pick.
+- **Ticket parallelism** (`runTicketStage`): read `artifacts/ticket-plan.json`, compute dependency waves (`harnessctl.py waves`), and create one detached git worktree per ready ticket with a copy of the journal. The worker invokes one top-level Codex coordinator for the wave with `multi_agent` explicitly enabled. That coordinator delegates every ticket to one native coder subagent, bounded by `stage.parallelism`; subagents write the existing per-ticket result contracts and commits in their assigned worktrees. The deterministic worker then validates and cherry-picks successful commits into the run worktree in ticket-key order, materializes results into the main journal, removes worktrees, pushes the branch, and checkpoints even when a sibling failed. If an operator repaired the isolated run branch before resuming, an agent result may reference that already-ancestor commit; the worker adopts it idempotently instead of attempting an empty cherry-pick.
 - **Hooks**: `before` / `after` / `on_failure` per stage, executed via `harnessctl.py run-hook` with a fixed env (`HARNESS_RUN_ID`, `HARNESS_ISSUE_KEY`, `HARNESS_STAGE`, `HARNESS_ARTIFACT_DIR`, `HARNESS_WORKTREE`), default 300s timeout. Arch-lint is a hook, not Go logic (`reconcile.go` + `.harness/scripts/arch-lint.py`).
 - **PR finalize** (`finalizePullRequest`): worktree must be clean; if the branch was already published it cuts `…-pr-<sha>` delivery branch; push; require title+body from the PR agent result; `gh pr view` else `gh pr create --draft`; write canonical PR JSON back into the result; checkpoint + emit `pr.created`.
 - **Checkpointing**: run dir tar.gz uploaded to the control plane before external writes and at pause/terminal points — this is what makes a destroyed sandbox resumable.
 
-`codex.go`: `codex exec --json --model <model> --dangerously-bypass-approvals-and-sandbox --ignore-user-config -C <repo> --output-last-message <file> -` with a **sanitized env** and per-slot isolated `CODEX_HOME`. Codex never sees Railway/Linear/Notion/encryption/management credentials. The release checkpoint pins Node.js 24, pnpm 11, Playwright, and system Chromium. Prompt = stage id + role file + worktree + journal + declared inputs + required result path + human-input policy + Playwright runtime/cap. JSONL output is parsed for usage/activity → control-plane events; a 1s terminal grace timer plus forced stdout/process close prevents hangs from lingering descendants (commit `8d13405`); falls back to `--output-last-message` if the result file is missing.
+`codex.go`: `codex exec --json --model <model> --dangerously-bypass-approvals-and-sandbox --ignore-user-config -C <repo> --output-last-message <file> -` with a **sanitized env** and one isolated `CODEX_HOME` per source-issue run. Coder-wave coordinators additionally pass `--enable multi_agent` and receive all ready assignments, worktrees, per-ticket result paths, and the YAML concurrency limit in one prompt. Codex never sees Railway/Linear/Notion/encryption/management credentials. The release checkpoint pins Node.js 24, pnpm 11, Playwright, and system Chromium. JSONL output is parsed for usage/activity → control-plane events; a 1s terminal grace timer plus forced stdout/process close prevents hangs from lingering descendants (commit `8d13405`); falls back to `--output-last-message` if the result file is missing.
 
 `pipeline.go` validation: `version: 1`, non-empty `run_root` and stages, unique ids, parallelism ≥ 1, mode ∈ {`single`, `ticket_parallel`}, dependencies must be previously-declared stages, repair loops must satisfy `to < from`, `through ≥ to`, `through ≤ from`, `max_reentries ≥ 1`.
 
@@ -156,6 +156,6 @@ Key env vars: `DATABASE_URL`, `HARNESS_MANAGEMENT_TOKEN`, `HARNESS_CREDENTIAL_KE
 | new durable state / API | `model` type → `store.Store` + **both** memory and Postgres impls + a new numbered migration → server route |
 | new worker→plane signal | emit an event in `worker`, project it in `server`'s event ingestion, and extend the SSE consumers/UI |
 | new provider integration | `internal/providers/<x>api` + marker-based upsert + `external_sync` logical keys in `server/sync.go` |
-| change concurrency | `scheduler` config (`MaxActiveRuns`) and stage `parallelism`; ticket concurrency is also capped by available Codex auth slots |
+| change concurrency | `scheduler` config (`MaxActiveRuns`) and the number of independent Codex auth slots control top-level source-issue runs; stage `parallelism` controls native coder subagents inside one run |
 
 Gotchas: keep the two `harnessctl.py` copies identical; the arch-lint rules and Python tests (`tests/test_arch_lint.py`, `tests/test_plugin_package.py`) enforce plugin packaging and architecture boundaries, so new files often need to be declared; the `go` directive in `cloud-runner/go.mod` pins the toolchain CI installs — a local Go must be at least that version.

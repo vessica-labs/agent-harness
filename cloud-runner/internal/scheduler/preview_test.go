@@ -17,9 +17,11 @@ import (
 type fakeProvider struct {
 	heartbeats int
 	destroyed  []string
+	created    []sandbox.CreateSpec
 }
 
-func (f *fakeProvider) Create(context.Context, sandbox.CreateSpec) (sandbox.Instance, error) {
+func (f *fakeProvider) Create(_ context.Context, spec sandbox.CreateSpec) (sandbox.Instance, error) {
+	f.created = append(f.created, spec)
 	return sandbox.Instance{ID: "sandbox-1", State: "running"}, nil
 }
 func (f *fakeProvider) StartWorker(context.Context, string) (string, error) { return "session", nil }

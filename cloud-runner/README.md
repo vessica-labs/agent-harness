@@ -91,7 +91,7 @@ Access tokens expire after 15 minutes and are refreshed by a rotating device cre
 
 Roles are deliberately small: viewers can inspect runs and events; operators can also control runs and create test issues; administrators manage repositories, integrations, Codex slots, invitations, roles, and sessions; owners additionally anchor installation ownership and recovery.
 
-Configure independent Codex sessions with `agent-harness cloud auth codex add --slots 3`. The command performs a three-process safety check against the first session. A safe session may serve the YAML-declared coder concurrency; otherwise the scheduler atomically leases one independent auth slot per concurrent Codex process.
+Configure independent Codex sessions with `agent-harness cloud auth codex add --slots 3`. The scheduler atomically leases one session per active source-issue run. Each run uses one Railway sandbox and one top-level Codex execution lane; YAML-declared coder concurrency is provided by native Codex subagents inside that lane.
 
 The Linear credential command accepts the current OAuth token set from environment variables:
 

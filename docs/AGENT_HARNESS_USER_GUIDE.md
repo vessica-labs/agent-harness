@@ -822,9 +822,10 @@ The coder stage uses `ticket_parallel` mode. Agent Harness:
 2. Computes dependency waves.
 3. Prevents overlapping owned paths in the same wave.
 4. Creates an isolated Git worktree per runnable ticket.
-5. Runs no more than the stage's declared parallelism.
+5. Starts one top-level Codex coordinator for the ready wave.
+6. Has that coordinator delegate one native coder subagent per ticket, with no more than the stage's declared parallelism active at once.
 
-Each coder invocation owns exactly one ticket. The coder follows red-green-refactor TDD, runs focused checks, commits a scoped change locally, returns its exact JSON result, and leaves a clean worktree. Coder agents do not push.
+Each coder subagent owns exactly one ticket. The coordinator does not implement ticket code; it supplies the isolated assignment, waits for every subagent, and reports the wave result. Each coder subagent follows red-green-refactor TDD, runs focused checks, commits a scoped change locally, returns its exact JSON result, and leaves a clean worktree. Neither the coordinator nor coder subagents push.
 
 Tickets that add or update libraries own the affected package manifests and package-manager lockfile. Coders use the repository package manager and commit both manifest and lockfile changes; undeclared global imports, hand-written type shims, and lockfile-only dependency edits are rejected by the role contract.
 
@@ -879,9 +880,9 @@ Stable child markers and persisted provider IDs allow recovery to update the sam
 
 ### Dependency waves
 
-Tickets run only when all declared dependencies are complete. Within a wave, Agent Harness enforces the coder stage's parallelism and rejects overlapping owned paths. Later waves start from the updated integration head.
+Tickets run only when all declared dependencies are complete. Within a wave, one Codex coordinator enforces the coder stage's native-subagent parallelism and Agent Harness rejects overlapping owned paths. Later waves start from the updated integration head.
 
-The default coder parallelism is three. This is separate from the default maximum of three simultaneously active source-issue runs.
+The default coder-subagent parallelism is three. This is separate from the default maximum of three simultaneously active source-issue runs, each of which owns one Railway sandbox, one top-level Codex execution lane, and one independently leased Codex auth slot.
 
 ### Branches and commits
 
@@ -1219,7 +1220,7 @@ The pipeline is a declarative DAG. A stage declares:
 ### Stage modes
 
 - `single` runs one agent invocation.
-- `ticket_parallel` materializes one invocation per ticket and executes dependency waves up to the declared parallelism.
+- `ticket_parallel` materializes one assignment and isolated worktree per ticket, then invokes one Codex coordinator per dependency-ready wave. The coordinator uses native coder subagents up to the declared parallelism.
 
 Parallelism must be between 1 and 16. Dependencies must reference known stages and form a valid DAG.
 
@@ -1436,7 +1437,7 @@ The default maximum is three active source runs. When that limit is reached, add
 
 ### Heartbeats
 
-The worker renews its control-plane lease while it runs. The scheduler also checks sandbox health. If a sandbox disappears, the run is requeued with `sandbox_lost`, its uncertain auth slots are quarantined, and a future sandbox restores the journal and branch.
+The worker renews its control-plane lease while it runs. The scheduler also checks sandbox health. If a sandbox disappears, the run is requeued with `sandbox_lost`, its uncertain auth slot is quarantined, and a future sandbox restores the journal and branch.
 
 ### Recovery authority
 
@@ -1506,7 +1507,7 @@ agent-harness cloud logout [--profile NAME]
 
 ```text
 agent-harness cloud auth status
-agent-harness cloud auth codex add [--slots 3] [--verify-parallel 3]
+agent-harness cloud auth codex add [--slots 3]
 agent-harness cloud auth github --manifest-owner OWNER [--name NAME]
 agent-harness cloud auth github upgrade-webhook
 GITHUB_WEBHOOK_SECRET=... agent-harness cloud auth github --app-id ID --private-key-file FILE
@@ -1813,9 +1814,9 @@ Run exactly one control-plane replica. Postgres owns scheduling claims, but the 
 
 Plan four related capacities separately:
 
-1. `HARNESS_MAX_ACTIVE_RUNS`: simultaneous source-issue pipelines.
-2. Codex authentication slots: independent login capacity.
-3. Pipeline `parallelism`: simultaneous tickets inside one run.
+1. `HARNESS_MAX_ACTIVE_RUNS`: simultaneous source-issue pipelines and Railway sandboxes.
+2. Codex authentication slots: independent top-level run capacity; one slot is leased per active source issue.
+3. Pipeline `parallelism`: simultaneous native coder subagents inside one run's coordinator.
 4. `HARNESS_PLAYWRIGHT_WORKERS`: browser workers inside each sandbox.
 
 Railway Sandbox quota is an additional external limit. Runs wait with a visible queue reason rather than silently disappearing.

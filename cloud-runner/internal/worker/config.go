@@ -29,7 +29,6 @@ type Config struct {
 	CodexAuth         []byte
 	CodexSlot         string
 	CodexSessions     []CodexSession
-	CodexParallelSafe bool
 	Workspace         string
 	Harnessctl        string
 	CodexBinary       string
@@ -77,7 +76,6 @@ func ConfigFromEnv() (Config, error) {
 		GitHubRepo: os.Getenv("HARNESS_GITHUB_REPO"), BaseBranch: os.Getenv("HARNESS_BASE_BRANCH"),
 		FeatureRequest: string(feature), HumanInput: humanInput, SourceIssue: sourceIssue, CodexAuth: auth, CodexSlot: os.Getenv("HARNESS_CODEX_AUTH_SLOT"),
 		CodexSessions:     sessions,
-		CodexParallelSafe: strings.EqualFold(os.Getenv("HARNESS_CODEX_PARALLEL_SAFE"), "true"),
 		Workspace:         envDefault("HARNESS_WORKSPACE", "/workspace"),
 		Harnessctl:        envDefault("HARNESS_HARNESSCTL", "/opt/agent-harness/harnessctl.py"),
 		CodexBinary:       envDefault("HARNESS_CODEX_BINARY", "codex"),

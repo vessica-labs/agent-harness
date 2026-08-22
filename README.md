@@ -307,7 +307,7 @@ Create three independent Codex sessions:
 agent-harness cloud auth codex add --slots 3
 ```
 
-Complete each device-login prompt. The CLI tests whether a single session can safely serve multiple simultaneous Codex processes. If it cannot, the scheduler uses one exclusively leased slot per process rather than copying an active refresh session.
+Complete each device-login prompt. Each active source-issue run leases one independent session for its Railway sandbox and top-level Codex execution lane. Ticket concurrency inside that run is handled by native Codex subagents rather than additional login slots.
 
 ### G. Register a repository
 

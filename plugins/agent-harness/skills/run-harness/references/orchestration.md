@@ -68,7 +68,7 @@ Run `.agents/architect.md` with its declared PRD input, ticket graph, repository
 
 ### Coder
 
-Create `agent-harness/<issue-key-lower>-<run-suffix>` from the configured remote/base. Materialize one declared ticket input per ticket. For each dependency wave, create ticket worktrees from the current integration head and run no more than the YAML `parallelism` value at once. A coder claims one ticket, follows TDD, writes its declared result, and makes one scoped commit. It never pushes. Integrate successful commits in sorted logical-key order, resolving only unambiguous conflicts and rerunning focused checks.
+Create `agent-harness/<issue-key-lower>-<run-suffix>` from the configured remote/base. Materialize one declared ticket input per ticket. For each dependency wave, create ticket worktrees from the current integration head and invoke one top-level Codex coordinator with native multi-agent support enabled. The coordinator delegates one coder subagent per ticket and keeps no more than the YAML `parallelism` value active at once. Each coder subagent follows TDD, writes its declared result, and makes one scoped commit; neither coordinator nor subagents push. Integrate successful commits in sorted logical-key order, resolving only unambiguous conflicts and rerunning focused checks.
 
 ### Lint
 

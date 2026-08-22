@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/vessica-labs/agent-harness/cloud-runner/internal/model"
@@ -31,7 +30,6 @@ type Runner struct {
 	runDir          string
 	codexHome       string
 	codexSessions   []runtimeCodexSession
-	codexPool       chan runtimeCodexSession
 	pipeline        Pipeline
 	localLease      string
 	githubToken     string
@@ -232,7 +230,9 @@ func (r *Runner) prepareFilesystem() error {
 	if len(r.config.CodexSessions) == 0 {
 		return errors.New("Codex authentication slot is empty")
 	}
-	r.codexPool = make(chan runtimeCodexSession, len(r.config.CodexSessions))
+	if len(r.config.CodexSessions) != 1 {
+		return errors.New("a worker must receive exactly one top-level Codex authentication slot")
+	}
 	for index, configured := range r.config.CodexSessions {
 		if configured.ID == "" || len(configured.Auth) == 0 {
 			return errors.New("Codex authentication session is incomplete")
@@ -246,7 +246,6 @@ func (r *Runner) prepareFilesystem() error {
 		}
 		session := runtimeCodexSession{id: configured.ID, home: home, auth: configured.Auth}
 		r.codexSessions = append(r.codexSessions, session)
-		r.codexPool <- session
 	}
 	r.codexHome = r.codexSessions[0].home
 	return nil
@@ -576,7 +575,7 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 	if err != nil {
 		return err
 	}
-	for _, wave := range waves {
+	for waveIndex, wave := range waves {
 		runs := make([]*ticketRun, 0, len(wave))
 		for _, item := range wave {
 			worktree := filepath.Join(r.config.Workspace, "worktrees", safeName(item.Key))
@@ -590,62 +589,51 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 			}
 			runs = append(runs, &ticketRun{ticket: item, worktree: worktree})
 		}
-		parallelism := stage.Parallelism
-		if !r.config.CodexParallelSafe && parallelism > len(r.codexSessions) {
-			parallelism = len(r.codexSessions)
+		if err := r.recordTicketWaveStarted(ctx, wave); err != nil {
+			r.cleanupWorktrees(ctx, runs)
+			return fmt.Errorf("claim ticket wave: %w", err)
 		}
-		semaphore := make(chan struct{}, parallelism)
-		var wait sync.WaitGroup
-		var progressMu sync.Mutex
+		if err := r.syncTicketProgress(ctx, stage.ID); err != nil {
+			r.cleanupWorktrees(ctx, runs)
+			return err
+		}
 		for _, current := range runs {
-			wait.Add(1)
-			go func(current *ticketRun) {
-				defer wait.Done()
-				defer func() {
-					if current.err != nil {
-						_ = r.event(context.WithoutCancel(ctx), "ticket.failed", "error", current.err.Error(), stage.ID,
-							map[string]any{"ticket_key": current.ticket.Key, "depends_on": current.ticket.DependsOn, "owner": r.config.LeaseOwner})
-					}
-				}()
-				semaphore <- struct{}{}
-				defer func() { <-semaphore }()
-				progressMu.Lock()
-				claimErr := r.recordTicketWaveStarted(ctx, []ticket{current.ticket})
-				if claimErr == nil {
-					claimErr = r.syncTicketProgress(ctx, stage.ID)
-				}
-				progressMu.Unlock()
-				if claimErr != nil {
-					current.err = fmt.Errorf("claim ticket %s: %w", current.ticket.Key, claimErr)
-					return
-				}
-				if err := r.event(ctx, "ticket.started", "info", "Coder agent claimed ticket", stage.ID,
-					map[string]any{"ticket_key": current.ticket.Key, "depends_on": current.ticket.DependsOn, "owner": r.config.LeaseOwner}); err != nil {
-					current.err = err
-					return
-				}
+			if err := r.event(ctx, "ticket.started", "info", "Coder subagent claimed ticket", stage.ID,
+				map[string]any{"ticket_key": current.ticket.Key, "depends_on": current.ticket.DependsOn, "owner": r.config.LeaseOwner}); err != nil {
+				current.err = err
+			}
+			if current.err == nil {
 				worktreeRun := runDirectory(current.worktree, r.pipeline, r.config.RunID)
 				if err := r.requireInputs(stage, worktreeRun, current.ticket.Key); err != nil {
 					current.err = err
-					return
 				}
+			}
+		}
+		var coordinatorErr error
+		if firstTicketRunError(runs) == nil {
+			coordinatorErr = r.runCodexTicketWave(ctx, stage, waveIndex+1, runs)
+		}
+		for _, current := range runs {
+			if current.err == nil {
+				worktreeRun := runDirectory(current.worktree, r.pipeline, r.config.RunID)
 				resultPath := filepath.Join(worktreeRun, filepath.FromSlash(replaceTicket(stage.Result.File, current.ticket.Key)))
-				if err := r.runCodex(ctx, current.worktree, stage, current.ticket.Key, resultPath, "Implement only this claimed ticket and do not push."); err != nil {
-					current.err = err
-					return
-				}
 				if err := r.detectInputRequest(stage, resultPath); err != nil {
 					current.err = err
-					return
+					if coordinatorErr != nil {
+						current.err = fmt.Errorf("coordinator failed: %v; ticket %s result: %w", coordinatorErr, current.ticket.Key, err)
+					}
+				}
+				if current.err != nil {
+					continue
 				}
 				if _, err := r.harness(ctx, current.worktree, "materialize-result", "--pipeline", filepath.Join(current.worktree, ".harness", "pipeline.yaml"),
 					"--run-dir", worktreeRun, "--stage", stage.ID, "--input", resultPath, "--ticket-key", current.ticket.Key); err != nil {
 					current.err = err
-					return
+					continue
 				}
 				current.result, current.err = os.ReadFile(resultPath)
 				if current.err != nil {
-					return
+					continue
 				}
 				var output struct {
 					Status string `json:"status"`
@@ -653,16 +641,19 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 				}
 				if err := json.Unmarshal(current.result, &output); err != nil {
 					current.err = err
-					return
+					continue
 				}
 				if output.Status != "completed" || output.Commit == "" {
 					current.err = fmt.Errorf("ticket %s did not produce a completed commit", current.ticket.Key)
-					return
+					continue
 				}
 				current.commit = output.Commit
-			}(current)
+			}
+			if current.err != nil {
+				_ = r.event(context.WithoutCancel(ctx), "ticket.failed", "error", current.err.Error(), stage.ID,
+					map[string]any{"ticket_key": current.ticket.Key, "depends_on": current.ticket.DependsOn, "owner": r.config.LeaseOwner})
+			}
 		}
-		wait.Wait()
 		sort.Slice(runs, func(i, j int) bool { return runs[i].ticket.Key < runs[j].ticket.Key })
 		var firstTicketError error
 		integrated := false
@@ -709,6 +700,9 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 					"owner": r.config.LeaseOwner, "commit": current.commit})
 			integrated = true
 		}
+		if firstTicketError == nil && coordinatorErr != nil {
+			firstTicketError = coordinatorErr
+		}
 		r.cleanupWorktrees(ctx, runs)
 		if integrated {
 			if err := r.pushBranch(ctx); err != nil {
@@ -720,6 +714,15 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 		}
 		if firstTicketError != nil {
 			return firstTicketError
+		}
+	}
+	return nil
+}
+
+func firstTicketRunError(runs []*ticketRun) error {
+	for _, current := range runs {
+		if current.err != nil {
+			return current.err
 		}
 	}
 	return nil
