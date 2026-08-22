@@ -304,7 +304,7 @@ Cloud repository registration and lifecycle synchronization idempotently install
 | Railway CLI | Control-plane deployment and sandbox management |
 | Python 3 | Deterministic repository helpers and architecture lint |
 
-The cloud worker checkpoint includes Git, GitHub CLI, Codex CLI, Railway CLI, Python, Node.js 24, pnpm 11, Playwright, and Chromium. Playwright's CLI and browser runtime are warm in every sandbox, while target repositories still declare `@playwright/test` and other libraries in their own package manifests and lockfiles. A target repository may still require another language runtime, services, or project-specific dependencies.
+The cloud worker checkpoint includes Git, GitHub CLI, ripgrep, jq, curl, Make, Codex CLI, Railway CLI, Python 3 with pip and venv, Node.js 24 with npm and pnpm 11, Playwright, Chromium, zip/unzip, file, and patch. The checkpoint builder executes every advertised command, verifies pip and venv support, and records the resolved binary paths in `/opt/agent-harness/runtime-manifest.json` before capture. A failed smoke check prevents creation of a checkpoint that overstates its runtime. Playwright's CLI and browser runtime are warm in every sandbox, while target repositories still declare `@playwright/test` and other libraries in their own package manifests and lockfiles. A target repository may still require another language runtime, services, or project-specific dependencies.
 
 ### Account permissions
 

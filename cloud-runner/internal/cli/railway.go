@@ -191,16 +191,47 @@ func railwayUpgrade(ctx context.Context, args []string) error {
 
 func railwayUpgradeCommands(version string) []string {
 	base := "https://github.com/vessica-labs/agent-harness/releases/download/" + version
+	runtimeBinaries := strings.Join([]string{
+		"agent-harness", "chromium", "codex", "curl", "file", "gh", "git", "jq", "make", "node",
+		"npm", "patch", "pip3", "playwright", "pnpm", "python3", "railway", "rg", "unzip", "zip",
+	}, " ")
+	runtimeSmoke := strings.Join([]string{
+		"set -eu",
+		"agent-harness --help >/dev/null",
+		"chromium --version >/dev/null",
+		"codex --version >/dev/null",
+		"curl --version >/dev/null",
+		"file --version >/dev/null",
+		"gh --version >/dev/null",
+		"git --version >/dev/null",
+		"jq --version >/dev/null",
+		"make --version >/dev/null",
+		"node --version >/dev/null",
+		"npm --version >/dev/null",
+		"patch --version >/dev/null",
+		"pip3 --version >/dev/null",
+		"playwright --version >/dev/null",
+		"pnpm --version >/dev/null",
+		"python3 --version >/dev/null",
+		"python3 -m pip --version >/dev/null",
+		"python3 -m venv --help >/dev/null",
+		"railway --version >/dev/null",
+		"rg --version >/dev/null",
+		"unzip -v >/dev/null",
+		"zip -h >/dev/null",
+		"python3 -c \"import json,shutil; names='" + runtimeBinaries + "'.split(); paths={name:shutil.which(name) for name in names}; assert all(paths.values()); manifest={'schema':2,'kind':'agent-harness-toolchain','versions':{'codex':'0.144.1','node':'24','pnpm':'11.21.0','playwright':'1.62.1'},'binaries':paths,'capabilities':{'python_pip':'python3 -m pip','python_venv':'python3 -m venv'}}; json.dump(manifest,open('/opt/agent-harness/runtime-manifest.json','w'),indent=2,sort_keys=True)\"",
+		"jq -e '.schema == 2 and (.binaries | length == 20)' /opt/agent-harness/runtime-manifest.json >/dev/null",
+	}, " && ")
 	return []string{
 		// Railway's sandbox base already includes gh. Reinstalling it can fail when dpkg
 		// tries to create a backup hard link across overlay filesystem boundaries.
-		"apt-get update && apt-get install -y --no-install-recommends bash build-essential ca-certificates chromium curl git jq make openssh-client procps python3 ripgrep",
+		"apt-get update && apt-get install -y --no-install-recommends bash build-essential ca-certificates chromium curl file git jq make openssh-client patch procps python3 python3-pip python3-venv ripgrep unzip zip",
 		"curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource.sh && bash /tmp/nodesource.sh && apt-get install -y --no-install-recommends nodejs && rm -rf /var/lib/apt/lists/* /tmp/nodesource.sh",
 		"curl -fsSL " + base + "/agent-harness-linux-amd64 -o /usr/local/bin/agent-harness && chmod 0755 /usr/local/bin/agent-harness",
 		"mkdir -p /opt/agent-harness && curl -fsSL " + base + "/harnessctl.py -o /opt/agent-harness/harnessctl.py && chmod 0755 /opt/agent-harness/harnessctl.py",
 		"npm install --global @openai/codex@0.144.1 pnpm@11.21.0 @playwright/test@1.62.1",
 		"mkdir -p /opt/agent-harness/bin && cp /usr/local/bin/agent-harness /opt/agent-harness/bin/agent-harness && sha256sum /opt/agent-harness/bin/agent-harness | awk '{print $1}' >/opt/agent-harness/bin/agent-harness.sha256",
-		"printf '%s\\n' '{\"schema\":1,\"kind\":\"agent-harness-toolchain\",\"codex\":\"0.144.1\",\"node\":\"24\",\"pnpm\":\"11.21.0\",\"playwright\":\"1.62.1\",\"chromium\":\"/usr/bin/chromium\"}' >/opt/agent-harness/runtime-manifest.json",
+		runtimeSmoke,
 	}
 }
 

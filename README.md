@@ -125,7 +125,7 @@ Railway control-plane service ---- Railway Postgres
 
 The default limit is three simultaneous source-ticket runs. One source Linear issue has one permanent claim and one resumable run ID. A completed pipeline creates a draft GitHub pull request and never merges automatically.
 
-The versioned worker checkpoint includes Node.js 24, pnpm 11, Playwright, and Chromium. Project libraries remain repository dependencies: planning assigns the relevant package manifests and lockfile to the implementing ticket, and the Codex worker may install and commit them normally.
+The versioned worker checkpoint includes Git, GitHub CLI, ripgrep, jq, curl, Make, Python 3 with pip and venv, Node.js 24 with npm and pnpm 11, Codex, Playwright, Chromium, zip/unzip, file, and patch. Checkpoint creation executes every promised command and writes the verified binary paths to `/opt/agent-harness/runtime-manifest.json`; a missing or unusable tool stops capture. Project libraries remain repository dependencies: planning assigns the relevant package manifests and lockfile to the implementing ticket, and the Codex worker may install and commit them normally.
 
 The localhost UI connects through an authenticated local proxy. The browser never receives the device access or refresh token.
 
