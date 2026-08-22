@@ -45,6 +45,8 @@ type ParsedWebhook struct {
 var (
 	dependencyLine = regexp.MustCompile(`(?im)^\s*(?:[-*]\s*)?depends\s+on\s*:?\s*(.+?)\s*$`)
 	issueKey       = regexp.MustCompile(`(?i)\b[A-Z][A-Z0-9_]*-[0-9]+\b`)
+	markdownLink   = regexp.MustCompile(`\[([^\]\n]+)\]\([^)]+\)`)
+	rawURL         = regexp.MustCompile(`(?i)<?https?://\S+>?`)
 )
 
 func Verify(headers http.Header, body []byte, secret string, now time.Time, tolerance time.Duration) error {
@@ -194,7 +196,9 @@ func DependencyIssueKeys(description string) []string {
 	seen := map[string]bool{}
 	var result []string
 	for _, match := range dependencyLine.FindAllStringSubmatch(description, -1) {
-		for _, raw := range issueKey.FindAllString(match[1], -1) {
+		visibleText := markdownLink.ReplaceAllString(match[1], "$1")
+		visibleText = rawURL.ReplaceAllString(visibleText, "")
+		for _, raw := range issueKey.FindAllString(visibleText, -1) {
 			key := strings.ToUpper(raw)
 			if !seen[key] {
 				seen[key] = true

@@ -32,6 +32,9 @@ func (s *Server) pendingLinearDependencies(ctx context.Context, client *linearap
 }
 
 func runDependencyKeys(run model.Run) []string {
+	if dependencies := linear.DependencyIssueKeys(run.FeatureRequest); len(dependencies) > 0 {
+		return dependencies
+	}
 	var metadata struct {
 		Dependencies []string `json:"dependencies"`
 	}

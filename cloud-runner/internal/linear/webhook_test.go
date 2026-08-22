@@ -82,6 +82,14 @@ func TestDependencyIssueKeysRequireExplicitDependsOnInstruction(t *testing.T) {
 	}
 }
 
+func TestDependencyIssueKeysIgnoreMarkdownLinkDestinations(t *testing.T) {
+	description := "Depends on [VES-9](https://linear.app/vessica/issue/VES-9/mvp-410-verify-users) and [OPS-2](https://linear.app/example/issue/OPS-2/q3-2026)\n"
+	dependencies := DependencyIssueKeys(description)
+	if strings.Join(dependencies, ",") != "VES-9,OPS-2" {
+		t.Fatalf("unexpected dependencies from linked issues: %v", dependencies)
+	}
+}
+
 func TestParseDelegatedAgentSession(t *testing.T) {
 	now := time.Now()
 	body := []byte(`{"action":"created","type":"AgentSessionEvent","organizationId":"org-1","appUserId":"vessica-user","promptContext":"<issue>Build it</issue>","agentSession":{"id":"session-1","appUserId":"vessica-user","issue":{"id":"issue-1","identifier":"ENG-44","title":"Build it","description":"Details","url":"https://linear.app/ENG-44","teamId":"team-1","delegateId":"vessica-user"}}}`)

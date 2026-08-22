@@ -86,3 +86,15 @@ func TestLinearDependencyWaiterReleasesOnlyAfterAllDependenciesAreDone(t *testin
 		t.Fatalf("released run was not claimable: %v", err)
 	}
 }
+
+func TestRunDependencyKeysRepairsLegacyLinkSlugMetadata(t *testing.T) {
+	metadata, _ := json.Marshal(map[string]any{"dependencies": []string{"VES-9", "MVP-410"}})
+	run := model.Run{
+		FeatureRequest: "Depends on [VES-9](https://linear.app/vessica/issue/VES-9/mvp-410-verify-users)",
+		Metadata:       metadata,
+	}
+	dependencies := runDependencyKeys(run)
+	if strings.Join(dependencies, ",") != "VES-9" {
+		t.Fatalf("legacy metadata was not repaired from source text: %v", dependencies)
+	}
+}
