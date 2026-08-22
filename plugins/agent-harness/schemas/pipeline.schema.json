@@ -28,6 +28,7 @@
         "properties": {
           "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
           "agent": {"type": "string", "pattern": "^\\.agents/.+\\.md$"},
+          "model": {"type": "string", "minLength": 1},
           "needs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
           "mode": {"enum": ["single", "ticket_parallel"]},
           "parallelism": {"type": "integer", "minimum": 1, "maximum": 16},

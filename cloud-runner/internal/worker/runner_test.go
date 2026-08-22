@@ -127,6 +127,32 @@ func TestFailedTicketEvidenceIsPreservedForRecovery(t *testing.T) {
 	}
 }
 
+func TestFailedTicketStateExposesKeysAndBlockersForRetry(t *testing.T) {
+	runDir := t.TempDir()
+	state := `{"tickets":[{"key":"T02","status":"failed","blocker":"integration check failed"},{"key":"T01","status":"completed"},{"key":"T03","status":"failed","blocker":"missing owned path"}]}`
+	if err := os.WriteFile(filepath.Join(runDir, "state.json"), []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &Runner{runDir: runDir}
+	keys, blockers := runner.failedTicketState()
+	if len(keys) != 2 || keys[0] != "T02" || keys[1] != "T03" {
+		t.Fatalf("failed keys = %v", keys)
+	}
+	if blockers["T02"] != "integration check failed" || blockers["T03"] != "missing owned path" {
+		t.Fatalf("blockers = %v", blockers)
+	}
+}
+
+func TestStageModelFallsBackToRunnerDefault(t *testing.T) {
+	runner := &Runner{config: Config{CodexModel: "default-model"}}
+	if got := runner.stageModel(Stage{}); got != "default-model" {
+		t.Fatalf("default model = %q", got)
+	}
+	if got := runner.stageModel(Stage{Model: " stage-model "}); got != "stage-model" {
+		t.Fatalf("stage model = %q", got)
+	}
+}
+
 func TestPipelineValidatesRepairLoops(t *testing.T) {
 	root := t.TempDir()
 	valid := `version: 1

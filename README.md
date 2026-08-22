@@ -170,7 +170,7 @@ The installed repository contains:
 - `.harness/config.yaml` — non-secret tracker, Notion, Git, automation, and optional local cloud-profile identifiers.
 - `.harness/pipeline.yaml` — editable agent DAG, inputs, outputs, parallelism, and deterministic hooks.
 - `.harness/scripts/arch-lint.py` and `.harness/arch-lint-rules.json` — deterministic architecture checks.
-- ignored runtime locations for journals, worktrees, locks, and injected ADRs.
+- ignored runtime locations for journals, worktrees, locks, and injected ADRs, plus a tracked ADR applicability/supersession index and accepted-record directory.
 
 ### B. Create the Railway control plane
 

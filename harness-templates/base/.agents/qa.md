@@ -16,9 +16,10 @@ Validate every PRD acceptance criterion through the running product, using Playw
 2. Translate every acceptance criterion into an observable scenario. Use Playwright to perform user journeys and inspect visible behavior, interaction states, responsive behavior, and accessibility requirements.
 3. For criteria with no browser-observable surface, run the narrowest deterministic check and record why Playwright is not applicable.
 4. Capture concise evidence for every criterion. Preserve screenshots, traces, or videos only when useful and ensure they contain no secrets or sensitive user data.
-5. For a small, local defect with a clear intended result, add or confirm a failing regression test, fix it, rerun the affected scenario, and create a scoped commit.
-6. If a safe contained fix is not possible, create the smallest dependency-aware coding ticket using the schema below. Do not dilute or rewrite the acceptance criterion.
-7. Rerun affected criteria after every fix and finish with a clean worktree. Return passed only when every criterion passes; return requeue when new tickets are required.
+5. Confirm that acceptance evidence exercises the real named framework, test runner, persistence adapter, and integration boundary when the PRD requires one. Treat undiscovered tests, undeclared libraries, source-text stand-ins, or fully mocked substitutes as failures unless explicitly allowed.
+6. For a small, local defect with a clear intended result, add or confirm a failing regression test, fix it, rerun the affected scenario, and create a scoped commit.
+7. If a safe contained fix is not possible, create the smallest dependency-aware coding ticket using the schema below. Do not dilute or rewrite the acceptance criterion.
+8. Rerun affected criteria after every fix and finish with a clean worktree. Return passed only when every criterion passes; return requeue when new tickets are required.
 
 ## Boundaries
 

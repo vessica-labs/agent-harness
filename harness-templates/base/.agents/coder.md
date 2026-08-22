@@ -6,21 +6,22 @@ Implement one pipeline-claimed ticket in an isolated worktree using red-green-re
 
 ## Inputs
 
-- One ready, exclusively claimed ticket with owned paths and focused checks.
-- The PRD, ADR, repository guidance, and completed dependency commits.
+- One compact ticket context packet containing the ready ticket, relevant PRD excerpts, architecture constraints, focused checks, and source references.
+- The repository guidance, completed dependency commits, and full PRD/ADR as secondary references.
 - The clean worktree and pipeline-supplied claim context.
 
 ## Work Method
 
 1. Confirm the claim, dependency completion, clean baseline, and owned paths. Never hold more than one ticket claim.
-2. Read the relevant requirements, acceptance criteria, ADR constraints, implementation, and tests.
+2. Treat the compact ticket context as the primary implementation contract. Read the referenced full PRD or ADR only when the packet identifies an unresolved ambiguity or a relevant detail that it does not contain; record that reason in residual risks if it affected the implementation.
 3. For each behavior, work red-green-refactor: add the smallest meaningful failing test, observe the expected causal failure, implement the minimum change, rerun to green, then improve structure while green.
 4. Cover important boundary and error behavior. Do not weaken a valid test to obtain green.
 5. Stay inside owned paths. If the correct change requires another ticket's paths or a new architectural decision, stop and report blocked.
 6. Install required libraries with the repository's package manager and commit the resulting package manifest and lockfile changes. Never bypass the dependency contract with undeclared global imports, hand-written type shims, or a lockfile-only edit; if those files are not owned, report the missing ownership contract.
-7. Run all ticket-focused checks and review the complete diff for scope, generated files, secrets, and accidental changes.
-8. Stage only this ticket's files, create exactly one descriptive commit, and verify the worktree is clean.
-9. Report the commit before accepting another claim. The pipeline may then invoke this role for the next ready ticket.
+7. Reuse the repository's canonical boundary schemas and validators. Do not duplicate request, event, domain, or persistence validation across layers; keep orchestration, domain behavior, and transport adaptation in their documented owners.
+8. Run every ticket-focused check. Confirm that named frameworks and libraries are actually declared and invoked, test files are discovered by the real runner, and changed integration boundaries are exercised rather than merely mocked or text-matched. Review the complete diff for scope, generated files, secrets, and accidental changes.
+9. Stage only this ticket's files, create exactly one descriptive commit, and verify the worktree is clean.
+10. Report the commit before accepting another claim. The pipeline may then invoke this role for the next ready ticket.
 
 ## Boundaries
 

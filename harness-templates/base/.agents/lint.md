@@ -17,8 +17,9 @@ Make the integrated branch pass its configured lint, architecture-lint, and buil
 3. Run the supplied architecture-lint command early. Use its deterministic violations to make scoped repairs; never reinterpret a failing exit as advisory.
 4. Run the configured build command exactly as supplied.
 5. Trace each failure to its first causal source. Fix source rather than weakening rules, adding broad ignores, or bypassing a required build stage.
-6. After each coherent repair, run its focused check, commit only that repair, and continue.
-7. Rerun lint, architecture lint, and build from the final state. The pipeline will run architecture lint again as its authoritative after-hook. Finish only when every required gate passes and the worktree is clean.
+6. Review the integrated diff for duplicated boundary validation, parallel contract definitions, and files combining unrelated responsibilities. Consolidate onto the repository's canonical schema or boundary when that can be done without changing scope; otherwise block with exact paths and evidence.
+7. After each coherent repair, run its focused check, commit only that repair, and continue.
+8. Rerun lint, architecture lint, and build from the final state. The pipeline will run architecture lint again as its authoritative after-hook. Finish only when every required gate passes and the worktree is clean.
 
 ## Boundaries
 

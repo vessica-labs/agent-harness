@@ -793,7 +793,7 @@ The product agent converts the feature request and repository evidence into:
 - Risks, assumptions, and constraints.
 - A dependency-aware logical ticket plan.
 
-Each ticket includes an objective, acceptance criteria, owned paths, dependencies, and focused verification commands. Agent Harness validates the ticket graph before accepting it.
+Each ticket includes an objective, acceptance criteria, owned paths, dependencies, and non-empty focused verification commands. Agent Harness validates graph safety, requirement/acceptance coverage, and path ownership before accepting it. Checks for framework wiring, dependency installation, test discovery, persistence, and integration boundaries belong to the ticket that introduces them rather than being deferred to final QA.
 
 The PRD is published to Notion and the ticket plan is synchronized as Linear child issues.
 
@@ -810,15 +810,15 @@ The architecture agent creates an ADR covering:
 - Deployment and compatibility.
 - Consequences, alternatives, tradeoffs, and risks.
 
-It may add ticket dependencies and owned-path constraints. Agent Harness applies those constraints to the logical ticket plan, rejects unknown ticket references, and revalidates the graph and path ownership before coding.
+It may add ticket dependencies, owned-path constraints, focused checks, and compact implementation constraints. Agent Harness applies them to the logical ticket plan, rejects unknown ticket references, revalidates the graph and path ownership, and generates a ticket-specific context packet before coding.
 
-Applicable ADRs are materialized into the run worktree under `.harness/adrs/`, and the run ADR is published to Notion.
+The architect reads `.harness/adrs/INDEX.md` first and lists only accepted, non-superseded ADRs applicable to the affected paths/components. Durable ADRs include explicit applicability and supersession metadata. Runtime ADR context is materialized under `.harness/adrs/`, and the run ADR is published to Notion.
 
 ### Coder
 
 The coder stage uses `ticket_parallel` mode. Agent Harness:
 
-1. Materializes one declared JSON input per logical ticket.
+1. Materializes one compact context packet per logical ticket, containing the ticket, mapped requirement and acceptance excerpts, architecture constraints, applicable ADR filenames, and pointers to full sources.
 2. Computes dependency waves.
 3. Prevents overlapping owned paths in the same wave.
 4. Creates an isolated Git worktree per runnable ticket.
@@ -829,7 +829,7 @@ Each coder subagent owns exactly one ticket. The coordinator does not implement 
 
 Tickets that add or update libraries own the affected package manifests and package-manager lockfile. Coders use the repository package manager and commit both manifest and lockfile changes; undeclared global imports, hand-written type shims, and lockfile-only dependency edits are rejected by the role contract.
 
-The orchestrator integrates successful commits into the run branch in stable logical-key order, reruns focused checks, synchronizes ticket progress, pushes the durable branch, and removes disposable ticket worktrees. If a sibling in the same dependency wave fails, completed siblings are integrated and checkpointed before the stage retries, so recovery reruns only unfinished tickets. The failed ticket's result and blocker are preserved in the root journal and child-ticket progress before its disposable worktree is removed. Execution failures remain In Progress in Linear; Needs Input is reserved for a durable Product or Architecture question that appears in the Inbox.
+The orchestrator integrates successful commits into the run branch in stable logical-key order, synchronizes ticket progress, pushes the durable branch, and removes disposable ticket worktrees. If a sibling fails, completed siblings are integrated and checkpointed first. The worker retries only failed tickets, up to three ticket attempts, and emits their keys and blockers; it does not wrap the whole coder stage in generic stage retries. Execution failures remain In Progress in Linear; Needs Input is reserved for a durable Product or Architecture question that appears in the Inbox.
 
 ### Lint
 
@@ -911,7 +911,7 @@ Stages are registered from the repository pipeline and move through pending, run
 
 ### Automatic retry
 
-A cloud stage is attempted up to three times. Between attempts, Agent Harness persists the failure, resets the stage to pending, uploads the journal, and retries from durable state. In a parallel ticket stage, successful sibling commits are integrated and checkpointed first, so later attempts skip them. If an operator repairs the isolated run branch before resuming, the worker can adopt a completed agent result whose commit is already an ancestor of the run branch instead of failing on an empty cherry-pick. A context cancellation, structured QA repair request, or valid Product/Architecture input request does not consume ordinary retries in the same way. A request from any other stage, or a second request round, is rejected immediately as a contract violation rather than retried as a question.
+A single cloud stage is attempted up to three times. Between attempts, Agent Harness persists the failure, resets the stage to pending, uploads the journal, and retries from durable state. A ticket-parallel stage instead retries only failed logical tickets from durable checkpoints, up to three ticket attempts, while retaining successful siblings. If an operator repairs the isolated run branch before resuming, the worker can adopt a completed result whose commit is already an ancestor of the run branch. A context cancellation, structured QA repair request, or valid Product/Architecture input request does not consume ordinary retries in the same way. A request from any other stage, or a second request round, is rejected immediately as a contract violation rather than retried as a question.
 
 After the final failed attempt, the run pauses.
 
@@ -1143,7 +1143,9 @@ The root guide gives every agent the project purpose, repository map, sources of
 
 ### `ARCHITECTURE.md`
 
-Documents system context, components, dependency rules, critical flows, external interfaces, invariants, constraints, and the `.harness/adrs/` decision-record directory.
+Documents system context, components, dependency rules, critical flows, external interfaces, invariants, constraints, and the indexed `.harness/adrs/accepted/` decision record. The documentation stage updates current-state architecture and the ADR index after QA, and PR preparation cannot proceed when that stage blocks.
+
+The default documentation stage does not generate a separate human evidence pack or standalone external documentation. That is reserved for a future optional pipeline feature so projects that do not need regulatory evidence do not pay its context and generation cost.
 
 ### `DESIGN.md`
 

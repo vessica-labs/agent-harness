@@ -48,7 +48,6 @@ ADR_HEADINGS = [
     "## Decision",
     "## Consequences",
     "## Alternatives Considered",
-    "## Ticket Constraints",
 ]
 GENERIC_AGENT_CONTRACTS = {
     "coder": ({"completed", "blocked"}, {"ticket_key", "commit", "files_changed", "tdd", "checks", "worktree_clean", "blocker", "residual_risks"}),
@@ -400,6 +399,9 @@ def validate_pipeline(pipeline: Any, repo: Path | None = None) -> list[str]:
             errors.append(f"{prefix}.agent must be a safe .agents/*.md path")
         elif repo is not None and not (repo / agent).is_file():
             errors.append(f"agent file does not exist: {agent}")
+        model = stage.get("model")
+        if model is not None and (not isinstance(model, str) or not model.strip()):
+            errors.append(f"{prefix}.model must be a non-empty string when set")
         mode = stage.get("mode")
         if mode not in {"single", "ticket_parallel"}:
             errors.append(f"{prefix}.mode must be single or ticket_parallel")
@@ -684,8 +686,12 @@ def validate_product_output(data: Any) -> list[str]:
         if not isinstance(paths, list) or not paths or any(not isinstance(path, str) or not _safe_relative(path) for path in paths):
             errors.append(f"{prefix}.owned_paths must contain safe relative paths")
         for list_key in ("acceptance_criteria", "depends_on", "focused_checks"):
-            if not isinstance(ticket.get(list_key), list) or any(not isinstance(item, str) for item in ticket.get(list_key, [])):
+            if not isinstance(ticket.get(list_key), list) or any(not isinstance(item, str) or not item.strip() for item in ticket.get(list_key, [])):
                 errors.append(f"{prefix}.{list_key} must be a string list")
+        if isinstance(ticket.get("acceptance_criteria"), list) and not ticket["acceptance_criteria"]:
+            errors.append(f"{prefix}.acceptance_criteria must not be empty")
+        if isinstance(ticket.get("focused_checks"), list) and not ticket["focused_checks"]:
+            errors.append(f"{prefix}.focused_checks must not be empty")
     try:
         waves = dependency_waves([ticket for ticket in tickets if isinstance(ticket, dict)])
         by_key = {ticket["key"]: ticket for ticket in tickets if isinstance(ticket, dict) and isinstance(ticket.get("key"), str)}
@@ -709,6 +715,29 @@ def validate_product_output(data: Any) -> list[str]:
             unknown = set(item["tickets"]) - keys
             if unknown:
                 errors.append(f"coverage[{index}] references unknown tickets: {', '.join(sorted(unknown))}")
+        prd = data.get("prd_markdown", "")
+        requirement_ids = set(re.findall(r"(?m)^\s*[-*]\s+(R-?[0-9]+):", prd))
+        covered_requirements = {
+            item.get("requirement") for item in coverage
+            if isinstance(item, dict) and isinstance(item.get("requirement"), str)
+        }
+        missing_requirements = requirement_ids - covered_requirements
+        if missing_requirements:
+            errors.append(f"coverage omits requirements: {', '.join(sorted(missing_requirements))}")
+        unknown_requirements = covered_requirements - requirement_ids
+        if unknown_requirements:
+            errors.append(f"coverage references unknown requirements: {', '.join(sorted(unknown_requirements))}")
+        acceptance_ids = set(re.findall(r"(?m)^###\s+(AC-[0-9]+):", prd))
+        assigned_acceptance = {
+            criterion for ticket in tickets if isinstance(ticket, dict)
+            for criterion in ticket.get("acceptance_criteria", []) if isinstance(criterion, str)
+        }
+        missing_acceptance = acceptance_ids - assigned_acceptance
+        if missing_acceptance:
+            errors.append(f"tickets omit acceptance criteria: {', '.join(sorted(missing_acceptance))}")
+        unknown_acceptance = assigned_acceptance - acceptance_ids
+        if unknown_acceptance:
+            errors.append(f"tickets reference unknown acceptance criteria: {', '.join(sorted(unknown_acceptance))}")
     if data.get("status") == "blocked" and not data.get("blockers"):
         errors.append("blocked output must include blockers")
     return errors
@@ -724,7 +753,7 @@ def validate_architect_output(data: Any, ticket_keys: set[str] | None = None) ->
         if "input_request" not in data:
             errors.append("input_request is required")
         return errors + validate_input_request(data.get("input_request"))
-    required = {"agent", "status", "adr_filename", "adr_markdown", "ticket_constraints", "ticket_graph_valid", "blockers"}
+    required = {"agent", "status", "adr_filename", "adr_markdown", "applicable_adrs", "ticket_constraints", "ticket_graph_valid", "blockers"}
     missing = sorted(required - set(data))
     if missing:
         errors.append(f"missing fields: {', '.join(missing)}")
@@ -741,13 +770,30 @@ def validate_architect_output(data: Any, ticket_keys: set[str] | None = None) ->
         invalid_headings = _missing_or_out_of_order_headings(data["adr_markdown"], ADR_HEADINGS)
         if invalid_headings:
             errors.append(f"adr_markdown is missing or reorders required headings: {', '.join(invalid_headings)}")
+        for metadata in ("- Decision ID:", "- Status:", "- Applies to:", "- Supersedes:"):
+            if not any(line.startswith(metadata) and line[len(metadata):].strip() for line in data["adr_markdown"].splitlines()):
+                errors.append(f"adr_markdown requires non-empty metadata: {metadata}")
     constraints = data.get("ticket_constraints")
     if not isinstance(constraints, list):
         errors.append("ticket_constraints must be a list")
-    elif ticket_keys is not None:
+    else:
         for index, constraint in enumerate(constraints):
-            if not isinstance(constraint, dict) or constraint.get("ticket_key") not in ticket_keys:
-                errors.append(f"ticket_constraints[{index}] references an unknown ticket")
+            prefix = f"ticket_constraints[{index}]"
+            if not isinstance(constraint, dict):
+                errors.append(f"{prefix} must be an object")
+                continue
+            if ticket_keys is not None and constraint.get("ticket_key") not in ticket_keys:
+                errors.append(f"{prefix} references an unknown ticket")
+            for key in ("constraints", "required_owned_paths", "additional_dependencies", "required_focused_checks"):
+                values = constraint.get(key)
+                if not isinstance(values, list) or any(not isinstance(value, str) or not value.strip() for value in values):
+                    errors.append(f"{prefix}.{key} must be a string list")
+    applicable_adrs = data.get("applicable_adrs")
+    if not isinstance(applicable_adrs, list) or any(
+        not isinstance(value, str) or not re.fullmatch(r"ADR-[A-Za-z0-9._-]+\.md", value)
+        for value in (applicable_adrs or [])
+    ):
+        errors.append("applicable_adrs must be a list of safe ADR filenames")
     if not isinstance(data.get("ticket_graph_valid"), bool):
         errors.append("ticket_graph_valid must be boolean")
     if data.get("status") == "ready" and data.get("ticket_graph_valid") is not True:

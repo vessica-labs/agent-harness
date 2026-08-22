@@ -64,11 +64,11 @@ Write the declared feature-request input from the first available YAML source: u
 
 ### Arch
 
-Run `.agents/architect.md` with its declared PRD input, ticket graph, repository evidence, and injected ADR context. Validate with `--agent architect --tickets <product-result>`. Materialize and publish the ADR, apply added ticket dependencies/owned-path constraints, revalidate the graph, and materialize applicable ADRs in the run worktree `.harness/adrs/`.
+Run `.agents/architect.md` with its declared PRD input, ticket graph, repository evidence, ADR index, and applicable injected ADR context. Validate with `--agent architect --tickets <product-result>`. Materialize and publish the ADR; apply added ticket dependencies, owned paths, focused checks, and compact constraints; revalidate the graph; then generate one ticket context packet per ticket.
 
 ### Coder
 
-Create `agent-harness/<issue-key-lower>-<run-suffix>` from the configured remote/base. Materialize one declared ticket input per ticket. For each dependency wave, create ticket worktrees from the current integration head and invoke one top-level Codex coordinator with native multi-agent support enabled. The coordinator delegates one coder subagent per ticket and keeps no more than the YAML `parallelism` value active at once. Each coder subagent follows TDD, writes its declared result, and makes one scoped commit; neither coordinator nor subagents push. Integrate successful commits in sorted logical-key order, resolving only unambiguous conflicts and rerunning focused checks.
+Create `agent-harness/<issue-key-lower>-<run-suffix>` from the configured remote/base. Materialize one declared compact context packet per ticket. For each dependency wave, create ticket worktrees from the current integration head and invoke one top-level Codex coordinator with native multi-agent support enabled. The coordinator delegates one coder subagent per ticket and keeps no more than the YAML `parallelism` value active at once. Each coder subagent follows TDD, writes its declared result, and makes one scoped commit; neither coordinator nor subagents push. Integrate successful commits in sorted logical-key order and retry only failed tickets from durable checkpoints.
 
 ### Lint
 
@@ -78,6 +78,10 @@ Run the lint agent on the integration worktree. It executes repository lint/buil
 
 Use Playwright to execute every acceptance criterion from the declared PRD input and materialize QA evidence. Safe fixes become scoped commits. If QA returns requeue, follow a matching YAML `repair_loops` declaration; when none exists, pause with the new tickets and evidence.
 
+### Docs
+
+After QA passes, update repository and `.harness` current-state documentation, copy the accepted ADR into `.harness/adrs/accepted/`, update the ADR index, validate and commit the result. The default stage returns no external evidence documents. A blocked documentation result prevents PR preparation.
+
 ### PR
 
-Require every declared PR input and clean lint/build/QA results. Run the PR agent, rebase on the configured remote/base, verify, push normally or with force-with-lease after a rebase, and create the GitHub PR with `gh`. Materialize the PR record, store the canonical URL, and never merge.
+Require every declared PR input and clean lint/build/QA/documentation results. Run the PR agent, rebase on the configured remote/base, verify, push normally or with force-with-lease after a rebase, and create the GitHub PR with `gh`. Materialize the PR record, store the canonical URL, and never merge.

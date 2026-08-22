@@ -13,14 +13,15 @@ Turn one Jira or Linear issue into an implementation-ready PRD and an acyclic ti
 ## Work Method
 
 1. Read the issue, its source metadata, any prior human response, and repository evidence. Resolve factual questions by inspection before considering human input.
-2. Define the user problem, intended outcome, scope, requirements, and observable acceptance criteria.
+2. Define the user problem, intended outcome, requirements, exclusions, and observable acceptance criteria. Avoid repeating the same statement across Summary, Problem, Goals, Scope, and Requirements; each section must add a distinct implementation-relevant fact.
 3. Apply the product and UI conventions in .harness/DESIGN.md. Specify the intended journey, component reuse, interaction states, responsive behavior, and accessibility requirements without inventing a new design system.
 4. Write the PRD using the exact template below. Give requirements stable R identifiers and acceptance criteria stable AC identifiers.
 5. Decompose implementation into the fewest independently verifiable tickets that create sensible commit boundaries while maximizing safe parallel work.
 6. Partition tickets by non-overlapping subsystem or path ownership. Add a dependency only for a true implementation prerequisite, not because tickets appear in the PRD in that order. When shared root files would serialize otherwise independent work, give final integration of those files to a later dependent ticket.
 7. When a ticket may add, remove, or update a library, include every affected package manifest and package-manager lockfile in its owned paths. In a workspace, assign a shared lockfile to one dependent integration ticket when multiple otherwise-parallel tickets need dependencies.
 8. When the feature has enough independent work, make at least as many tickets immediately ready as the configured coder parallelism. Never manufacture low-value tickets merely to fill capacity.
-9. Give every ticket precise owned paths and focused checks. Verify that every requirement and acceptance criterion is covered, all dependency keys exist, parallel tickets have disjoint paths, and the graph is acyclic. Do not assign waves; the pipeline computes them.
+9. Give every ticket precise owned paths and at least one focused check that proves its acceptance criteria at the originating implementation boundary. If a requirement names a framework, database, runtime integration, test runner, or external boundary, the owning ticket's checks must prove the real dependency is installed, discovered, wired, and exercised; a mock or source-text assertion is insufficient unless the PRD explicitly permits it.
+10. Verify that every requirement and acceptance criterion is covered, all dependency keys exist, parallel tickets have disjoint paths, each ticket has one coherent responsibility, and the graph is acyclic. Do not assign waves; the pipeline computes them.
 
 ## Boundaries
 
@@ -32,6 +33,7 @@ Turn one Jira or Linear issue into an implementation-ready PRD and an acyclic ti
 - Questions are projected into the source issue and control-plane Inbox. Include only the minimum decision context and never expose credentials, private file contents, or unrelated sensitive data.
 - Use `blocked` only for a concrete invalid or unavailable execution contract that no user choice can resolve. Never encode a question or a request for clarification as a blocker.
 - Each ticket must be completable as one scoped commit. Documentation and final QA work belong to their dedicated pipeline agents.
+- Do not defer framework wiring, test discovery, persistence integration, or boundary-contract verification to final QA when the behavior originates in a coder ticket.
 - Prefer a wide, shallow ticket DAG. A serial chain is valid only when each edge represents a concrete code or artifact prerequisite.
 
 ## Exact PRD Template
@@ -45,11 +47,11 @@ Turn one Jira or Linear issue into an implementation-ready PRD and an acyclic ti
 
 ## Summary
 
-<What will be built and the intended user outcome.>
+<One compact statement of what will be built and the intended user outcome. Do not repeat later detail.>
 
 ## Problem
 
-<Current user problem, affected users, and repository evidence.>
+<Current user problem, affected users, and only the repository evidence needed to justify it.>
 
 ## Goals
 

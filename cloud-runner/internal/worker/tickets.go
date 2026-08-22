@@ -7,12 +7,17 @@ import (
 )
 
 type ticket struct {
-	Key                string   `json:"key"`
-	Title              string   `json:"title"`
-	Objective          string   `json:"objective"`
-	AcceptanceCriteria []string `json:"acceptance_criteria"`
-	OwnedPaths         []string `json:"owned_paths"`
-	DependsOn          []string `json:"depends_on"`
+	Key                     string   `json:"key"`
+	Type                    string   `json:"type,omitempty"`
+	Title                   string   `json:"title"`
+	Objective               string   `json:"objective"`
+	AcceptanceCriteria      []string `json:"acceptance_criteria"`
+	OwnedPaths              []string `json:"owned_paths"`
+	DependsOn               []string `json:"depends_on"`
+	FocusedChecks           []string `json:"focused_checks,omitempty"`
+	CommitMessage           string   `json:"commit_message,omitempty"`
+	Complexity              string   `json:"complexity,omitempty"`
+	ArchitectureConstraints []string `json:"architecture_constraints,omitempty"`
 }
 
 type ticketRun struct {

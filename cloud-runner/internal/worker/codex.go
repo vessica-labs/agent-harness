@@ -41,7 +41,7 @@ Execution context:
 Work directly in the supplied repository. Do not edit pipeline state or provider credentials. Write the exact JSON output contract to the required result file. Human input policy: only the product and arch stages may return status needs_input, at most once per stage. Every other stage must use the available context and continue to a terminal result; it may never ask a question or wait for a user. %s`,
 		stage.ID, string(role), repo, runDir, strings.Join(inputs, "\n"), resultPath,
 		extra+fmt.Sprintf(" In this Railway sandbox, Playwright and Chromium are preinstalled. Repository tests must still declare their Playwright package dependency in the appropriate package manifest and lockfile. Configure Playwright to use PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH when it is set. Every Playwright invocation must explicitly use at most %d workers (for example: npm run test:e2e -- --workers=%d). HARNESS_PLAYWRIGHT_WORKERS contains this limit.", r.config.PlaywrightWorkers, r.config.PlaywrightWorkers))
-	return r.runCodexPrompt(ctx, repo, stage.ID, ticketKey, resultPath, prompt, false, stage.ID+"-"+ticketKey)
+	return r.runCodexPrompt(ctx, repo, stage.ID, ticketKey, resultPath, prompt, false, stage.ID+"-"+ticketKey, r.stageModel(stage))
 }
 
 type coderWaveAssignment struct {
@@ -111,7 +111,7 @@ After every subagent reaches a terminal state, write exactly this coordinator JS
 
 Set coordinator status to completed only when every assignment completed and wrote its result. In this Railway sandbox, Playwright and Chromium are preinstalled. Repository tests must still declare their Playwright package dependency. Configure Playwright to use PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH when set, and run Playwright with at most %d workers.`,
 		stage.ID, string(role), r.repo, r.runDir, stage.Parallelism, string(assignmentJSON), summaryPath, r.config.PlaywrightWorkers)
-	if err := r.runCodexPrompt(ctx, r.repo, stage.ID, "", summaryPath, prompt, true, fmt.Sprintf("%s-wave-%02d", stage.ID, waveNumber)); err != nil {
+	if err := r.runCodexPrompt(ctx, r.repo, stage.ID, "", summaryPath, prompt, true, fmt.Sprintf("%s-wave-%02d", stage.ID, waveNumber), r.stageModel(stage)); err != nil {
 		return err
 	}
 	return validateCoderWaveSummary(summaryPath, assignments)
@@ -161,7 +161,14 @@ func validateCoderWaveSummary(path string, assignments []coderWaveAssignment) er
 	return nil
 }
 
-func (r *Runner) runCodexPrompt(ctx context.Context, repo, stageID, ticketKey, resultPath, prompt string, multiAgent bool, logKey string) error {
+func (r *Runner) stageModel(stage Stage) string {
+	if strings.TrimSpace(stage.Model) != "" {
+		return strings.TrimSpace(stage.Model)
+	}
+	return r.config.CodexModel
+}
+
+func (r *Runner) runCodexPrompt(ctx context.Context, repo, stageID, ticketKey, resultPath, prompt string, multiAgent bool, logKey, model string) error {
 	if err := os.MkdirAll(filepath.Dir(resultPath), 0o700); err != nil {
 		return err
 	}
@@ -174,7 +181,7 @@ func (r *Runner) runCodexPrompt(ctx context.Context, repo, stageID, ticketKey, r
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		return err
 	}
-	args := []string{"exec", "--json", "--model", r.config.CodexModel, "--dangerously-bypass-approvals-and-sandbox", "--ignore-user-config"}
+	args := []string{"exec", "--json", "--model", model, "--dangerously-bypass-approvals-and-sandbox", "--ignore-user-config"}
 	if multiAgent {
 		args = append(args, "--enable", "multi_agent")
 	}
@@ -219,7 +226,7 @@ func (r *Runner) runCodexPrompt(ctx context.Context, repo, stageID, ticketKey, r
 		if message := codexErrorMessage(line); message != "" {
 			lastCodexError = message
 		}
-		if usage, ok := parseCodexUsage(line, r.config.CodexModel); ok {
+		if usage, ok := parseCodexUsage(line, model); ok {
 			terminalCompleted = true
 			if terminalTimer == nil {
 				terminalTimer = time.AfterFunc(codexTerminalExitGrace, func() {

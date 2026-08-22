@@ -31,7 +31,7 @@ If a section does not apply, retain it and state why.
 | Testing | [`.harness/TESTING.md`](.harness/TESTING.md) |
 | Security | [`.harness/SECURITY.md`](.harness/SECURITY.md) |
 | Deployment | [`.harness/DEPLOY.md`](.harness/DEPLOY.md) |
-| Relevant architecture decisions | [`.harness/adrs/`](.harness/adrs/) |
+| Relevant architecture decisions | [`.harness/adrs/INDEX.md`](.harness/adrs/INDEX.md) |
 
 ## Essential Commands
 

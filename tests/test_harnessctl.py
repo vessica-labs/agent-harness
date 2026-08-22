@@ -39,13 +39,14 @@ class YamlAndPipelineTests(unittest.TestCase):
         pipeline = self.harnessctl.load_simple_yaml(PLUGIN / "pipelines" / "default.yaml")
         self.assertEqual([], self.harnessctl.validate_pipeline(pipeline))
         self.assertEqual(
-            ["product", "arch", "coder", "lint", "qa", "pr"],
+            ["product", "arch", "coder", "lint", "qa", "docs", "pr"],
             self.harnessctl.stage_order(pipeline),
         )
         coder = self.harnessctl.pipeline_stage(pipeline, "coder")
         self.assertEqual(3, coder["parallelism"])
         self.assertEqual("ticket_parallel", coder["mode"])
-        self.assertEqual("inputs/tickets/{ticket_key}.json", coder["inputs"][0]["file"])
+        self.assertEqual("inputs/ticket-context/{ticket_key}.json", coder["inputs"][0]["file"])
+        self.assertEqual("artifacts/ticket-contexts.json", coder["inputs"][0]["generated_from"]["file"])
         self.assertEqual(
             [{"from": "qa", "to": "coder", "through": "qa", "max_reentries": 2}],
             pipeline["repair_loops"],
@@ -72,10 +73,11 @@ class YamlAndPipelineTests(unittest.TestCase):
     def test_user_can_customize_parallelism_and_stage_dag(self) -> None:
         pipeline = self.harnessctl.load_simple_yaml(PLUGIN / "pipelines" / "default.yaml")
         self.harnessctl.pipeline_stage(pipeline, "coder")["parallelism"] = 5
+        self.harnessctl.pipeline_stage(pipeline, "docs")["model"] = "bounded-stage-model"
         pipeline["stages"] = [stage for stage in pipeline["stages"] if stage["id"] != "lint"]
         self.harnessctl.pipeline_stage(pipeline, "qa")["needs"] = ["coder"]
         self.assertEqual([], self.harnessctl.validate_pipeline(pipeline))
-        self.assertEqual(["product", "arch", "coder", "qa", "pr"], self.harnessctl.stage_order(pipeline))
+        self.assertEqual(["product", "arch", "coder", "qa", "docs", "pr"], self.harnessctl.stage_order(pipeline))
 
     def test_repair_loop_must_reenter_an_earlier_stage(self) -> None:
         pipeline = self.harnessctl.load_simple_yaml(PLUGIN / "pipelines" / "default.yaml")
@@ -177,9 +179,9 @@ class AgentOutputTests(unittest.TestCase):
                 "## Goals",
                 "## Non-Goals",
                 "## Scope",
-                "## Requirements",
+                "## Requirements\n\n- R1: Add the example feature",
                 "## Product and UI/UX Direction",
-                "## Acceptance Criteria",
+                "## Acceptance Criteria\n\n### AC-1: Example works\n\n- Then the result is observable",
                 "## Constraints and Dependencies",
                 "## Risks and Assumptions",
             ]
@@ -224,6 +226,14 @@ class AgentOutputTests(unittest.TestCase):
         self.assertEqual([], self.harnessctl.validate_product_output(product))
         self.assertEqual([["L-123-T01"], ["L-123-T02"]], self.harnessctl.dependency_waves(product["tickets"]))
 
+    def test_product_contract_rejects_empty_checks_and_unassigned_acceptance(self) -> None:
+        product = self.product()
+        product["prd_markdown"] += "\n\n### AC-2: Unassigned outcome\n\n- Then it works\n"
+        product["tickets"][0]["focused_checks"] = []
+        errors = self.harnessctl.validate_product_output(product)
+        self.assertTrue(any("focused_checks must not be empty" in error for error in errors))
+        self.assertTrue(any("tickets omit acceptance criteria: AC-2" in error for error in errors))
+
     def test_only_product_and_architect_accept_structured_needs_input(self) -> None:
         request = {
             "summary": "Choose the operating mode",
@@ -267,12 +277,15 @@ class AgentOutputTests(unittest.TestCase):
         markdown = "\n\n".join(
             [
                 "# ADR: Example",
+                "- Decision ID: ADR-L-123-example",
+                "- Status: Accepted",
+                "- Applies to: internal/model",
+                "- Supersedes: None",
                 "## Context",
                 "## Decision Drivers",
                 "## Decision",
                 "## Consequences",
                 "## Alternatives Considered",
-                "## Ticket Constraints",
             ]
         )
         output = {
@@ -280,8 +293,15 @@ class AgentOutputTests(unittest.TestCase):
             "status": "ready",
             "adr_filename": "ADR-L-123-example.md",
             "adr_markdown": markdown,
+            "applicable_adrs": [],
             "ticket_constraints": [
-                {"ticket_key": "L-123-T01", "constraints": [], "required_owned_paths": [], "additional_dependencies": []}
+                {
+                    "ticket_key": "L-123-T01",
+                    "constraints": [],
+                    "required_owned_paths": [],
+                    "additional_dependencies": [],
+                    "required_focused_checks": [],
+                }
             ],
             "ticket_graph_valid": True,
             "blockers": [],
@@ -417,6 +437,12 @@ class AgentOutputTests(unittest.TestCase):
             )
             self.assertEqual([], waiting_result["outputs"])
 
+            contexts = [
+                {"key": ticket["key"], "schema_version": 1, "ticket": ticket}
+                for ticket in self.product()["tickets"]
+            ]
+            contexts_path = run_dir / "artifacts" / "ticket-contexts.json"
+            contexts_path.write_text(json.dumps(contexts), encoding="utf-8")
             _, generated = run_json(
                 str(HARNESSCTL),
                 "materialize-generated-inputs",
@@ -428,7 +454,7 @@ class AgentOutputTests(unittest.TestCase):
                 "coder",
             )
             self.assertEqual(2, len(generated["materialized"]))
-            self.assertTrue((run_dir / "inputs" / "tickets" / "L-123-T01.json").is_file())
+            self.assertTrue((run_dir / "inputs" / "ticket-context" / "L-123-T01.json").is_file())
 
 
 class BootstrapAndStateTests(unittest.TestCase):

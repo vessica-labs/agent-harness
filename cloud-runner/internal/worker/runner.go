@@ -195,7 +195,12 @@ func (r *Runner) executeStageWithRetries(ctx context.Context, stage Stage) error
 	} else if recovered != nil {
 		return recovered
 	}
-	const maxAttempts = 3
+	maxAttempts := 3
+	if stage.Mode == "ticket_parallel" {
+		// Ticket-parallel stages retry failed tickets internally. Wrapping them in
+		// stage retries obscures the blocker and repeats coordinator setup.
+		maxAttempts = 1
+	}
 	var last error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		last = r.executeStage(ctx, stage)
@@ -498,7 +503,7 @@ func (r *Runner) runSingleStage(ctx context.Context, stage Stage) error {
 	resultPath := filepath.Join(r.runDir, filepath.FromSlash(stage.Result.File))
 	extra := ""
 	if stage.ID == "arch" {
-		extra = "The orchestrator will merge every required_owned_paths and additional_dependencies entry from a ready result into the product ticket plan and validate the revised DAG. Treat those declared additions as applied. The downstream docs stage owns documentation artifacts and the downstream QA stage owns Playwright acceptance evidence, so do not block solely because coder tickets omit those paths."
+		extra = "The orchestrator will merge every constraints, required_owned_paths, additional_dependencies, and required_focused_checks entry from a ready result into compact per-ticket context and validate the revised DAG. Treat those declared additions as applied. The downstream docs stage owns documentation artifacts and the downstream QA stage owns final acceptance evidence, so do not block solely because coder tickets omit those paths."
 	}
 	if stage.ID == "pr" {
 		_, fetchErr := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), orchestratorGit, "fetch", "origin", r.config.BaseBranch)
@@ -551,6 +556,29 @@ func (r *Runner) runSingleStage(ctx context.Context, stage Stage) error {
 }
 
 func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
+	const maxTicketAttempts = 3
+	var last error
+	for attempt := 1; attempt <= maxTicketAttempts; attempt++ {
+		last = r.runTicketStageAttempt(ctx, stage)
+		if last == nil {
+			return nil
+		}
+		var input *inputRequestSignal
+		var policy *inputPolicyError
+		if errors.As(last, &input) || errors.As(last, &policy) || ctx.Err() != nil || attempt == maxTicketAttempts {
+			break
+		}
+		failed, blockers := r.failedTicketState()
+		_ = r.event(context.WithoutCancel(ctx), "ticket.retrying", "warning", "Failed tickets will be retried from durable ticket checkpoints", stage.ID,
+			map[string]any{"attempt": attempt, "max_attempts": maxTicketAttempts, "tickets": failed, "blockers": blockers, "error": last.Error()})
+		checkpointCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		_ = r.checkpoint(checkpointCtx)
+		cancel()
+	}
+	return fmt.Errorf("ticket stage %s still has failed tickets after %d attempts: %w", stage.ID, maxTicketAttempts, last)
+}
+
+func (r *Runner) runTicketStageAttempt(ctx context.Context, stage Stage) error {
 	pipelinePath := filepath.Join(r.repo, ".harness", "pipeline.yaml")
 	if _, err := r.harness(ctx, r.repo, "materialize-generated-inputs", "--pipeline", pipelinePath,
 		"--run-dir", r.runDir, "--stage", stage.ID); err != nil {
@@ -619,9 +647,6 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 				resultPath := filepath.Join(worktreeRun, filepath.FromSlash(replaceTicket(stage.Result.File, current.ticket.Key)))
 				if err := r.detectInputRequest(stage, resultPath); err != nil {
 					current.err = err
-					if coordinatorErr != nil {
-						current.err = fmt.Errorf("coordinator failed: %v; ticket %s result: %w", coordinatorErr, current.ticket.Key, err)
-					}
 				}
 				if current.err != nil {
 					continue
@@ -656,6 +681,9 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 				current.commit = output.Commit
 			}
 			if current.err != nil {
+				if coordinatorErr != nil {
+					current.err = errors.Join(current.err, fmt.Errorf("coder coordinator: %w", coordinatorErr))
+				}
 				if current.blocker == "" {
 					current.blocker = current.err.Error()
 				}
@@ -728,9 +756,8 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 					"owner": r.config.LeaseOwner, "commit": current.commit})
 			integrated = true
 		}
-		if firstTicketError == nil && coordinatorErr != nil {
-			firstTicketError = coordinatorErr
-		}
+		// Per-ticket results are authoritative. A malformed aggregate summary is
+		// not a reason to rerun tickets whose valid commits were integrated.
 		r.cleanupWorktrees(ctx, runs)
 		if integrated {
 			if err := r.pushBranch(ctx); err != nil {
@@ -745,6 +772,36 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 		}
 	}
 	return nil
+}
+
+func (r *Runner) failedTicketState() ([]string, map[string]string) {
+	body, err := os.ReadFile(filepath.Join(r.runDir, "state.json"))
+	if err != nil {
+		return nil, nil
+	}
+	var state struct {
+		Tickets []map[string]any `json:"tickets"`
+	}
+	if json.Unmarshal(body, &state) != nil {
+		return nil, nil
+	}
+	var keys []string
+	blockers := map[string]string{}
+	for _, item := range state.Tickets {
+		if item["status"] != "failed" {
+			continue
+		}
+		key, _ := item["key"].(string)
+		if key == "" {
+			continue
+		}
+		keys = append(keys, key)
+		if blocker, ok := item["blocker"].(string); ok && blocker != "" {
+			blockers[key] = blocker
+		}
+	}
+	sort.Strings(keys)
+	return keys, blockers
 }
 
 func ticketBlockerText(value any) string {
