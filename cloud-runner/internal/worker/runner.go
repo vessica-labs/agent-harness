@@ -673,7 +673,15 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 				}
 				continue
 			}
-			if _, err := runCommand(ctx, r.repo, sanitizedEnvironment(""), orchestratorGit, "cherry-pick", current.commit); err != nil {
+			alreadyIntegrated, err := gitCommitAlreadyIntegrated(ctx, r.repo, current.commit)
+			if err != nil {
+				r.cleanupWorktrees(ctx, runs)
+				return fmt.Errorf("inspect ticket %s commit: %w", current.ticket.Key, err)
+			}
+			if !alreadyIntegrated {
+				_, err = runCommand(ctx, r.repo, sanitizedEnvironment(""), orchestratorGit, "cherry-pick", current.commit)
+			}
+			if err != nil {
 				_, _ = runCommand(context.WithoutCancel(ctx), r.repo, sanitizedEnvironment(""), orchestratorGit, "cherry-pick", "--abort")
 				r.cleanupWorktrees(ctx, runs)
 				return fmt.Errorf("integrate ticket %s: %w", current.ticket.Key, err)
@@ -692,7 +700,11 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 			if err := r.syncTicketProgress(ctx, stage.ID); err != nil {
 				return fmt.Errorf("sync completed ticket %s: %w", current.ticket.Key, err)
 			}
-			_ = r.event(ctx, "ticket.completed", "info", "Ticket commit integrated", stage.ID,
+			message := "Ticket commit integrated"
+			if alreadyIntegrated {
+				message = "Existing ticket repair adopted"
+			}
+			_ = r.event(ctx, "ticket.completed", "info", message, stage.ID,
 				map[string]any{"ticket_key": current.ticket.Key, "depends_on": current.ticket.DependsOn,
 					"owner": r.config.LeaseOwner, "commit": current.commit})
 			integrated = true

@@ -3,11 +3,61 @@ package worker
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestGitCommitAlreadyIntegrated(t *testing.T) {
+	repo := t.TempDir()
+	ctx := context.Background()
+	for _, args := range [][]string{
+		{"init", "-b", "main"},
+		{"config", "user.name", "Agent Harness Test"},
+		{"config", "user.email", "agent-harness@example.test"},
+	} {
+		if _, err := runCommand(ctx, repo, nil, orchestratorGit, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "main.txt"), []byte("main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCommand(ctx, repo, nil, orchestratorGit, "add", "main.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCommand(ctx, repo, nil, orchestratorGit, "commit", "-m", "main"); err != nil {
+		t.Fatal(err)
+	}
+	mainCommit, err := runCommand(ctx, repo, nil, orchestratorGit, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if integrated, err := gitCommitAlreadyIntegrated(ctx, repo, string(mainCommit)); err != nil || !integrated {
+		t.Fatalf("HEAD commit not recognized as integrated: integrated=%v err=%v", integrated, err)
+	}
+
+	if _, err := runCommand(ctx, repo, nil, orchestratorGit, "checkout", "--orphan", "other"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCommand(ctx, repo, nil, orchestratorGit, "rm", "-rf", "."); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "other.txt"), []byte("other\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCommand(ctx, repo, nil, orchestratorGit, "add", "other.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCommand(ctx, repo, nil, orchestratorGit, "commit", "-m", "other"); err != nil {
+		t.Fatal(err)
+	}
+	if integrated, err := gitCommitAlreadyIntegrated(ctx, repo, string(mainCommit)); err != nil || integrated {
+		t.Fatalf("unrelated commit recognized as integrated: integrated=%v err=%v", integrated, err)
+	}
+}
 
 func TestTicketWaves(t *testing.T) {
 	waves, err := ticketWaves([]ticket{
