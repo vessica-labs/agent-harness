@@ -103,17 +103,33 @@ func (r *Runner) recordTicketWaveStarted(ctx context.Context, wave []ticket) err
 }
 
 func (r *Runner) syncTicketProgress(ctx context.Context, stageID string) error {
-	body, err := os.ReadFile(filepath.Join(r.runDir, "state.json"))
+	request, err := ticketProgressRequest(r.runDir, stageID)
 	if err != nil {
 		return err
+	}
+	return r.client.sync(ctx, request, &map[string]any{})
+}
+
+func ticketProgressRequest(runDir, stageID string) (map[string]any, error) {
+	body, err := os.ReadFile(filepath.Join(runDir, "state.json"))
+	if err != nil {
+		return nil, err
 	}
 	var state struct {
 		Tickets []map[string]any `json:"tickets"`
 	}
 	if err := json.Unmarshal(body, &state); err != nil {
-		return err
+		return nil, err
 	}
-	return r.client.sync(ctx, map[string]any{"stage": stageID, "ticket_progress": state.Tickets}, &map[string]any{})
+	planBody, err := os.ReadFile(filepath.Join(runDir, "artifacts", "ticket-plan.json"))
+	if err != nil {
+		return nil, err
+	}
+	var plan []ticket
+	if err := json.Unmarshal(planBody, &plan); err != nil {
+		return nil, err
+	}
+	return map[string]any{"stage": stageID, "tickets": plan, "ticket_progress": state.Tickets}, nil
 }
 
 func (r *Runner) syncStage(ctx context.Context, stage Stage) error {
