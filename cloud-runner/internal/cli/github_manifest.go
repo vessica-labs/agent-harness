@@ -25,6 +25,17 @@ type manifestConversion struct {
 	WebhookSecret string `json:"webhook_secret"`
 }
 
+func githubAppManifest(appName, callback, webhookURL string) []byte {
+	manifest, _ := json.Marshal(map[string]any{
+		"name": appName, "url": "https://github.com/vessica-labs/agent-harness",
+		"description":  "Creates isolated Agent Harness branches and draft pull requests.",
+		"redirect_url": callback, "public": false, "default_events": []string{"pull_request"},
+		"hook_attributes":     map[string]any{"url": webhookURL, "active": true},
+		"default_permissions": map[string]string{"metadata": "read", "contents": "write", "pull_requests": "write", "workflows": "write"},
+	})
+	return manifest
+}
+
 func githubManifestFlow(ctx context.Context, client *apiClient, owner, appName string) error {
 	owner = strings.TrimSpace(owner)
 	if owner != "@me" && !regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`).MatchString(owner) {
@@ -40,13 +51,7 @@ func githubManifestFlow(ctx context.Context, client *apiClient, owner, appName s
 		return err
 	}
 	callback := "http://" + listener.Addr().String() + "/callback"
-	manifest, _ := json.Marshal(map[string]any{
-		"name": appName, "url": "https://github.com/vessica-labs/agent-harness",
-		"description":  "Creates isolated Agent Harness branches and draft pull requests.",
-		"redirect_url": callback, "public": false, "default_events": []string{"pull_request"},
-		"hook_attributes":     map[string]any{"url": strings.TrimRight(client.url, "/") + "/webhooks/github", "active": true},
-		"default_permissions": map[string]string{"metadata": "read", "contents": "write", "pull_requests": "write"},
-	})
+	manifest := githubAppManifest(appName, callback, strings.TrimRight(client.url, "/")+"/webhooks/github")
 	action := "https://github.com/settings/apps/new?state=" + state
 	if owner != "@me" {
 		action = "https://github.com/organizations/" + owner + "/settings/apps/new?state=" + state
@@ -59,7 +64,7 @@ func githubManifestFlow(ctx context.Context, client *apiClient, owner, appName s
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = template.Must(template.New("manifest").Parse(`<!doctype html><title>Agent Harness GitHub App</title><main><h1>Create the Agent Harness GitHub App</h1><p>GitHub will show the exact three repository permissions before creation.</p><form method="post" action="{{.Action}}"><input type="hidden" name="manifest" value="{{.Manifest}}"><button type="submit">Continue to GitHub</button></form></main>`)).Execute(w, map[string]string{"Action": action, "Manifest": string(manifest)})
+		_ = template.Must(template.New("manifest").Parse(`<!doctype html><title>Agent Harness GitHub App</title><main><h1>Create the Agent Harness GitHub App</h1><p>GitHub will show the exact four repository permissions before creation.</p><form method="post" action="{{.Action}}"><input type="hidden" name="manifest" value="{{.Manifest}}"><button type="submit">Continue to GitHub</button></form></main>`)).Execute(w, map[string]string{"Action": action, "Manifest": string(manifest)})
 	})
 	mux.HandleFunc("GET /callback", func(w http.ResponseWriter, r *http.Request) {
 		if !secure.EqualSecret(r.URL.Query().Get("state"), state) {
