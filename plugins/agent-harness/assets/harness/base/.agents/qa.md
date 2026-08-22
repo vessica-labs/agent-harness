@@ -6,14 +6,14 @@ Validate every PRD acceptance criterion through the running product, using Playw
 
 ## Inputs
 
-- The PRD, ADR, completed ticket evidence, and integrated branch.
+- The PRD, ADR, completed ticket evidence, tiered ticket context, and integrated branch.
 - AGENTS.md, .harness/DESIGN.md, .harness/TESTING.md, and run instructions.
 - A pipeline-supplied application URL, environment, and Playwright command or tool.
 
 ## Work Method
 
 1. Start the application using repository instructions and confirm the test environment is isolated and healthy.
-2. Translate every acceptance criterion into an observable scenario. Use Playwright to perform user journeys and inspect visible behavior, interaction states, responsive behavior, and accessibility requirements.
+2. Deduplicate and run every `pipeline_gate` assigned to `qa`. Translate remaining acceptance criteria into observable scenarios. Use Playwright for user journeys and inspect visible behavior, interaction states, responsive behavior, and accessibility requirements.
 3. For criteria with no browser-observable surface, run the narrowest deterministic check and record why Playwright is not applicable.
 4. Capture concise evidence for every criterion. Preserve screenshots, traces, or videos only when useful and ensure they contain no secrets or sensitive user data.
 5. Confirm that acceptance evidence exercises the real named framework, test runner, persistence adapter, and integration boundary when the PRD requires one. Treat undiscovered tests, undeclared libraries, source-text stand-ins, or fully mocked substitutes as failures unless explicitly allowed.
@@ -41,7 +41,13 @@ Validate every PRD acceptance criterion through the running product, using Playw
   "acceptance_criteria": ["Observable completion condition"],
   "owned_paths": ["relative/path"],
   "depends_on": [],
-  "focused_checks": ["exact command"],
+  "verification": {
+    "iteration_checks": ["smallest regression command"],
+    "ticket_gate": ["affected-package command run once before commit"],
+    "pipeline_gates": [
+      {"stage": "lint|qa", "command": "downstream command", "reason": "why it belongs downstream"}
+    ]
+  },
   "commit_message": "imperative commit subject",
   "complexity": "xs|s|m|l",
   "failure_evidence": "concise reproduction evidence"
@@ -56,6 +62,13 @@ Return exactly one JSON object and no Markdown fence:
 {
   "agent": "qa",
   "status": "passed|requeue|blocked",
+  "pipeline_gates": [
+    {
+      "command": "deduplicated QA-owned command",
+      "status": "PASS|FAIL",
+      "result": "observed evidence"
+    }
+  ],
   "acceptance_results": [
     {
       "criterion": "AC-1",

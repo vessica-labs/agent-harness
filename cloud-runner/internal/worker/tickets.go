@@ -7,17 +7,30 @@ import (
 )
 
 type ticket struct {
-	Key                     string   `json:"key"`
-	Type                    string   `json:"type,omitempty"`
-	Title                   string   `json:"title"`
-	Objective               string   `json:"objective"`
-	AcceptanceCriteria      []string `json:"acceptance_criteria"`
-	OwnedPaths              []string `json:"owned_paths"`
-	DependsOn               []string `json:"depends_on"`
-	FocusedChecks           []string `json:"focused_checks,omitempty"`
-	CommitMessage           string   `json:"commit_message,omitempty"`
-	Complexity              string   `json:"complexity,omitempty"`
-	ArchitectureConstraints []string `json:"architecture_constraints,omitempty"`
+	Key                     string              `json:"key"`
+	Type                    string              `json:"type,omitempty"`
+	Title                   string              `json:"title"`
+	Objective               string              `json:"objective"`
+	AcceptanceCriteria      []string            `json:"acceptance_criteria"`
+	OwnedPaths              []string            `json:"owned_paths"`
+	DependsOn               []string            `json:"depends_on"`
+	FocusedChecks           []string            `json:"focused_checks,omitempty"`
+	Verification            *ticketVerification `json:"verification,omitempty"`
+	CommitMessage           string              `json:"commit_message,omitempty"`
+	Complexity              string              `json:"complexity,omitempty"`
+	ArchitectureConstraints []string            `json:"architecture_constraints,omitempty"`
+}
+
+type ticketVerification struct {
+	IterationChecks []string       `json:"iteration_checks"`
+	TicketGate      []string       `json:"ticket_gate"`
+	PipelineGates   []pipelineGate `json:"pipeline_gates"`
+}
+
+type pipelineGate struct {
+	Stage   string `json:"stage"`
+	Command string `json:"command"`
+	Reason  string `json:"reason"`
 }
 
 type ticketRun struct {

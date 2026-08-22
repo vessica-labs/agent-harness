@@ -793,7 +793,7 @@ The product agent converts the feature request and repository evidence into:
 - Risks, assumptions, and constraints.
 - A dependency-aware logical ticket plan.
 
-Each ticket includes an objective, acceptance criteria, owned paths, dependencies, and non-empty focused verification commands. Agent Harness validates graph safety, requirement/acceptance coverage, and path ownership before accepting it. Checks for framework wiring, dependency installation, test discovery, persistence, and integration boundaries belong to the ticket that introduces them rather than being deferred to final QA.
+Each ticket includes an objective, acceptance criteria, owned paths, dependencies, and tiered verification. `iteration_checks` are the smallest useful feedback loop while coding, `ticket_gate` is the ticket-level proof run once before handoff, and `pipeline_gates` are repository-wide or browser checks assigned to lint or QA. Agent Harness validates graph safety, requirement/acceptance coverage, path ownership, and verification ownership before accepting the plan. Legacy tickets with `focused_checks` remain valid during upgrades.
 
 The PRD is published to Notion and the ticket plan is synchronized as Linear child issues.
 
@@ -810,7 +810,7 @@ The architecture agent creates an ADR covering:
 - Deployment and compatibility.
 - Consequences, alternatives, tradeoffs, and risks.
 
-It may add ticket dependencies, owned-path constraints, focused checks, and compact implementation constraints. Agent Harness applies them to the logical ticket plan, rejects unknown ticket references, revalidates the graph and path ownership, and generates a ticket-specific context packet before coding.
+It may add ticket dependencies, owned-path constraints, tiered verification requirements, and compact implementation constraints. Agent Harness applies them to the logical ticket plan, rejects unknown ticket references, revalidates the graph and path ownership, and generates a ticket-specific context packet before coding.
 
 The architect reads `.harness/adrs/INDEX.md` first and lists only accepted, non-superseded ADRs applicable to the affected paths/components. Durable ADRs include explicit applicability and supersession metadata. Runtime ADR context is materialized under `.harness/adrs/`, and the run ADR is published to Notion.
 
@@ -825,21 +825,21 @@ The coder stage uses `ticket_parallel` mode. Agent Harness:
 5. Starts one top-level Codex coordinator for the ready wave.
 6. Has that coordinator delegate one native coder subagent per ticket, with no more than the stage's declared parallelism active at once.
 
-Each coder subagent owns exactly one ticket. The coordinator does not implement ticket code; it supplies the isolated assignment, waits for every subagent, and reports the wave result. Each coder subagent follows red-green-refactor TDD, runs focused checks, commits a scoped change locally, returns its exact JSON result, and leaves a clean worktree. Neither the coordinator nor coder subagents push.
+Each coder subagent owns exactly one ticket. The coordinator does not implement ticket code; it supplies the isolated assignment, waits for every subagent, and reports the wave result. Verification is risk-proportionate: bugs and new behavioral contracts use a failing test first when practical, while documentation, configuration, generated files, and behavior-neutral refactors may use regression coverage or deterministic checks. The coder runs narrow iteration checks only as needed, does not repeat an unchanged passing command, and runs the ticket gate once before handoff. Repository-wide and browser gates remain assigned to lint or QA. Each coder commits a scoped change locally, returns its exact verification evidence, and leaves a clean worktree. Neither the coordinator nor coder subagents push.
 
 Tickets that add or update libraries own the affected package manifests and package-manager lockfile. Coders use the repository package manager and commit both manifest and lockfile changes; undeclared global imports, hand-written type shims, and lockfile-only dependency edits are rejected by the role contract.
 
-The orchestrator integrates successful commits into the run branch in stable logical-key order, synchronizes ticket progress, pushes the durable branch, and removes disposable ticket worktrees. If a sibling fails, completed siblings are integrated and checkpointed first. The worker retries only failed tickets, up to three ticket attempts, and emits their keys and blockers; it does not wrap the whole coder stage in generic stage retries. Execution failures remain In Progress in Linear; Needs Input is reserved for a durable Product or Architecture question that appears in the Inbox.
+The orchestrator integrates successful commits into the run branch in stable logical-key order, synchronizes ticket progress, pushes the durable branch, and removes disposable ticket worktrees. If a sibling fails, completed siblings are integrated and checkpointed first. The worker retries only failed tickets and emits their keys and blockers; an agent-declared blocker is terminal, an identical blocker repeated on attempt two stops before a third unchanged run, and other transient failures may use up to three attempts. It does not wrap the whole coder stage in generic stage retries. Execution failures remain In Progress in Linear; Needs Input is reserved for a durable Product or Architecture question that appears in the Inbox.
 
 ### Lint
 
-The lint stage runs repository lint and build commands, repairs deterministic failures when safely contained, and creates scoped repair commits. It also runs the repository's architecture-lint script.
+The lint stage reads every ticket's lint-owned `pipeline_gates`, deduplicates identical commands, and runs them on the integrated branch alongside the repository lint, build, and architecture checks. It repairs deterministic failures when safely contained, creates scoped repair commits, and reruns only gates affected by a repair or previously failing.
 
 After the agent finishes, the pipeline's `architecture-lint` after-hook runs the deterministic check again. That hook result—not the agent's narrative—is the authoritative architecture gate.
 
 ### QA
 
-The QA agent verifies every PRD acceptance criterion and produces criterion-level evidence. For user-facing behavior it uses Playwright and records the route, action, expected result, actual result, and evidence.
+The QA agent reads every ticket's QA-owned `pipeline_gates`, deduplicates identical commands, verifies every PRD acceptance criterion, and produces criterion-level evidence. For user-facing behavior it uses Playwright and records the route, action, expected result, actual result, and evidence.
 
 Safe, contained defects may be repaired and committed during QA. If the required change is broader, QA emits structured new tickets. A matching repair loop can return execution to coder, then lint and QA, up to the configured maximum.
 
@@ -911,7 +911,7 @@ Stages are registered from the repository pipeline and move through pending, run
 
 ### Automatic retry
 
-A single cloud stage is attempted up to three times. Between attempts, Agent Harness persists the failure, resets the stage to pending, uploads the journal, and retries from durable state. A ticket-parallel stage instead retries only failed logical tickets from durable checkpoints, up to three ticket attempts, while retaining successful siblings. If an operator repairs the isolated run branch before resuming, the worker can adopt a completed result whose commit is already an ancestor of the run branch. A context cancellation, structured QA repair request, or valid Product/Architecture input request does not consume ordinary retries in the same way. A request from any other stage, or a second request round, is rejected immediately as a contract violation rather than retried as a question.
+A single cloud stage is attempted up to three times. Between attempts, Agent Harness persists the failure, resets the stage to pending, uploads the journal, and retries from durable state. A ticket-parallel stage instead retries only failed logical tickets from durable checkpoints while retaining successful siblings. An explicit Coder `blocked` result is not retried. If the same failed tickets report the same non-empty blockers on the second attempt, the worker stops before a third unchanged attempt; other transient failures may use up to three attempts. If an operator repairs the isolated run branch before resuming, the worker can adopt a completed result whose commit is already an ancestor of the run branch. A context cancellation, structured QA repair request, or valid Product/Architecture input request does not consume ordinary retries in the same way. A request from any other stage, or a second request round, is rejected immediately as a contract violation rather than retried as a question.
 
 After the final failed attempt, the run pauses.
 
@@ -1181,9 +1181,9 @@ Safe customization may add repository-specific expectations, but should not tran
 
 - Product must return stable requirements, acceptance criteria, and a valid ticket graph.
 - Architect may constrain known tickets but may not silently invent implementation work outside the plan.
-- Coder owns one ticket, follows TDD, commits locally, and does not push.
-- Lint must report every configured deterministic gate.
-- QA must report every acceptance criterion and emit structured repair tickets when necessary.
+- Coder owns one ticket, uses test-first development when it adds signal, runs its narrow ticket-owned verification, commits locally, and does not push.
+- Lint must deduplicate and report every configured lint-owned pipeline gate.
+- QA must deduplicate QA-owned pipeline gates, report every acceptance criterion, and emit structured repair tickets when necessary.
 - PR prepares delivery content; the orchestrator owns credentials, push, and canonical PR creation.
 - Documentation is optional and must be explicitly added to the pipeline.
 

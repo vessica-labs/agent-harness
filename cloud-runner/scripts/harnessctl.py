@@ -50,7 +50,7 @@ ADR_HEADINGS = [
     "## Alternatives Considered",
 ]
 GENERIC_AGENT_CONTRACTS = {
-    "coder": ({"completed", "blocked"}, {"ticket_key", "commit", "files_changed", "tdd", "checks", "worktree_clean", "blocker", "residual_risks"}),
+    "coder": ({"completed", "blocked"}, {"ticket_key", "commit", "files_changed", "worktree_clean", "blocker", "residual_risks"}),
     "lint": ({"passed", "blocked"}, {"commits", "gates", "worktree_clean", "blocker", "residual_risks"}),
     "qa": ({"passed", "requeue", "blocked"}, {"acceptance_results", "commits", "new_tickets", "worktree_clean", "blocker", "residual_risks"}),
     "docs": ({"completed", "blocked"}, {"commits", "documents", "external_documents", "checks", "worktree_clean", "blocker", "residual_risks"}),
@@ -632,6 +632,105 @@ def validate_input_request(data: Any) -> list[str]:
     return errors
 
 
+def validate_pipeline_gates(value: Any, prefix: str) -> list[str]:
+    if not isinstance(value, list):
+        return [f"{prefix} must be a list"]
+    errors: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for index, gate in enumerate(value):
+        gate_prefix = f"{prefix}[{index}]"
+        if not isinstance(gate, dict):
+            errors.append(f"{gate_prefix} must be an object")
+            continue
+        stage = gate.get("stage")
+        command = gate.get("command")
+        if stage not in {"lint", "qa"}:
+            errors.append(f"{gate_prefix}.stage must be lint or qa")
+        if not isinstance(command, str) or not command.strip():
+            errors.append(f"{gate_prefix}.command must be a non-empty string")
+        if not isinstance(gate.get("reason"), str) or not gate["reason"].strip():
+            errors.append(f"{gate_prefix}.reason must be a non-empty string")
+        if isinstance(stage, str) and isinstance(command, str) and command.strip():
+            identity = (stage, command)
+            if identity in seen:
+                errors.append(f"{gate_prefix} duplicates a pipeline gate")
+            seen.add(identity)
+    return errors
+
+
+def validate_ticket_verification(value: Any, prefix: str) -> list[str]:
+    if not isinstance(value, dict):
+        return [f"{prefix} must be an object"]
+    errors: list[str] = []
+    required = {"iteration_checks", "ticket_gate", "pipeline_gates"}
+    missing = sorted(required - set(value))
+    if missing:
+        errors.append(f"{prefix} missing fields: {', '.join(missing)}")
+    iteration_checks = value.get("iteration_checks")
+    ticket_gate = value.get("ticket_gate")
+    for key, checks in (("iteration_checks", iteration_checks), ("ticket_gate", ticket_gate)):
+        if not isinstance(checks, list) or any(not isinstance(item, str) or not item.strip() for item in (checks or [])):
+            errors.append(f"{prefix}.{key} must be a string list")
+    if isinstance(ticket_gate, list) and not ticket_gate:
+        errors.append(f"{prefix}.ticket_gate must not be empty")
+    errors.extend(validate_pipeline_gates(value.get("pipeline_gates"), f"{prefix}.pipeline_gates"))
+    if isinstance(iteration_checks, list) and isinstance(ticket_gate, list):
+        duplicate_commands = sorted(set(iteration_checks) & set(ticket_gate))
+        if duplicate_commands:
+            errors.append(f"{prefix} repeats commands across iteration_checks and ticket_gate: {', '.join(duplicate_commands)}")
+    return errors
+
+
+def validate_check_results(value: Any, prefix: str, *, require_non_empty: bool) -> list[str]:
+    if not isinstance(value, list):
+        return [f"{prefix} must be a list"]
+    errors: list[str] = []
+    if require_non_empty and not value:
+        errors.append(f"{prefix} must not be empty")
+    for index, check in enumerate(value):
+        check_prefix = f"{prefix}[{index}]"
+        if not isinstance(check, dict):
+            errors.append(f"{check_prefix} must be an object")
+            continue
+        if not isinstance(check.get("command"), str) or not check["command"].strip():
+            errors.append(f"{check_prefix}.command must be a non-empty string")
+        if check.get("status") not in {"PASS", "FAIL"}:
+            errors.append(f"{check_prefix}.status must be PASS or FAIL")
+        if not isinstance(check.get("result"), str) or not check["result"].strip():
+            errors.append(f"{check_prefix}.result must be a non-empty string")
+    return errors
+
+
+def validate_coder_verification(value: Any, status: Any) -> list[str]:
+    if not isinstance(value, dict):
+        return ["verification must be an object"]
+    errors: list[str] = []
+    required = {"strategy", "red", "iteration_checks", "ticket_gate", "notes"}
+    missing = sorted(required - set(value))
+    if missing:
+        errors.append(f"verification missing fields: {', '.join(missing)}")
+    if value.get("strategy") not in {"test_first", "regression", "existing_coverage", "deterministic_check", "not_applicable"}:
+        errors.append("verification.strategy is invalid")
+    red = value.get("red")
+    if red is not None:
+        if not isinstance(red, dict):
+            errors.append("verification.red must be an object or null")
+        else:
+            if not isinstance(red.get("command"), str) or not red["command"].strip():
+                errors.append("verification.red.command must be a non-empty string")
+            if not isinstance(red.get("observed_failure"), str) or not red["observed_failure"].strip():
+                errors.append("verification.red.observed_failure must be a non-empty string")
+    errors.extend(validate_check_results(value.get("iteration_checks"), "verification.iteration_checks", require_non_empty=False))
+    errors.extend(validate_check_results(value.get("ticket_gate"), "verification.ticket_gate", require_non_empty=status == "completed"))
+    if not isinstance(value.get("notes"), str) or not value["notes"].strip():
+        errors.append("verification.notes must be a non-empty string")
+    if status == "completed" and isinstance(value.get("ticket_gate"), list):
+        failed = [check for check in value["ticket_gate"] if isinstance(check, dict) and check.get("status") != "PASS"]
+        if failed:
+            errors.append("completed output requires all verification.ticket_gate checks to PASS")
+    return errors
+
+
 def validate_product_output(data: Any) -> list[str]:
     errors: list[str] = []
     if not isinstance(data, dict):
@@ -665,7 +764,7 @@ def validate_product_output(data: Any) -> list[str]:
         if not isinstance(ticket, dict):
             errors.append(f"{prefix} must be an object")
             continue
-        for key in ("key", "type", "title", "objective", "acceptance_criteria", "owned_paths", "depends_on", "focused_checks", "commit_message", "complexity"):
+        for key in ("key", "type", "title", "objective", "acceptance_criteria", "owned_paths", "depends_on", "commit_message", "complexity"):
             if key not in ticket:
                 errors.append(f"{prefix}.{key} is required")
         ticket_key = ticket.get("key")
@@ -685,13 +784,20 @@ def validate_product_output(data: Any) -> list[str]:
         paths = ticket.get("owned_paths")
         if not isinstance(paths, list) or not paths or any(not isinstance(path, str) or not _safe_relative(path) for path in paths):
             errors.append(f"{prefix}.owned_paths must contain safe relative paths")
-        for list_key in ("acceptance_criteria", "depends_on", "focused_checks"):
+        for list_key in ("acceptance_criteria", "depends_on"):
             if not isinstance(ticket.get(list_key), list) or any(not isinstance(item, str) or not item.strip() for item in ticket.get(list_key, [])):
                 errors.append(f"{prefix}.{list_key} must be a string list")
         if isinstance(ticket.get("acceptance_criteria"), list) and not ticket["acceptance_criteria"]:
             errors.append(f"{prefix}.acceptance_criteria must not be empty")
-        if isinstance(ticket.get("focused_checks"), list) and not ticket["focused_checks"]:
-            errors.append(f"{prefix}.focused_checks must not be empty")
+        verification = ticket.get("verification")
+        focused_checks = ticket.get("focused_checks")
+        if verification is None:
+            if not isinstance(focused_checks, list) or not focused_checks or any(
+                not isinstance(item, str) or not item.strip() for item in (focused_checks or [])
+            ):
+                errors.append(f"{prefix} requires verification or non-empty legacy focused_checks")
+        else:
+            errors.extend(validate_ticket_verification(verification, f"{prefix}.verification"))
     try:
         waves = dependency_waves([ticket for ticket in tickets if isinstance(ticket, dict)])
         by_key = {ticket["key"]: ticket for ticket in tickets if isinstance(ticket, dict) and isinstance(ticket.get("key"), str)}
@@ -784,10 +890,26 @@ def validate_architect_output(data: Any, ticket_keys: set[str] | None = None) ->
                 continue
             if ticket_keys is not None and constraint.get("ticket_key") not in ticket_keys:
                 errors.append(f"{prefix} references an unknown ticket")
-            for key in ("constraints", "required_owned_paths", "additional_dependencies", "required_focused_checks"):
+            for key in ("constraints", "required_owned_paths", "additional_dependencies"):
                 values = constraint.get(key)
                 if not isinstance(values, list) or any(not isinstance(value, str) or not value.strip() for value in values):
                     errors.append(f"{prefix}.{key} must be a string list")
+            legacy = constraint.get("required_focused_checks")
+            tiered_keys = ("required_iteration_checks", "required_ticket_gates", "required_pipeline_gates")
+            has_tiered = any(key in constraint for key in tiered_keys)
+            if has_tiered:
+                if not all(key in constraint for key in tiered_keys):
+                    errors.append(f"{prefix} requires all tiered verification fields")
+                for key in tiered_keys[:2]:
+                    values = constraint.get(key)
+                    if not isinstance(values, list) or any(not isinstance(value, str) or not value.strip() for value in (values or [])):
+                        errors.append(f"{prefix}.{key} must be a string list")
+                errors.extend(validate_pipeline_gates(constraint.get("required_pipeline_gates"), f"{prefix}.required_pipeline_gates"))
+            elif legacy is not None:
+                if not isinstance(legacy, list) or any(not isinstance(value, str) or not value.strip() for value in legacy):
+                    errors.append(f"{prefix}.required_focused_checks must be a string list")
+            else:
+                errors.append(f"{prefix} requires legacy required_focused_checks or all tiered verification fields")
     applicable_adrs = data.get("applicable_adrs")
     if not isinstance(applicable_adrs, list) or any(
         not isinstance(value, str) or not re.fullmatch(r"ADR-[A-Za-z0-9._-]+\.md", value)
@@ -825,8 +947,15 @@ def validate_generic_agent_output(agent: str, data: Any) -> list[str]:
         errors.append("successful or requeue output requires worktree_clean=true")
     if custom and not isinstance(data.get("residual_risks"), list):
         errors.append("residual_risks must be a list")
-    if agent == "coder" and data.get("status") == "completed" and not isinstance(data.get("commit"), str):
-        errors.append("completed coder output requires a commit")
+    if agent == "coder":
+        if data.get("status") == "completed" and not isinstance(data.get("commit"), str):
+            errors.append("completed coder output requires a commit")
+        verification = data.get("verification")
+        legacy = "tdd" in data and "checks" in data
+        if verification is None and not legacy:
+            errors.append("coder output requires verification or legacy tdd and checks")
+        elif verification is not None:
+            errors.extend(validate_coder_verification(verification, data.get("status")))
     if agent == "lint":
         gates = data.get("gates")
         if not isinstance(gates, dict):
@@ -841,6 +970,13 @@ def validate_generic_agent_output(agent: str, data: Any) -> list[str]:
                 for gate_name in ("lint", "lint_arch", "build")
             ):
                 errors.append("passed lint output requires every gate to pass")
+        pipeline_gates = data.get("pipeline_gates")
+        if pipeline_gates is not None:
+            errors.extend(validate_check_results(pipeline_gates, "pipeline_gates", require_non_empty=False))
+            if data.get("status") == "passed" and isinstance(pipeline_gates, list) and any(
+                isinstance(gate, dict) and gate.get("status") != "PASS" for gate in pipeline_gates
+            ):
+                errors.append("passed lint output requires every pipeline gate to pass")
     if agent == "qa":
         results = data.get("acceptance_results")
         if not isinstance(results, list):
@@ -852,6 +988,13 @@ def validate_generic_agent_output(agent: str, data: Any) -> list[str]:
             errors.append("new_tickets must be a list")
         elif data.get("status") == "requeue" and not new_tickets:
             errors.append("requeue QA output requires new_tickets")
+        pipeline_gates = data.get("pipeline_gates")
+        if pipeline_gates is not None:
+            errors.extend(validate_check_results(pipeline_gates, "pipeline_gates", require_non_empty=False))
+            if data.get("status") == "passed" and isinstance(pipeline_gates, list) and any(
+                isinstance(gate, dict) and gate.get("status") != "PASS" for gate in pipeline_gates
+            ):
+                errors.append("passed QA output requires every pipeline gate to pass")
     if agent == "docs":
         external = data.get("external_documents")
         if not isinstance(external, list):

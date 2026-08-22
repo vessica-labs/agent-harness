@@ -64,19 +64,19 @@ Write the declared feature-request input from the first available YAML source: u
 
 ### Arch
 
-Run `.agents/architect.md` with its declared PRD input, ticket graph, repository evidence, ADR index, and applicable injected ADR context. Validate with `--agent architect --tickets <product-result>`. Materialize and publish the ADR; apply added ticket dependencies, owned paths, focused checks, and compact constraints; revalidate the graph; then generate one ticket context packet per ticket.
+Run `.agents/architect.md` with its declared PRD input, ticket graph, repository evidence, ADR index, and applicable injected ADR context. Validate with `--agent architect --tickets <product-result>`. Materialize and publish the ADR; apply added ticket dependencies, owned paths, tiered verification, and compact constraints; revalidate the graph; then generate one ticket context packet per ticket.
 
 ### Coder
 
-Create `agent-harness/<issue-key-lower>-<run-suffix>` from the configured remote/base. Materialize one declared compact context packet per ticket. For each dependency wave, create ticket worktrees from the current integration head and invoke one top-level Codex coordinator with native multi-agent support enabled. The coordinator delegates one coder subagent per ticket and keeps no more than the YAML `parallelism` value active at once. Each coder subagent follows TDD, writes its declared result, and makes one scoped commit; neither coordinator nor subagents push. Integrate successful commits in sorted logical-key order and retry only failed tickets from durable checkpoints.
+Create `agent-harness/<issue-key-lower>-<run-suffix>` from the configured remote/base. Materialize one declared compact context packet per ticket. For each dependency wave, create ticket worktrees from the current integration head and invoke one top-level Codex coordinator with native multi-agent support enabled. The coordinator delegates one coder subagent per ticket and keeps no more than the YAML `parallelism` value active at once. Each coder subagent uses risk-proportionate verification, runs only ticket-owned iteration checks and one final ticket gate, writes its declared result, and makes one scoped commit; neither coordinator nor subagents push. Integrate successful commits in sorted logical-key order and retry only failed tickets from durable checkpoints. Do not retry an explicit blocker, and stop before a third attempt when the same tickets repeat identical blockers.
 
 ### Lint
 
-Run the lint agent on the integration worktree. It executes repository lint/build commands and `python3 .harness/scripts/arch-lint.py`, fixes deterministic violations, and creates scoped repair commits until green or blocked. After the agent returns, the YAML `architecture-lint` after-hook runs the same command again; only that hook result is the authoritative architecture gate.
+Run the lint agent on the integration worktree. It deduplicates and executes lint-owned pipeline gates from the ticket contexts plus the repository lint/build commands and `python3 .harness/scripts/arch-lint.py`, fixes deterministic violations, and creates scoped repair commits until green or blocked. After the agent returns, the YAML `architecture-lint` after-hook runs the same command again; only that hook result is the authoritative architecture gate.
 
 ### QA
 
-Use Playwright to execute every acceptance criterion from the declared PRD input and materialize QA evidence. Safe fixes become scoped commits. If QA returns requeue, follow a matching YAML `repair_loops` declaration; when none exists, pause with the new tickets and evidence.
+Deduplicate and execute QA-owned pipeline gates from the ticket contexts, then use Playwright where required to execute every acceptance criterion from the declared PRD input and materialize QA evidence. Safe fixes become scoped commits. If QA returns requeue, follow a matching YAML `repair_loops` declaration; when none exists, pause with the new tickets and evidence.
 
 ### Docs
 

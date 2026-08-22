@@ -47,6 +47,8 @@ class YamlAndPipelineTests(unittest.TestCase):
         self.assertEqual("ticket_parallel", coder["mode"])
         self.assertEqual("inputs/ticket-context/{ticket_key}.json", coder["inputs"][0]["file"])
         self.assertEqual("artifacts/ticket-contexts.json", coder["inputs"][0]["generated_from"]["file"])
+        self.assertIn("artifacts/ticket-contexts.json", [item["file"] for item in self.harnessctl.pipeline_stage(pipeline, "lint")["inputs"]])
+        self.assertIn("artifacts/ticket-contexts.json", [item["file"] for item in self.harnessctl.pipeline_stage(pipeline, "qa")["inputs"]])
         self.assertEqual(
             [{"from": "qa", "to": "coder", "through": "qa", "max_reentries": 2}],
             pipeline["repair_loops"],
@@ -231,8 +233,24 @@ class AgentOutputTests(unittest.TestCase):
         product["prd_markdown"] += "\n\n### AC-2: Unassigned outcome\n\n- Then it works\n"
         product["tickets"][0]["focused_checks"] = []
         errors = self.harnessctl.validate_product_output(product)
-        self.assertTrue(any("focused_checks must not be empty" in error for error in errors))
+        self.assertTrue(any("requires verification or non-empty legacy focused_checks" in error for error in errors))
         self.assertTrue(any("tickets omit acceptance criteria: AC-2" in error for error in errors))
+
+    def test_product_contract_accepts_tiered_verification_and_rejects_duplicate_execution(self) -> None:
+        product = self.product()
+        for ticket in product["tickets"]:
+            focused_check = ticket.pop("focused_checks")[0]
+            ticket["verification"] = {
+                "iteration_checks": [focused_check + " --unit"],
+                "ticket_gate": [focused_check],
+                "pipeline_gates": [
+                    {"stage": "qa", "command": "pnpm test:e2e", "reason": "browser acceptance boundary"}
+                ],
+            }
+        self.assertEqual([], self.harnessctl.validate_product_output(product))
+        product["tickets"][0]["verification"]["iteration_checks"] = ["go test ./internal/model"]
+        errors = self.harnessctl.validate_product_output(product)
+        self.assertTrue(any("repeats commands" in error for error in errors))
 
     def test_only_product_and_architect_accept_structured_needs_input(self) -> None:
         request = {
@@ -310,6 +328,77 @@ class AgentOutputTests(unittest.TestCase):
         output["ticket_constraints"][0]["ticket_key"] = "UNKNOWN"
         self.assertTrue(self.harnessctl.validate_architect_output(output, {"L-123-T01"}))
 
+    def test_architect_contract_accepts_tiered_verification_constraints(self) -> None:
+        markdown = "\n\n".join(
+            [
+                "# ADR: Example",
+                "- Decision ID: ADR-L-123-example",
+                "- Status: Accepted",
+                "- Applies to: internal/model",
+                "- Supersedes: None",
+                "## Context",
+                "## Decision Drivers",
+                "## Decision",
+                "## Consequences",
+                "## Alternatives Considered",
+            ]
+        )
+        output = {
+            "agent": "architect",
+            "status": "ready",
+            "adr_filename": "ADR-L-123-example.md",
+            "adr_markdown": markdown,
+            "applicable_adrs": [],
+            "ticket_constraints": [
+                {
+                    "ticket_key": "L-123-T01",
+                    "constraints": [],
+                    "required_owned_paths": [],
+                    "additional_dependencies": [],
+                    "required_iteration_checks": ["go test ./internal/model -run TestUnit"],
+                    "required_ticket_gates": ["go test ./internal/model"],
+                    "required_pipeline_gates": [
+                        {"stage": "qa", "command": "pnpm test:e2e", "reason": "browser boundary"}
+                    ],
+                }
+            ],
+            "ticket_graph_valid": True,
+            "blockers": [],
+        }
+        self.assertEqual([], self.harnessctl.validate_architect_output(output, {"L-123-T01"}))
+
+    def test_coder_contract_accepts_legacy_and_tiered_verification(self) -> None:
+        base = {
+            "agent": "coder",
+            "status": "completed",
+            "ticket_key": "L-123-T01",
+            "commit": "abc123",
+            "files_changed": ["internal/model/model.go"],
+            "worktree_clean": True,
+            "blocker": None,
+            "residual_risks": [],
+        }
+        legacy = {**base, "tdd": {"red": "failed", "green": "passed"}, "checks": []}
+        self.assertEqual([], self.harnessctl.validate_generic_agent_output("coder", legacy))
+        tiered = {
+            **base,
+            "verification": {
+                "strategy": "test_first",
+                "red": {"command": "go test ./internal/model", "observed_failure": "missing behavior"},
+                "iteration_checks": [
+                    {"command": "go test ./internal/model -run TestUnit", "status": "PASS", "result": "ok"}
+                ],
+                "ticket_gate": [
+                    {"command": "go test ./internal/model", "status": "PASS", "result": "ok"}
+                ],
+                "notes": "The browser suite is owned by QA.",
+            },
+        }
+        self.assertEqual([], self.harnessctl.validate_generic_agent_output("coder", tiered))
+        tiered["verification"]["ticket_gate"][0]["status"] = "FAIL"
+        errors = self.harnessctl.validate_generic_agent_output("coder", tiered)
+        self.assertTrue(any("all verification.ticket_gate checks to PASS" in error for error in errors))
+
     def test_docs_and_qa_contracts(self) -> None:
         docs = {
             "agent": "docs",
@@ -347,6 +436,7 @@ class AgentOutputTests(unittest.TestCase):
                 "lint_arch": {"command": "python3 .harness/scripts/arch-lint.py", "status": "PASS", "result": "ok"},
                 "build": {"command": "build", "status": "PASS", "result": "ok"},
             },
+            "pipeline_gates": [{"command": "pnpm test", "status": "PASS", "result": "ok"}],
             "worktree_clean": True,
             "blocker": None,
             "residual_risks": [],
@@ -354,6 +444,9 @@ class AgentOutputTests(unittest.TestCase):
         self.assertEqual([], self.harnessctl.validate_generic_agent_output("lint", lint))
         lint["gates"]["lint_arch"]["status"] = "FAIL"
         self.assertTrue(any("every gate" in error for error in self.harnessctl.validate_generic_agent_output("lint", lint)))
+        lint["gates"]["lint_arch"]["status"] = "PASS"
+        lint["pipeline_gates"][0]["status"] = "FAIL"
+        self.assertTrue(any("every pipeline gate" in error for error in self.harnessctl.validate_generic_agent_output("lint", lint)))
 
     def test_yaml_file_contract_materializes_source_results_and_tickets(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

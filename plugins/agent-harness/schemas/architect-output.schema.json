@@ -8,8 +8,35 @@
     "adr_filename": {"type": "string", "pattern": "^ADR-.+\\.md$"},
     "adr_markdown": {"type": "string"},
     "applicable_adrs": {"type": "array", "items": {"type": "string", "pattern": "^ADR-.+\\.md$"}},
-    "ticket_constraints": {"type": "array"},
+    "ticket_constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["ticket_key", "constraints", "required_owned_paths", "additional_dependencies"],
+        "properties": {
+          "required_focused_checks": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "required_iteration_checks": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "required_ticket_gates": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "required_pipeline_gates": {"type": "array", "items": {"$ref": "#/$defs/pipelineGate"}}
+        },
+        "anyOf": [
+          {"required": ["required_focused_checks"]},
+          {"required": ["required_iteration_checks", "required_ticket_gates", "required_pipeline_gates"]}
+        ]
+      }
+    },
     "ticket_graph_valid": {"type": "boolean"},
     "blockers": {"type": "array"}
+  },
+  "$defs": {
+    "pipelineGate": {
+      "type": "object",
+      "required": ["stage", "command", "reason"],
+      "properties": {
+        "stage": {"enum": ["lint", "qa"]},
+        "command": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    }
   }
 }

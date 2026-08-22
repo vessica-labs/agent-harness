@@ -503,7 +503,7 @@ func (r *Runner) runSingleStage(ctx context.Context, stage Stage) error {
 	resultPath := filepath.Join(r.runDir, filepath.FromSlash(stage.Result.File))
 	extra := ""
 	if stage.ID == "arch" {
-		extra = "The orchestrator will merge every constraints, required_owned_paths, additional_dependencies, and required_focused_checks entry from a ready result into compact per-ticket context and validate the revised DAG. Treat those declared additions as applied. The downstream docs stage owns documentation artifacts and the downstream QA stage owns final acceptance evidence, so do not block solely because coder tickets omit those paths."
+		extra = "The orchestrator will merge every constraints, required_owned_paths, additional_dependencies, required_iteration_checks, required_ticket_gates, and required_pipeline_gates entry from a ready result into compact per-ticket context and validate the revised DAG. Legacy required_focused_checks remains supported for installed repositories. Treat declared additions as applied. The downstream docs stage owns documentation artifacts, while lint and QA own their assigned pipeline gates and final acceptance evidence, so do not duplicate those commands in coder ticket gates or block solely because coder tickets omit downstream paths."
 	}
 	if stage.ID == "pr" {
 		_, fetchErr := runCommand(ctx, r.repo, gitEnvironment(r.githubToken), orchestratorGit, "fetch", "origin", r.config.BaseBranch)

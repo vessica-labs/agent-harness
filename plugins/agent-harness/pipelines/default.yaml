@@ -110,7 +110,11 @@ stages:
     needs: [coder]
     mode: single
     parallelism: 1
-    inputs: []
+    inputs:
+      - id: ticket_contexts
+        file: artifacts/ticket-contexts.json
+        format: json
+        required: true
     outputs:
       - id: lint_report
         file: artifacts/lint-report.json
@@ -148,6 +152,10 @@ stages:
         required: true
       - id: lint_report
         file: artifacts/lint-report.json
+        format: json
+        required: true
+      - id: ticket_contexts
+        file: artifacts/ticket-contexts.json
         format: json
         required: true
     outputs:

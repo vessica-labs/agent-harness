@@ -15,11 +15,14 @@ import (
 type architectureReconciliation struct {
 	Status            string `json:"status"`
 	TicketConstraints []struct {
-		TicketKey              string   `json:"ticket_key"`
-		Constraints            []string `json:"constraints"`
-		RequiredOwnedPaths     []string `json:"required_owned_paths"`
-		AdditionalDependencies []string `json:"additional_dependencies"`
-		RequiredFocusedChecks  []string `json:"required_focused_checks"`
+		TicketKey               string         `json:"ticket_key"`
+		Constraints             []string       `json:"constraints"`
+		RequiredOwnedPaths      []string       `json:"required_owned_paths"`
+		AdditionalDependencies  []string       `json:"additional_dependencies"`
+		RequiredFocusedChecks   []string       `json:"required_focused_checks"`
+		RequiredIterationChecks []string       `json:"required_iteration_checks"`
+		RequiredTicketGates     []string       `json:"required_ticket_gates"`
+		RequiredPipelineGates   []pipelineGate `json:"required_pipeline_gates"`
 	} `json:"ticket_constraints"`
 	ApplicableADRs []string `json:"applicable_adrs"`
 }
@@ -86,7 +89,6 @@ func applyArchitectureConstraints(productBody, architectureBody []byte) ([]byte,
 		for field, additions := range map[string][]string{
 			"owned_paths":              constraint.RequiredOwnedPaths,
 			"depends_on":               constraint.AdditionalDependencies,
-			"focused_checks":           constraint.RequiredFocusedChecks,
 			"architecture_constraints": constraint.Constraints,
 		} {
 			values, err := stringValues(entry[field])
@@ -104,6 +106,48 @@ func applyArchitectureConstraints(productBody, architectureBody []byte) ([]byte,
 				}
 			}
 			entry[field] = values
+		}
+		if _, usesTieredVerification := entry["verification"]; usesTieredVerification ||
+			len(constraint.RequiredIterationChecks)+len(constraint.RequiredTicketGates)+len(constraint.RequiredPipelineGates) > 0 {
+			legacyTicketChecks, err := stringValues(entry["focused_checks"])
+			if err != nil {
+				return nil, nil, false, fmt.Errorf("ticket %s focused_checks: %w", constraint.TicketKey, err)
+			}
+			verification, ok := entry["verification"].(map[string]any)
+			if !ok {
+				verification = map[string]any{"iteration_checks": []string{}, "ticket_gate": []string{}, "pipeline_gates": []any{}}
+				entry["verification"] = verification
+			}
+			ticketGateAdditions := append([]string(nil), legacyTicketChecks...)
+			ticketGateAdditions = append(ticketGateAdditions, constraint.RequiredTicketGates...)
+			ticketGateAdditions = append(ticketGateAdditions, constraint.RequiredFocusedChecks...)
+			for field, additions := range map[string][]string{
+				"iteration_checks": constraint.RequiredIterationChecks,
+				"ticket_gate":      ticketGateAdditions,
+			} {
+				values, err := stringValues(verification[field])
+				if err != nil {
+					return nil, nil, false, fmt.Errorf("ticket %s verification.%s: %w", constraint.TicketKey, field, err)
+				}
+				values, added := mergeUniqueStrings(values, additions)
+				verification[field] = values
+				changed = changed || added
+			}
+			gates, err := pipelineGateValues(verification["pipeline_gates"])
+			if err != nil {
+				return nil, nil, false, fmt.Errorf("ticket %s verification.pipeline_gates: %w", constraint.TicketKey, err)
+			}
+			gates, added := mergePipelineGates(gates, constraint.RequiredPipelineGates)
+			verification["pipeline_gates"] = gates
+			changed = changed || added
+		} else {
+			values, err := stringValues(entry["focused_checks"])
+			if err != nil {
+				return nil, nil, false, fmt.Errorf("ticket %s focused_checks: %w", constraint.TicketKey, err)
+			}
+			values, added := mergeUniqueStrings(values, constraint.RequiredFocusedChecks)
+			entry["focused_checks"] = values
+			changed = changed || added
 		}
 	}
 	updatedProduct, err := json.MarshalIndent(product, "", "  ")
@@ -266,4 +310,50 @@ func stringValues(value any) ([]string, error) {
 		result = append(result, text)
 	}
 	return result, nil
+}
+
+func mergeUniqueStrings(values, additions []string) ([]string, bool) {
+	seen := map[string]bool{}
+	for _, value := range values {
+		seen[value] = true
+	}
+	changed := false
+	for _, addition := range additions {
+		if addition != "" && !seen[addition] {
+			values = append(values, addition)
+			seen[addition], changed = true, true
+		}
+	}
+	return values, changed
+}
+
+func pipelineGateValues(value any) ([]pipelineGate, error) {
+	if value == nil {
+		return []pipelineGate{}, nil
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	var gates []pipelineGate
+	if err := json.Unmarshal(body, &gates); err != nil {
+		return nil, errors.New("must be a pipeline gate array")
+	}
+	return gates, nil
+}
+
+func mergePipelineGates(values, additions []pipelineGate) ([]pipelineGate, bool) {
+	seen := map[string]bool{}
+	for _, value := range values {
+		seen[value.Stage+"\x00"+value.Command] = true
+	}
+	changed := false
+	for _, addition := range additions {
+		key := addition.Stage + "\x00" + addition.Command
+		if addition.Command != "" && !seen[key] {
+			values = append(values, addition)
+			seen[key], changed = true, true
+		}
+	}
+	return values, changed
 }

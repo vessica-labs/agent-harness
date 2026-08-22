@@ -35,6 +35,52 @@ func TestApplyArchitectureConstraintsMergesPathsAndDependencies(t *testing.T) {
 	}
 }
 
+func TestApplyArchitectureConstraintsMergesTieredVerification(t *testing.T) {
+	product := []byte(`{"agent":"product","status":"ready","tickets":[{"key":"T01","owned_paths":["a"],"depends_on":[],"verification":{"iteration_checks":["test unit"],"ticket_gate":["test package"],"pipeline_gates":[{"stage":"lint","command":"lint all","reason":"static analysis"}]}}]}`)
+	architecture := []byte(`{"status":"ready","ticket_constraints":[{"ticket_key":"T01","constraints":[],"required_owned_paths":[],"additional_dependencies":[],"required_iteration_checks":["test adapter"],"required_ticket_gates":["test integration"],"required_pipeline_gates":[{"stage":"lint","command":"lint all","reason":"duplicate"},{"stage":"qa","command":"test e2e","reason":"browser boundary"}]}]}`)
+	updated, _, changed, err := applyArchitectureConstraints(product, architecture)
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	var output struct {
+		Tickets []ticket `json:"tickets"`
+	}
+	if err := json.Unmarshal(updated, &output); err != nil {
+		t.Fatal(err)
+	}
+	verification := output.Tickets[0].Verification
+	if verification == nil {
+		t.Fatal("tiered verification was removed")
+	}
+	if got := verification.IterationChecks; len(got) != 2 || got[1] != "test adapter" {
+		t.Fatalf("iteration checks not merged: %v", got)
+	}
+	if got := verification.TicketGate; len(got) != 2 || got[1] != "test integration" {
+		t.Fatalf("ticket gates not merged: %v", got)
+	}
+	if got := verification.PipelineGates; len(got) != 2 || got[1].Stage != "qa" || got[1].Command != "test e2e" {
+		t.Fatalf("pipeline gates not merged and deduplicated: %+v", got)
+	}
+}
+
+func TestApplyArchitectureConstraintsPreservesLegacyChecksWhenIntroducingTiers(t *testing.T) {
+	product := []byte(`{"tickets":[{"key":"T01","owned_paths":["a"],"depends_on":[],"focused_checks":["test legacy"]}]}`)
+	architecture := []byte(`{"status":"ready","ticket_constraints":[{"ticket_key":"T01","constraints":[],"required_owned_paths":[],"additional_dependencies":[],"required_iteration_checks":["test unit"],"required_ticket_gates":["test package"],"required_pipeline_gates":[]}]}`)
+	updated, _, _, err := applyArchitectureConstraints(product, architecture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output struct {
+		Tickets []ticket `json:"tickets"`
+	}
+	if err := json.Unmarshal(updated, &output); err != nil {
+		t.Fatal(err)
+	}
+	if got := output.Tickets[0].Verification.TicketGate; len(got) != 2 || got[0] != "test legacy" || got[1] != "test package" {
+		t.Fatalf("legacy focused checks were not preserved in ticket gate: %v", got)
+	}
+}
+
 func TestContextExtractionKeepsOnlyRelevantRequirementsAndAcceptance(t *testing.T) {
 	markdown := `# PRD: Example
 

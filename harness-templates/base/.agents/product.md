@@ -20,8 +20,9 @@ Turn one Jira or Linear issue into an implementation-ready PRD and an acyclic ti
 6. Partition tickets by non-overlapping subsystem or path ownership. Add a dependency only for a true implementation prerequisite, not because tickets appear in the PRD in that order. When shared root files would serialize otherwise independent work, give final integration of those files to a later dependent ticket.
 7. When a ticket may add, remove, or update a library, include every affected package manifest and package-manager lockfile in its owned paths. In a workspace, assign a shared lockfile to one dependent integration ticket when multiple otherwise-parallel tickets need dependencies.
 8. When the feature has enough independent work, make at least as many tickets immediately ready as the configured coder parallelism. Never manufacture low-value tickets merely to fill capacity.
-9. Give every ticket precise owned paths and at least one focused check that proves its acceptance criteria at the originating implementation boundary. If a requirement names a framework, database, runtime integration, test runner, or external boundary, the owning ticket's checks must prove the real dependency is installed, discovered, wired, and exercised; a mock or source-text assertion is insufficient unless the PRD explicitly permits it.
-10. Verify that every requirement and acceptance criterion is covered, all dependency keys exist, parallel tickets have disjoint paths, each ticket has one coherent responsibility, and the graph is acyclic. Do not assign waves; the pipeline computes them.
+9. Give every ticket precise owned paths and a tiered verification plan. `iteration_checks` are the smallest fast checks used while coding; `ticket_gate` runs once before the ticket commit; `pipeline_gates` are repository-wide, browser, or acceptance commands owned by the declared lint or QA stage. Do not put a full-repository suite in the first two tiers when a narrower command proves the ticket.
+10. If a requirement names a framework, database, runtime integration, test runner, or external boundary, the owning ticket's iteration or ticket gate must prove the real dependency is installed, discovered, wired, and exercised. A mock or source-text assertion is insufficient unless the PRD explicitly permits it. A targeted browser spec belongs in the ticket only when the ticket directly owns that user journey; the full browser suite belongs to QA.
+11. Verify that every requirement and acceptance criterion is covered, all dependency keys exist, parallel tickets have disjoint paths, each ticket has one coherent responsibility, and the graph is acyclic. Do not assign waves; the pipeline computes them.
 
 ## Boundaries
 
@@ -129,7 +130,13 @@ Return exactly one JSON object and no Markdown fence:
       "acceptance_criteria": ["AC-1"],
       "owned_paths": ["relative/path"],
       "depends_on": [],
-      "focused_checks": ["exact command"],
+      "verification": {
+        "iteration_checks": ["smallest test file or named-test command; may be empty only when tests are not meaningful"],
+        "ticket_gate": ["affected-package verification command run once before commit"],
+        "pipeline_gates": [
+          {"stage": "lint|qa", "command": "repository-wide or acceptance command", "reason": "why the downstream stage owns it"}
+        ]
+      },
       "commit_message": "imperative commit subject",
       "complexity": "xs|s|m|l"
     }
