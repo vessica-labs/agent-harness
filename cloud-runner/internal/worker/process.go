@@ -34,6 +34,22 @@ func runCommand(ctx context.Context, cwd string, env []string, name string, args
 	return stdout.Bytes(), nil
 }
 
+func gitCommitAlreadyIntegrated(ctx context.Context, cwd, commit string) (bool, error) {
+	commit = strings.TrimSpace(commit)
+	command := exec.CommandContext(ctx, orchestratorGit, "merge-base", "--is-ancestor", commit, "HEAD")
+	command.Dir = cwd
+	command.Env = sanitizedEnvironment("")
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		if exitError, ok := err.(*exec.ExitError); ok && exitError.ExitCode() == 1 {
+			return false, nil
+		}
+		return false, fmt.Errorf("check integrated commit %s: %w: %s", commit, err, strings.TrimSpace(stderr.String()))
+	}
+	return true, nil
+}
+
 func gitEnvironment(token string) []string {
 	env := sanitizedEnvironment("")
 	if token == "" {

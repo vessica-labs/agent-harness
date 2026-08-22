@@ -910,7 +910,7 @@ Stages are registered from the repository pipeline and move through pending, run
 
 ### Automatic retry
 
-A cloud stage is attempted up to three times. Between attempts, Agent Harness persists the failure, resets the stage to pending, uploads the journal, and retries from durable state. In a parallel ticket stage, successful sibling commits are integrated and checkpointed first, so later attempts skip them. A context cancellation, structured QA repair request, or valid Product/Architecture input request does not consume ordinary retries in the same way. A request from any other stage, or a second request round, is rejected immediately as a contract violation rather than retried as a question.
+A cloud stage is attempted up to three times. Between attempts, Agent Harness persists the failure, resets the stage to pending, uploads the journal, and retries from durable state. In a parallel ticket stage, successful sibling commits are integrated and checkpointed first, so later attempts skip them. If an operator repairs the isolated run branch before resuming, the worker can adopt a completed agent result whose commit is already an ancestor of the run branch instead of failing on an empty cherry-pick. A context cancellation, structured QA repair request, or valid Product/Architecture input request does not consume ordinary retries in the same way. A request from any other stage, or a second request round, is rejected immediately as a contract violation rather than retried as a question.
 
 After the final failed attempt, the run pauses.
 
