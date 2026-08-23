@@ -115,6 +115,9 @@ func (r *Runner) handleRepair(ctx context.Context, stage Stage, request *repairR
 	if err := os.WriteFile(planPath, append(updated, '\n'), 0o600); err != nil {
 		return 0, err
 	}
+	if err := r.refreshTicketContextsForPlan(plan); err != nil {
+		return 0, fmt.Errorf("materialize QA repair ticket contexts: %w", err)
+	}
 	target, through := -1, -1
 	for index, item := range r.pipeline.Stages {
 		if item.ID == loop.To {
