@@ -216,7 +216,9 @@ func (r *Runner) materializeTicketContexts(productBody, architectureBody []byte)
 			}
 		}
 		acceptanceExcerpts := map[string]string{}
-		for _, criterion := range item.AcceptanceCriteria {
+		criteria := append([]string(nil), item.AcceptanceCriteria...)
+		criteria = append(criteria, item.SourceAcceptanceCriteria...)
+		for _, criterion := range criteria {
 			if excerpt := acceptance[criterion]; excerpt != "" {
 				acceptanceExcerpts[criterion] = excerpt
 			}
@@ -240,6 +242,46 @@ func (r *Runner) materializeTicketContexts(productBody, architectureBody []byte)
 	}
 	path := filepath.Join(r.runDir, "artifacts", "ticket-contexts.json")
 	return os.WriteFile(path, append(body, '\n'), 0o600)
+}
+
+func (r *Runner) refreshTicketContextsForPlan(plan []ticket) error {
+	if err := os.MkdirAll(filepath.Join(r.runDir, "artifacts"), 0o700); err != nil {
+		return err
+	}
+	productBody, err := os.ReadFile(filepath.Join(r.runDir, "agent-output", "product.json"))
+	if err != nil {
+		return err
+	}
+	var product productContextSource
+	if err := json.Unmarshal(productBody, &product); err != nil {
+		return fmt.Errorf("decode product context for repair tickets: %w", err)
+	}
+	product.Tickets = append([]ticket(nil), plan...)
+	productBody, err = json.Marshal(product)
+	if err != nil {
+		return fmt.Errorf("encode product context for repair tickets: %w", err)
+	}
+	architectureBody, err := os.ReadFile(filepath.Join(r.runDir, "agent-output", "arch.json"))
+	if err != nil {
+		return err
+	}
+	return r.materializeTicketContexts(productBody, architectureBody)
+}
+
+func (r *Runner) refreshTicketContextsAfterRestore() error {
+	archComplete, err := r.stageCompleted("arch")
+	if err != nil || !archComplete {
+		return err
+	}
+	planBody, err := os.ReadFile(filepath.Join(r.runDir, "artifacts", "ticket-plan.json"))
+	if err != nil {
+		return err
+	}
+	var plan []ticket
+	if err := json.Unmarshal(planBody, &plan); err != nil {
+		return fmt.Errorf("decode restored ticket plan: %w", err)
+	}
+	return r.refreshTicketContextsForPlan(plan)
 }
 
 func taggedMarkdownLines(markdown, prefix string) map[string]string {

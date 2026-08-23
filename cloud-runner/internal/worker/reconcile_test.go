@@ -154,6 +154,91 @@ func TestMaterializeTicketContextsBuildsOneCompactPacketPerTicket(t *testing.T) 
 	}
 }
 
+func TestRefreshTicketContextsForQARepairPlan(t *testing.T) {
+	runDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(runDir, "agent-output"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	product := `{
+  "prd_markdown":"## Requirements\n\n- R1: Create reminders.\n\n## Acceptance Criteria\n\n### AC-1: Durable creation\n\n- Given a request\n- When it is replayed\n- Then one reminder exists",
+  "tickets":[{"key":"VES-10-T01","title":"Base","objective":"Build base","acceptance_criteria":["AC-1"],"owned_paths":["base"],"depends_on":[]}],
+  "coverage":[{"requirement":"R1","tickets":["VES-10-T01"]}]
+}`
+	architecture := `{"status":"ready","ticket_constraints":[],"applicable_adrs":["ADR-001"]}`
+	if err := os.WriteFile(filepath.Join(runDir, "agent-output", "product.json"), []byte(product), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "agent-output", "arch.json"), []byte(architecture), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan := []ticket{
+		{Key: "VES-10-T01", Title: "Base", Objective: "Build base", AcceptanceCriteria: []string{"AC-1"}, OwnedPaths: []string{"base"}},
+		{Key: "VES-10-Q01", Title: "Repair", Objective: "Cover the gap", SourceAcceptanceCriteria: []string{"AC-1"}, AcceptanceCriteria: []string{"Playwright proves durable creation"}, OwnedPaths: []string{"e2e"}},
+	}
+	runner := &Runner{runDir: runDir}
+	if err := runner.refreshTicketContextsForPlan(plan); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(runDir, "artifacts", "ticket-contexts.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var packets []ticketContextPacket
+	if err := json.Unmarshal(body, &packets); err != nil {
+		t.Fatal(err)
+	}
+	if len(packets) != 2 || packets[0].Key != "VES-10-Q01" {
+		t.Fatalf("repair context missing: %+v", packets)
+	}
+	if packets[0].AcceptanceExcerpts["AC-1"] == "" {
+		t.Fatalf("repair source acceptance excerpt missing: %+v", packets[0].AcceptanceExcerpts)
+	}
+	if len(packets[0].ApplicableADRs) != 1 || packets[0].ApplicableADRs[0] != "ADR-001" {
+		t.Fatalf("repair applicable ADRs missing: %+v", packets[0].ApplicableADRs)
+	}
+}
+
+func TestRefreshTicketContextsAfterRestoreRepairsMissingQAInputs(t *testing.T) {
+	runDir := t.TempDir()
+	for _, directory := range []string{"agent-output", "artifacts"} {
+		if err := os.MkdirAll(filepath.Join(runDir, directory), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	product := `{"prd_markdown":"## Acceptance Criteria\n\n### AC-8: Telemetry\n\n- Then bounded metrics exist","tickets":[],"coverage":[]}`
+	architecture := `{"status":"ready","ticket_constraints":[],"applicable_adrs":[]}`
+	plan := `[{
+  "key":"VES-10-Q02","title":"Telemetry","objective":"Repair telemetry","source_acceptance_criteria":["AC-8"],
+  "acceptance_criteria":["Metrics are emitted"],"owned_paths":["worker"],"depends_on":[]
+}]`
+	state := `{"stages":{"arch":{"status":"completed"}}}`
+	for path, body := range map[string]string{
+		"agent-output/product.json":  product,
+		"agent-output/arch.json":     architecture,
+		"artifacts/ticket-plan.json": plan,
+		"state.json":                 state,
+	} {
+		if err := os.WriteFile(filepath.Join(runDir, path), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := &Runner{runDir: runDir}
+	if err := runner.refreshTicketContextsAfterRestore(); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(runDir, "artifacts", "ticket-contexts.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var packets []ticketContextPacket
+	if err := json.Unmarshal(body, &packets); err != nil {
+		t.Fatal(err)
+	}
+	if len(packets) != 1 || packets[0].Key != "VES-10-Q02" || packets[0].AcceptanceExcerpts["AC-8"] == "" {
+		t.Fatalf("restored QA repair context missing: %+v", packets)
+	}
+}
+
 func TestApplyArchitectureConstraintsRejectsUnknownTicket(t *testing.T) {
 	product := []byte(`{"tickets":[{"key":"T01","owned_paths":[],"depends_on":[]}]}`)
 	architecture := []byte(`{"status":"ready","ticket_constraints":[{"ticket_key":"T99"}]}`)

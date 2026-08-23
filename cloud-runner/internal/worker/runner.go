@@ -125,6 +125,9 @@ func (r *Runner) Run(ctx context.Context) (runErr error) {
 	if err := r.restoreOrInitialize(ctx, pipelinePath); err != nil {
 		return err
 	}
+	if err := r.refreshTicketContextsAfterRestore(); err != nil {
+		return fmt.Errorf("refresh restored ticket contexts: %w", err)
+	}
 	r.startupTiming(ctx, startupPhase, phaseStarted, map[string]any{"status": "completed"})
 	if _, err := r.harness(ctx, r.repo, "checkpoint", "--run-dir", r.runDir, "--patch-json",
 		string(mustJSON(map[string]any{"git": map[string]any{"branch": r.branchName(), "base": r.config.BaseBranch}})), "--event", "git.branch-prepared"); err != nil {
