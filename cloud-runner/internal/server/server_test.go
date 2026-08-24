@@ -37,6 +37,42 @@ func testTeamToken(t *testing.T, memory *store.Memory, box *secure.Box, role str
 	return token
 }
 
+func TestPipelineStageRegistrationPreservesDurableExecutionState(t *testing.T) {
+	ctx := context.Background()
+	memory := store.NewMemory()
+	started := time.Now().UTC().Add(-time.Minute)
+	completed := time.Now().UTC()
+	existing := model.StageState{
+		RunID:       "run-resumed",
+		Stage:       "product",
+		State:       "completed",
+		Attempt:     2,
+		Details:     json.RawMessage(`{"summary":"validated"}`),
+		StartedAt:   &started,
+		CompletedAt: &completed,
+	}
+	if err := memory.PutStage(ctx, existing); err != nil {
+		t.Fatal(err)
+	}
+
+	registered := model.StageState{
+		RunID:   existing.RunID,
+		Stage:   existing.Stage,
+		State:   "pending",
+		Details: json.RawMessage(`{"order":0}`),
+	}
+	got := preserveRegisteredStage(ctx, memory, registered)
+	if got.State != "completed" || got.Attempt != 2 || got.StartedAt == nil || got.CompletedAt == nil ||
+		string(got.Details) != string(existing.Details) {
+		t.Fatalf("replayed registration downgraded stage: %+v", got)
+	}
+
+	newStage := preserveRegisteredStage(ctx, memory, model.StageState{RunID: existing.RunID, Stage: "arch", State: "pending"})
+	if newStage.State != "pending" || newStage.Stage != "arch" {
+		t.Fatalf("new registration was not preserved: %+v", newStage)
+	}
+}
+
 func TestDelegatedAgentSessionDispatchesAndAcknowledgesNatively(t *testing.T) {
 	ctx := context.Background()
 	memory := store.NewMemory()

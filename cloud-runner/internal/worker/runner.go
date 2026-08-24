@@ -188,8 +188,14 @@ func (r *Runner) Run(ctx context.Context) (runErr error) {
 	if err := r.checkpoint(ctx); err != nil {
 		return err
 	}
+	if err := r.event(ctx, "run.completed", "info", "Pipeline completed and produced a draft pull request", "", nil); err != nil {
+		return err
+	}
+	// Preview startup is best effort and may wait for an application healthcheck.
+	// Publish the terminal run event first so preview readiness cannot hold the
+	// completed pipeline lease open or block dependency-gated work.
 	r.startPreview(ctx)
-	return r.event(ctx, "run.completed", "info", "Pipeline completed and produced a draft pull request", "", nil)
+	return nil
 }
 
 func (r *Runner) executeStageWithRetries(ctx context.Context, stage Stage) error {
