@@ -229,6 +229,22 @@ func TestIssueWebhookDoesNotDispatchAndManagementIsProtected(t *testing.T) {
 	if measured.CodexModel != "gpt-5.3-codex" || measured.InputTokens != 120 || measured.EstimatedCostUSD != 0.001 {
 		t.Fatalf("usage event was not projected: %+v", measured)
 	}
+	if err := memory.SetPreview(ctx, runs[0].ID, "starting", "", 4173, nil); err != nil {
+		t.Fatal(err)
+	}
+	previewFailedBody := bytes.NewBufferString(`{"type":"preview.failed","level":"warning","message":"health check timed out","payload":{"error":"timeout"}}`)
+	previewFailedRequest, _ := http.NewRequest(http.MethodPost, host.URL+"/internal/v1/runs/"+runs[0].ID+"/events", previewFailedBody)
+	previewFailedRequest.Header.Set("Authorization", "Bearer "+capability)
+	previewFailedRequest.Header.Set("Content-Type", "application/json")
+	previewFailedResponse, err := http.DefaultClient.Do(previewFailedRequest)
+	if err != nil || previewFailedResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("preview failure projection failed: %v status=%v", err, previewFailedResponse.StatusCode)
+	}
+	previewFailedResponse.Body.Close()
+	failedPreview, _ := memory.GetRun(ctx, runs[0].ID)
+	if failedPreview.PreviewState != "failed" || failedPreview.PreviewPort != 4173 {
+		t.Fatalf("preview failure was not durably projected: %+v", failedPreview)
+	}
 	pausedBody := bytes.NewBufferString(`{"stage":"coder","type":"run.paused","level":"error","message":"dependency contract failed"}`)
 	pausedRequest, _ := http.NewRequest(http.MethodPost, host.URL+"/internal/v1/runs/"+runs[0].ID+"/events", pausedBody)
 	pausedRequest.Header.Set("Authorization", "Bearer "+capability)

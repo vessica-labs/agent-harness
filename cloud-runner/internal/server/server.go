@@ -920,6 +920,10 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 				go s.publishPreview(runID)
 			}
 		}
+	} else if value.Type == "preview.failed" {
+		if run, getErr := s.store.GetRun(r.Context(), runID); getErr == nil {
+			_ = s.store.SetPreview(r.Context(), runID, "failed", "", run.PreviewPort, nil)
+		}
 	}
 	if shouldSyncLinearLifecycleEvent(value.Type) {
 		if err := s.syncLinearLifecycleEvent(r.Context(), runID, stored); err != nil {

@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -83,6 +84,45 @@ func TestPublishMintsCapabilityURLAndPersistsState(t *testing.T) {
 	}
 	if !manager.Broker.Registered(run.ID) || forwarder.forwards != 1 {
 		t.Fatal("forward should be registered exactly once")
+	}
+}
+
+func TestPublishSerializesConcurrentTriggers(t *testing.T) {
+	ctx := context.Background()
+	memory := store.NewMemory()
+	run := seedCompletedRun(t, memory)
+	forwarder := &fakeForwarder{}
+	manager := newTestManager(memory, forwarder)
+	urls := make(chan string, 2)
+	errs := make(chan error, 2)
+	var group sync.WaitGroup
+	for range 2 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			url, err := manager.Publish(ctx, run)
+			urls <- url
+			errs <- err
+		}()
+	}
+	group.Wait()
+	close(urls)
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var published string
+	for url := range urls {
+		if published == "" {
+			published = url
+		} else if url != published {
+			t.Fatalf("concurrent triggers returned different capabilities: %q != %q", url, published)
+		}
+	}
+	if forwarder.forwards != 1 {
+		t.Fatalf("concurrent triggers created %d forwards, want 1", forwarder.forwards)
 	}
 }
 

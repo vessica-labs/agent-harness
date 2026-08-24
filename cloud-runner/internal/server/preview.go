@@ -75,6 +75,7 @@ func (s *Server) publishPreview(runID string) {
 	url, err := manager.Publish(ctx, run)
 	if err != nil {
 		s.logger.Error("publish run preview", "run_id", runID, "error", err)
+		_ = s.store.SetPreview(ctx, runID, "failed", "", run.PreviewPort, nil)
 		s.appendEvent(ctx, model.Event{RunID: runID, SourceIssueID: run.SourceIssueID, Type: "preview.failed",
 			Level: "warning", Message: "Preview could not be published: " + err.Error()})
 		return
