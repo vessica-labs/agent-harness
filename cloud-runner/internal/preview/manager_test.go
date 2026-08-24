@@ -126,6 +126,31 @@ func TestPublishSerializesConcurrentTriggers(t *testing.T) {
 	}
 }
 
+func TestRecordFailureDoesNotOverwritePublishedPreview(t *testing.T) {
+	ctx := context.Background()
+	memory := store.NewMemory()
+	run := seedCompletedRun(t, memory)
+	manager := newTestManager(memory, &fakeForwarder{})
+	url, err := manager.Publish(ctx, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := manager.RecordFailure(ctx, run.ID, run.PreviewPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("a late failure must not overwrite a published preview")
+	}
+	stored, err := memory.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.PreviewState != "published" || stored.PreviewURL != url {
+		t.Fatalf("published preview was overwritten: %+v", stored)
+	}
+}
+
 func TestPublishRequiresSandboxAndPort(t *testing.T) {
 	manager := newTestManager(store.NewMemory(), &fakeForwarder{})
 	if _, err := manager.Publish(context.Background(), model.Run{ID: "run"}); err == nil {

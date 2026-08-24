@@ -105,6 +105,28 @@ func (m *Manager) Publish(ctx context.Context, run model.Run) (string, error) {
 	return publicURL, nil
 }
 
+// RecordFailure projects a publication failure without overwriting a preview
+// that a concurrent trigger already published successfully.
+func (m *Manager) RecordFailure(ctx context.Context, runID string, port int) (bool, error) {
+	unlock := m.lockPublication(runID)
+	defer unlock()
+
+	stored, err := m.Store.GetRun(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	if stored.PreviewState == "published" {
+		return false, nil
+	}
+	if stored.PreviewPort > 0 {
+		port = stored.PreviewPort
+	}
+	if err := m.Store.SetPreview(ctx, runID, "failed", "", port, nil); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (m *Manager) lockPublication(runID string) func() {
 	m.publishMu.Lock()
 	lock := m.publishLocks[runID]
