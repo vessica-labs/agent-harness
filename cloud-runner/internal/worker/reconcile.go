@@ -164,6 +164,7 @@ func applyArchitectureConstraints(productBody, architectureBody []byte) ([]byte,
 
 type workspacePackageManifest struct {
 	Name                 string                     `json:"name"`
+	Scripts              map[string]json.RawMessage `json:"scripts"`
 	Dependencies         map[string]json.RawMessage `json:"dependencies"`
 	DevDependencies      map[string]json.RawMessage `json:"devDependencies"`
 	PeerDependencies     map[string]json.RawMessage `json:"peerDependencies"`
@@ -247,6 +248,79 @@ func ensurePlaywrightUsesPlaywrightConfig(repo string, plan []ticket) ([]ticket,
 				if corrected {
 					checks[checkIndex], changed = updated, true
 				}
+			}
+		}
+	}
+	return plan, changed, nil
+}
+
+func ensureRequiredFixtureOwnership(repo string, plan []ticket) ([]ticket, bool, error) {
+	packages, err := discoverWorkspacePackages(repo)
+	if err != nil {
+		return nil, false, err
+	}
+	changed := false
+	for index := range plan {
+		requiresFixture := false
+		for _, constraint := range plan[index].ArchitectureConstraints {
+			normalized := strings.ToLower(constraint)
+			if strings.Contains(normalized, "full-stack fixture") || strings.Contains(normalized, "full stack fixture") {
+				requiresFixture = true
+				break
+			}
+		}
+		if !requiresFixture {
+			continue
+		}
+		for _, owner := range owningWorkspacePackages(plan[index].OwnedPaths, packages) {
+			for _, relative := range []string{"e2e/full-stack-fixture.mjs", "e2e/full-stack-fixture.ts"} {
+				candidate := filepath.ToSlash(filepath.Join(owner.root, filepath.FromSlash(relative)))
+				if info, statErr := os.Stat(filepath.Join(repo, filepath.FromSlash(candidate))); statErr == nil && !info.IsDir() {
+					var added bool
+					plan[index].OwnedPaths, added = appendUnique(plan[index].OwnedPaths, candidate)
+					changed = changed || added
+					break
+				} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+					return nil, false, statErr
+				}
+			}
+		}
+	}
+	return plan, changed, nil
+}
+
+func ensureBackgroundServiceEntrypointOwnership(repo string, plan []ticket) ([]ticket, bool, error) {
+	packages, err := discoverWorkspacePackages(repo)
+	if err != nil {
+		return nil, false, err
+	}
+	changed := false
+	for index := range plan {
+		for _, owned := range plan[index].OwnedPaths {
+			cleaned := filepath.ToSlash(filepath.Clean(filepath.FromSlash(owned)))
+			if filepath.ToSlash(filepath.Dir(cleaned)) != ".railway" || filepath.Ext(cleaned) != ".json" {
+				continue
+			}
+			service := strings.TrimSuffix(filepath.Base(cleaned), filepath.Ext(cleaned))
+			if service != "worker" {
+				continue
+			}
+			for _, candidate := range packages {
+				packageName := candidate.manifest.Name
+				if slash := strings.LastIndex(packageName, "/"); slash >= 0 {
+					packageName = packageName[slash+1:]
+				}
+				if filepath.Base(candidate.root) != service && packageName != service {
+					continue
+				}
+				if _, hasStart := candidate.manifest.Scripts["start"]; hasStart {
+					continue
+				}
+				var added bool
+				plan[index].OwnedPaths, added = appendUnique(plan[index].OwnedPaths, filepath.ToSlash(filepath.Join(candidate.root, "package.json")))
+				changed = changed || added
+				plan[index].OwnedPaths, added = appendUnique(plan[index].OwnedPaths, filepath.ToSlash(filepath.Join(candidate.root, "src", "server.ts")))
+				changed = changed || added
 			}
 		}
 	}
@@ -428,7 +502,15 @@ func (r *Runner) reconcileWorkspaceDependencyOwnership(ctx context.Context) erro
 	if err != nil {
 		return err
 	}
-	if !changed && !verificationChanged {
+	plan, fixtureChanged, err := ensureRequiredFixtureOwnership(r.repo, plan)
+	if err != nil {
+		return err
+	}
+	plan, entrypointChanged, err := ensureBackgroundServiceEntrypointOwnership(r.repo, plan)
+	if err != nil {
+		return err
+	}
+	if !changed && !verificationChanged && !fixtureChanged && !entrypointChanged {
 		return nil
 	}
 	body, err = json.MarshalIndent(plan, "", "  ")

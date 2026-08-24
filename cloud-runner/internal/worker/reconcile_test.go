@@ -334,3 +334,57 @@ func TestEnsurePlaywrightUsesPlaywrightConfigRemovesViteConfigOverride(t *testin
 		}
 	}
 }
+
+func TestEnsureRequiredFixtureOwnershipAddsExistingFullStackFixture(t *testing.T) {
+	repo := t.TempDir()
+	webRoot := filepath.Join(repo, "apps", "web")
+	if err := os.MkdirAll(filepath.Join(webRoot, "e2e"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(webRoot, "package.json"), []byte(`{"name":"@vessica/web"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(webRoot, "e2e", "full-stack-fixture.mjs"), []byte("export {};\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan := []ticket{{
+		Key:                     "VES-15-T01",
+		OwnedPaths:              []string{"apps/web/e2e/launch-journeys.spec.ts"},
+		ArchitectureConstraints: []string{"Drive built services through the existing full-stack fixture."},
+	}}
+	updated, changed, err := ensureRequiredFixtureOwnership(repo, plan)
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	if got := updated[0].OwnedPaths; len(got) != 2 || got[1] != "apps/web/e2e/full-stack-fixture.mjs" {
+		t.Fatalf("fixture ownership not reconciled: %v", got)
+	}
+}
+
+func TestEnsureBackgroundServiceEntrypointOwnershipRepairsMissingWorkerStart(t *testing.T) {
+	repo := t.TempDir()
+	for path, body := range map[string]string{
+		"apps/worker/package.json": `{"name":"@vessica/worker","scripts":{"build":"tsc"}}`,
+		"apps/web/package.json":    `{"name":"@vessica/web","scripts":{"build":"vite build"}}`,
+	} {
+		fullPath := filepath.Join(repo, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fullPath, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan := []ticket{{
+		Key:        "VES-15-T06",
+		OwnedPaths: []string{".railway/api.json", ".railway/web.json", ".railway/worker.json"},
+	}}
+	updated, changed, err := ensureBackgroundServiceEntrypointOwnership(repo, plan)
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	got := updated[0].OwnedPaths
+	if len(got) != 5 || got[3] != "apps/worker/package.json" || got[4] != "apps/worker/src/server.ts" {
+		t.Fatalf("worker entrypoint ownership not reconciled: %v", got)
+	}
+}
