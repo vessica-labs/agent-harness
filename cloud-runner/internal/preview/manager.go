@@ -71,7 +71,7 @@ func (m *Manager) Publish(ctx context.Context, run model.Run) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if stored.PreviewState == "published" && stored.PreviewURL != "" {
+	if stored.PreviewState == "published" && stored.PreviewURL != "" && m.Broker.Registered(run.ID) {
 		return stored.PreviewURL, nil
 	}
 	run = stored
@@ -115,7 +115,7 @@ func (m *Manager) RecordFailure(ctx context.Context, runID string, port int) (bo
 	if err != nil {
 		return false, err
 	}
-	if stored.PreviewState == "published" {
+	if stored.PreviewState == "published" && m.Broker.Registered(runID) {
 		return false, nil
 	}
 	if stored.PreviewPort > 0 {

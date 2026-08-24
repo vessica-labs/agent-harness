@@ -151,6 +151,36 @@ func TestRecordFailureDoesNotOverwritePublishedPreview(t *testing.T) {
 	}
 }
 
+func TestPublishRebuildsPersistedPreviewWhenBrokerTargetIsMissing(t *testing.T) {
+	ctx := context.Background()
+	memory := store.NewMemory()
+	run := seedCompletedRun(t, memory)
+	forwarder := &fakeForwarder{}
+	manager := newTestManager(memory, forwarder)
+	firstURL, err := manager.Publish(ctx, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.Broker.Remove(run.ID)
+	secondURL, err := manager.Publish(ctx, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondURL == firstURL {
+		t.Fatal("a missing broker target should receive a fresh capability")
+	}
+	if !manager.Broker.Registered(run.ID) || forwarder.forwards != 2 {
+		t.Fatal("persisted preview did not rebuild its broker target")
+	}
+	stored, err := memory.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.PreviewURL != secondURL || stored.PreviewState != "published" {
+		t.Fatalf("rebuilt preview was not persisted: %+v", stored)
+	}
+}
+
 func TestPublishRequiresSandboxAndPort(t *testing.T) {
 	manager := newTestManager(store.NewMemory(), &fakeForwarder{})
 	if _, err := manager.Publish(context.Background(), model.Run{ID: "run"}); err == nil {
