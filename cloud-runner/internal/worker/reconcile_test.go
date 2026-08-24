@@ -81,6 +81,63 @@ func TestApplyArchitectureConstraintsPreservesLegacyChecksWhenIntroducingTiers(t
 	}
 }
 
+func TestEnsureWorkspaceDependencyOwnershipAddsManifestAndLockfile(t *testing.T) {
+	repo := t.TempDir()
+	writeFile := func(path, body string) {
+		t.Helper()
+		path = filepath.Join(repo, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile("packages/contracts/package.json", `{"name":"@vessica/contracts"}`)
+	writeFile("packages/db/package.json", `{"name":"@vessica/db","dependencies":{}}`)
+	writeFile("pnpm-lock.yaml", "lockfileVersion: '9.0'\n")
+	plan := []ticket{{
+		Key: "VES-14-T02", OwnedPaths: []string{"packages/db/src/schema.ts"},
+		ArchitectureConstraints: []string{"Depend on @vessica/contracts and reuse its schemas."},
+	}}
+	updated, changed, err := ensureWorkspaceDependencyOwnership(repo, plan)
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	got := updated[0].OwnedPaths
+	if len(got) != 3 || got[1] != "packages/db/package.json" || got[2] != "pnpm-lock.yaml" {
+		t.Fatalf("package ownership not reconciled: %v", got)
+	}
+}
+
+func TestEnsureWorkspaceDependencyOwnershipLeavesDeclaredAndNegativeDependenciesAlone(t *testing.T) {
+	repo := t.TempDir()
+	writeFile := func(path, body string) {
+		t.Helper()
+		path = filepath.Join(repo, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile("packages/contracts/package.json", `{"name":"@vessica/contracts"}`)
+	writeFile("packages/db/package.json", `{"name":"@vessica/db","dependencies":{"@vessica/contracts":"workspace:*"}}`)
+	writeFile("packages/other/package.json", `{"name":"@vessica/other","dependencies":{}}`)
+	plan := []ticket{{
+		Key: "T01", OwnedPaths: []string{"packages/db/src/schema.ts"},
+		ArchitectureConstraints: []string{"Depend on @vessica/contracts."},
+	}, {
+		Key: "T02", OwnedPaths: []string{"packages/other/src/other.ts"},
+		ArchitectureConstraints: []string{"Do not depend on @vessica/contracts."},
+	}}
+	updated, changed, err := ensureWorkspaceDependencyOwnership(repo, plan)
+	if err != nil || changed {
+		t.Fatalf("changed=%v err=%v plan=%+v", changed, err, updated)
+	}
+}
+
 func TestContextExtractionKeepsOnlyRelevantRequirementsAndAcceptance(t *testing.T) {
 	markdown := `# PRD: Example
 

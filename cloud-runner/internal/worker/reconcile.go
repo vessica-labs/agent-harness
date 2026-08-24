@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -159,6 +160,227 @@ func applyArchitectureConstraints(productBody, architectureBody []byte) ([]byte,
 		return nil, nil, false, err
 	}
 	return append(updatedProduct, '\n'), append(ticketPlan, '\n'), changed, nil
+}
+
+type workspacePackageManifest struct {
+	Name                 string                     `json:"name"`
+	Dependencies         map[string]json.RawMessage `json:"dependencies"`
+	DevDependencies      map[string]json.RawMessage `json:"devDependencies"`
+	PeerDependencies     map[string]json.RawMessage `json:"peerDependencies"`
+	OptionalDependencies map[string]json.RawMessage `json:"optionalDependencies"`
+}
+
+type workspacePackage struct {
+	root     string
+	manifest workspacePackageManifest
+}
+
+var packageDependencyDirective = regexp.MustCompile(`(?i)\b((?:do|must)\s+not\s+)?depends?\s+on\s+(@[a-z0-9._-]+/[a-z0-9._-]+)\b`)
+
+func ensureWorkspaceDependencyOwnership(repo string, plan []ticket) ([]ticket, bool, error) {
+	packages, err := discoverWorkspacePackages(repo)
+	if err != nil {
+		return nil, false, err
+	}
+	byName := make(map[string]workspacePackage, len(packages))
+	for _, item := range packages {
+		if item.manifest.Name != "" {
+			byName[item.manifest.Name] = item
+		}
+	}
+	lockfiles := existingWorkspaceLockfiles(repo)
+	changed := false
+	for index := range plan {
+		requested := map[string]bool{}
+		for _, constraint := range plan[index].ArchitectureConstraints {
+			for _, match := range packageDependencyDirective.FindAllStringSubmatch(constraint, -1) {
+				if match[1] == "" {
+					requested[match[2]] = true
+				}
+			}
+		}
+		if len(requested) == 0 {
+			continue
+		}
+		owners := owningWorkspacePackages(plan[index].OwnedPaths, packages)
+		for _, owner := range owners {
+			for dependency := range requested {
+				if _, workspaceDependency := byName[dependency]; !workspaceDependency || manifestDeclares(owner.manifest, dependency) {
+					continue
+				}
+				var added bool
+				plan[index].OwnedPaths, added = appendUnique(plan[index].OwnedPaths, filepath.ToSlash(filepath.Join(owner.root, "package.json")))
+				changed = changed || added
+				for _, lockfile := range lockfiles {
+					plan[index].OwnedPaths, added = appendUnique(plan[index].OwnedPaths, lockfile)
+					changed = changed || added
+				}
+			}
+		}
+	}
+	return plan, changed, nil
+}
+
+func discoverWorkspacePackages(repo string) ([]workspacePackage, error) {
+	var result []workspacePackage
+	err := filepath.WalkDir(repo, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", ".harness", "node_modules":
+				if path != repo {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		if entry.Name() != "package.json" {
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var manifest workspacePackageManifest
+		if err := json.Unmarshal(body, &manifest); err != nil {
+			return fmt.Errorf("decode workspace manifest %s: %w", path, err)
+		}
+		if manifest.Name == "" {
+			return nil
+		}
+		root, err := filepath.Rel(repo, filepath.Dir(path))
+		if err != nil {
+			return err
+		}
+		result = append(result, workspacePackage{root: filepath.ToSlash(root), manifest: manifest})
+		return nil
+	})
+	sort.Slice(result, func(i, j int) bool { return result[i].root < result[j].root })
+	return result, err
+}
+
+func existingWorkspaceLockfiles(repo string) []string {
+	var result []string
+	for _, name := range []string{"pnpm-lock.yaml", "package-lock.json", "yarn.lock", "bun.lock", "bun.lockb"} {
+		if info, err := os.Stat(filepath.Join(repo, name)); err == nil && !info.IsDir() {
+			result = append(result, name)
+		}
+	}
+	return result
+}
+
+func owningWorkspacePackages(paths []string, packages []workspacePackage) []workspacePackage {
+	owners := map[string]workspacePackage{}
+	for _, owned := range paths {
+		owned = filepath.ToSlash(filepath.Clean(filepath.FromSlash(owned)))
+		best := workspacePackage{}
+		for _, candidate := range packages {
+			if candidate.root == "." || owned == candidate.root || strings.HasPrefix(owned, candidate.root+"/") {
+				if len(candidate.root) > len(best.root) {
+					best = candidate
+				}
+			}
+		}
+		if best.manifest.Name != "" {
+			owners[best.root] = best
+		}
+	}
+	keys := make([]string, 0, len(owners))
+	for root := range owners {
+		keys = append(keys, root)
+	}
+	sort.Strings(keys)
+	result := make([]workspacePackage, 0, len(keys))
+	for _, root := range keys {
+		result = append(result, owners[root])
+	}
+	return result
+}
+
+func manifestDeclares(manifest workspacePackageManifest, dependency string) bool {
+	for _, group := range []map[string]json.RawMessage{
+		manifest.Dependencies,
+		manifest.DevDependencies,
+		manifest.PeerDependencies,
+		manifest.OptionalDependencies,
+	} {
+		if _, ok := group[dependency]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func appendUnique(values []string, addition string) ([]string, bool) {
+	for _, value := range values {
+		if value == addition {
+			return values, false
+		}
+	}
+	return append(values, addition), true
+}
+
+func (r *Runner) reconcileWorkspaceDependencyOwnership(ctx context.Context) error {
+	planPath := filepath.Join(r.runDir, "artifacts", "ticket-plan.json")
+	body, err := os.ReadFile(planPath)
+	if err != nil {
+		return err
+	}
+	var plan []ticket
+	if err := json.Unmarshal(body, &plan); err != nil {
+		return fmt.Errorf("decode ticket plan for package ownership: %w", err)
+	}
+	plan, changed, err := ensureWorkspaceDependencyOwnership(r.repo, plan)
+	if err != nil || !changed {
+		return err
+	}
+	body, err = json.MarshalIndent(plan, "", "  ")
+	if err != nil {
+		return err
+	}
+	productPath := filepath.Join(r.runDir, "agent-output", "product.json")
+	productBody, err := os.ReadFile(productPath)
+	if err != nil {
+		return err
+	}
+	var product map[string]any
+	if err := json.Unmarshal(productBody, &product); err != nil {
+		return fmt.Errorf("decode product output for package ownership: %w", err)
+	}
+	var ticketValues []any
+	if err := json.Unmarshal(body, &ticketValues); err != nil {
+		return err
+	}
+	product["tickets"] = ticketValues
+	productBody, err = json.MarshalIndent(product, "", "  ")
+	if err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(r.runDir, "product-package-ownership-*.json")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if _, err := temporary.Write(append(productBody, '\n')); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if _, err := r.harness(ctx, r.repo, "validate-agent-output", "--agent", "product", "--input", temporaryPath); err != nil {
+		return fmt.Errorf("validate package ownership reconciliation: %w", err)
+	}
+	if err := os.WriteFile(productPath, append(productBody, '\n'), 0o600); err != nil {
+		return err
+	}
+	if err := os.WriteFile(planPath, append(body, '\n'), 0o600); err != nil {
+		return err
+	}
+	return r.refreshTicketContextsForPlan(plan)
 }
 
 type productContextSource struct {
