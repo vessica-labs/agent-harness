@@ -176,6 +176,9 @@ type workspacePackage struct {
 }
 
 var packageDependencyDirective = regexp.MustCompile(`(?i)\b((?:do|must)\s+not\s+)?depends?\s+on\s+(@[a-z0-9._-]+/[a-z0-9._-]+)\b`)
+var playwrightCommand = regexp.MustCompile(`(?i)(?:\bplaywright\s+test\b|\btest:e2e\b)`)
+var playwrightConfigArgument = regexp.MustCompile(`\s+--config(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s]+))`)
+var pnpmFilterArgument = regexp.MustCompile(`(?:^|\s)(?:--filter|-F)(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s]+))`)
 
 func ensureWorkspaceDependencyOwnership(repo string, plan []ticket) ([]ticket, bool, error) {
 	packages, err := discoverWorkspacePackages(repo)
@@ -219,6 +222,91 @@ func ensureWorkspaceDependencyOwnership(repo string, plan []ticket) ([]ticket, b
 		}
 	}
 	return plan, changed, nil
+}
+
+func ensurePlaywrightUsesPlaywrightConfig(repo string, plan []ticket) ([]ticket, bool, error) {
+	packages, err := discoverWorkspacePackages(repo)
+	if err != nil {
+		return nil, false, err
+	}
+	byName := make(map[string]string, len(packages))
+	for _, item := range packages {
+		byName[item.manifest.Name] = item.root
+	}
+	changed := false
+	for index := range plan {
+		if plan[index].Verification == nil {
+			continue
+		}
+		for _, checks := range [][]string{plan[index].Verification.IterationChecks, plan[index].Verification.TicketGate} {
+			for checkIndex, command := range checks {
+				updated, corrected, err := removeViteConfigFromPlaywrightCommand(repo, byName, command)
+				if err != nil {
+					return nil, false, fmt.Errorf("ticket %s verification command: %w", plan[index].Key, err)
+				}
+				if corrected {
+					checks[checkIndex], changed = updated, true
+				}
+			}
+		}
+	}
+	return plan, changed, nil
+}
+
+func removeViteConfigFromPlaywrightCommand(repo string, packageRoots map[string]string, command string) (string, bool, error) {
+	if !playwrightCommand.MatchString(command) {
+		return command, false, nil
+	}
+	match := playwrightConfigArgument.FindStringSubmatchIndex(command)
+	if match == nil {
+		return command, false, nil
+	}
+	configPath := firstRegexpGroup(command, match, 1, 2, 3)
+	if configPath == "" || filepath.IsAbs(configPath) {
+		return command, false, nil
+	}
+	root := repo
+	if filter := pnpmFilterArgument.FindStringSubmatch(command); len(filter) > 0 {
+		if packageRoot := packageRoots[firstNonEmpty(filter[1:]...)]; packageRoot != "" {
+			root = filepath.Join(repo, filepath.FromSlash(packageRoot))
+		}
+	}
+	resolved := filepath.Join(root, filepath.FromSlash(configPath))
+	body, err := os.ReadFile(resolved)
+	if errors.Is(err, os.ErrNotExist) && root != repo {
+		resolved = filepath.Join(repo, filepath.FromSlash(configPath))
+		body, err = os.ReadFile(resolved)
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return command, false, nil
+	}
+	if err != nil {
+		return command, false, err
+	}
+	text := string(body)
+	if !strings.Contains(text, `from "vite"`) && !strings.Contains(text, `from 'vite'`) {
+		return command, false, nil
+	}
+	return strings.TrimSpace(command[:match[0]] + command[match[1]:]), true, nil
+}
+
+func firstRegexpGroup(value string, indexes []int, groups ...int) string {
+	for _, group := range groups {
+		start, end := indexes[group*2], indexes[group*2+1]
+		if start >= 0 && end >= start {
+			return value[start:end]
+		}
+	}
+	return ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func discoverWorkspacePackages(repo string) ([]workspacePackage, error) {
@@ -333,8 +421,15 @@ func (r *Runner) reconcileWorkspaceDependencyOwnership(ctx context.Context) erro
 		return fmt.Errorf("decode ticket plan for package ownership: %w", err)
 	}
 	plan, changed, err := ensureWorkspaceDependencyOwnership(r.repo, plan)
-	if err != nil || !changed {
+	if err != nil {
 		return err
+	}
+	plan, verificationChanged, err := ensurePlaywrightUsesPlaywrightConfig(r.repo, plan)
+	if err != nil {
+		return err
+	}
+	if !changed && !verificationChanged {
+		return nil
 	}
 	body, err = json.MarshalIndent(plan, "", "  ")
 	if err != nil {

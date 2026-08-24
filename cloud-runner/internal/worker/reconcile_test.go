@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -301,5 +302,35 @@ func TestApplyArchitectureConstraintsRejectsUnknownTicket(t *testing.T) {
 	architecture := []byte(`{"status":"ready","ticket_constraints":[{"ticket_key":"T99"}]}`)
 	if _, _, _, err := applyArchitectureConstraints(product, architecture); err == nil {
 		t.Fatal("unknown architectural ticket constraint accepted")
+	}
+}
+
+func TestEnsurePlaywrightUsesPlaywrightConfigRemovesViteConfigOverride(t *testing.T) {
+	repo := t.TempDir()
+	webRoot := filepath.Join(repo, "apps", "web")
+	if err := os.MkdirAll(filepath.Join(webRoot, "e2e"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(webRoot, "package.json"), []byte(`{"name":"@vessica/web"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(webRoot, "e2e", "playwright-vite.config.ts"), []byte(`import { defineConfig } from "vite";`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan := []ticket{{Key: "VES-15-T01", Verification: &ticketVerification{
+		IterationChecks: []string{"pnpm --filter @vessica/web exec playwright test --config e2e/playwright-vite.config.ts e2e/launch.spec.ts"},
+		TicketGate:      []string{"pnpm --filter @vessica/web test:e2e -- --config e2e/playwright-vite.config.ts e2e/launch.spec.ts"},
+	}}}
+	updated, changed, err := ensurePlaywrightUsesPlaywrightConfig(repo, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("expected mismatched Vite config override to be removed")
+	}
+	for _, command := range append(updated[0].Verification.IterationChecks, updated[0].Verification.TicketGate...) {
+		if strings.Contains(command, "playwright-vite.config.ts") || strings.Contains(command, "--config") {
+			t.Fatalf("Playwright command retained Vite config override: %s", command)
+		}
 	}
 }
