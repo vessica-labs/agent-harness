@@ -59,9 +59,8 @@ func (s *Server) previewRoutes(w http.ResponseWriter, r *http.Request) {
 	manager.Broker.ServeHTTP(w, r)
 }
 
-// publishPreview runs after run.completed when the worker reported a healthy
-// preview port. It forwards the sandbox port, mints the capability link,
-// records the published event, and posts the link to the Linear parent issue.
+// publishPreview may be triggered by either run.completed or preview.ready.
+// It publishes only after both states have converged, regardless of event order.
 func (s *Server) publishPreview(runID string) {
 	manager := s.previewManager()
 	if manager == nil || !manager.Enabled() {
@@ -70,7 +69,7 @@ func (s *Server) publishPreview(runID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	run, err := s.store.GetRun(ctx, runID)
-	if err != nil || run.PreviewState != "ready" || run.PreviewPort <= 0 || run.SandboxID == "" {
+	if err != nil || !previewPublishable(run) {
 		return
 	}
 	url, err := manager.Publish(ctx, run)
@@ -86,6 +85,10 @@ func (s *Server) publishPreview(runID string) {
 		s.logger.Error("post preview link to Linear", "run_id", runID, "error", err)
 	}
 	s.broker.Notify()
+}
+
+func previewPublishable(run model.Run) bool {
+	return run.State == "completed" && run.PreviewState == "ready" && run.PreviewPort > 0 && run.SandboxID != ""
 }
 
 // syncLinearPreview upserts a marker-keyed preview comment on the run's

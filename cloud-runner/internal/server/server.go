@@ -912,6 +912,7 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 		}
 		if json.Unmarshal(value.Payload, &payload) == nil && payload.Port > 0 {
 			_ = s.store.SetPreview(r.Context(), runID, "ready", "", payload.Port, nil)
+			go s.publishPreview(runID)
 		}
 	}
 	if shouldSyncLinearLifecycleEvent(value.Type) {
