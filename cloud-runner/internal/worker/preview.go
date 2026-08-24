@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
 	"path/filepath"
-	"strings"
+	"syscall"
 	"time"
 )
 
@@ -50,10 +52,13 @@ func (r *Runner) startPreview(ctx context.Context) {
 		return
 	}
 	logPath := filepath.Join(r.config.Workspace, ".harness-preview.log")
-	launch := fmt.Sprintf("cd %s && PORT=%d setsid nohup bash -c %s >>%s 2>&1 & disown",
-		shellQuoteWorker(r.repo), config.Port, shellQuoteWorker(config.Command), shellQuoteWorker(logPath))
-	if _, err := runCommand(ctx, r.repo, sanitizedEnvironment(""), "bash", "-lc", launch); err != nil {
+	process, err := launchPreview(r.repo, config.Command, config.Port, logPath)
+	if err != nil {
 		_ = r.event(ctx, "preview.failed", "warning", "Preview command failed to launch", "", map[string]any{"error": err.Error()})
+		return
+	}
+	if err := process.Release(); err != nil {
+		_ = r.event(ctx, "preview.failed", "warning", "Preview command could not detach", "", map[string]any{"error": err.Error()})
 		return
 	}
 	healthcheck := config.Healthcheck
@@ -67,6 +72,34 @@ func (r *Runner) startPreview(ctx context.Context) {
 	_ = r.event(ctx, "preview.ready", "info", "Preview application is serving inside the sandbox", "", map[string]any{
 		"port": config.Port, "healthcheck": healthcheck,
 	})
+}
+
+// launchPreview starts the preview without routing its standard streams through
+// runCommand. A background shell that inherits runCommand's output pipes keeps
+// CombinedOutput waiting until the long-lived preview exits, which prevents the
+// worker from releasing its lease after an otherwise completed pipeline.
+func launchPreview(repo, command string, port int, logPath string) (*os.Process, error) {
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	preview := exec.Command("bash", "-lc", command)
+	preview.Dir = repo
+	preview.Env = append(sanitizedEnvironment(""), fmt.Sprintf("PORT=%d", port))
+	preview.Stdin = nil
+	preview.Stdout = logFile
+	preview.Stderr = logFile
+	preview.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := preview.Start(); err != nil {
+		_ = logFile.Close()
+		return nil, err
+	}
+	if err := logFile.Close(); err != nil {
+		_ = preview.Process.Kill()
+		_, _ = preview.Process.Wait()
+		return nil, err
+	}
+	return preview.Process, nil
 }
 
 func waitForPreview(ctx context.Context, target string, timeout time.Duration) error {
@@ -97,8 +130,4 @@ func waitForPreview(ctx context.Context, target string, timeout time.Duration) e
 		case <-time.After(2 * time.Second):
 		}
 	}
-}
-
-func shellQuoteWorker(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }
