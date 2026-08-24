@@ -62,11 +62,15 @@ func (s *Server) previewRoutes(w http.ResponseWriter, r *http.Request) {
 // publishPreview may be triggered by either run.completed or preview.ready.
 // It publishes only after both states have converged, regardless of event order.
 func (s *Server) publishPreview(runID string) {
+	s.publishPreviewWithTimeout(runID, 2*time.Minute)
+}
+
+func (s *Server) publishPreviewWithTimeout(runID string, timeout time.Duration) {
 	manager := s.previewManager()
 	if manager == nil || !manager.Enabled() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	run, err := s.store.GetRun(ctx, runID)
 	if err != nil || !previewPublishable(run) {
@@ -75,12 +79,17 @@ func (s *Server) publishPreview(runID string) {
 	url, err := manager.Publish(ctx, run)
 	if err != nil {
 		s.logger.Error("publish run preview", "run_id", runID, "error", err)
-		failed, recordErr := manager.RecordFailure(ctx, runID, run.PreviewPort)
+		// Publication can consume its entire deadline after an ambiguous durable
+		// write. Reconciliation must not inherit that expired context or it cannot
+		// replace a capability whose broker target was removed on the error path.
+		failureCtx, cancelFailure := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancelFailure()
+		failed, recordErr := manager.RecordFailure(failureCtx, runID, run.PreviewPort)
 		if recordErr != nil {
 			s.logger.Error("record preview publication failure", "run_id", runID, "error", recordErr)
 		}
 		if failed {
-			s.appendEvent(ctx, model.Event{RunID: runID, SourceIssueID: run.SourceIssueID, Type: "preview.failed",
+			s.appendEvent(failureCtx, model.Event{RunID: runID, SourceIssueID: run.SourceIssueID, Type: "preview.failed",
 				Level: "warning", Message: "Preview could not be published: " + err.Error()})
 		}
 		return
