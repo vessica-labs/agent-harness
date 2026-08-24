@@ -906,13 +906,19 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 		if json.Unmarshal(value.Payload, &payload) == nil {
 			_ = s.store.SetDelivery(r.Context(), runID, payload.Branch, payload.URL)
 		}
-	} else if value.Type == "preview.ready" {
+	} else if value.Type == "preview.starting" || value.Type == "preview.ready" {
 		var payload struct {
 			Port int `json:"port"`
 		}
 		if json.Unmarshal(value.Payload, &payload) == nil && payload.Port > 0 {
-			_ = s.store.SetPreview(r.Context(), runID, "ready", "", payload.Port, nil)
-			go s.publishPreview(runID)
+			previewState := "starting"
+			if value.Type == "preview.ready" {
+				previewState = "ready"
+			}
+			_ = s.store.SetPreview(r.Context(), runID, previewState, "", payload.Port, nil)
+			if previewState == "ready" {
+				go s.publishPreview(runID)
+			}
 		}
 	}
 	if shouldSyncLinearLifecycleEvent(value.Type) {

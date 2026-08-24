@@ -188,14 +188,14 @@ func (r *Runner) Run(ctx context.Context) (runErr error) {
 	if err := r.checkpoint(ctx); err != nil {
 		return err
 	}
-	if err := r.event(ctx, "run.completed", "info", "Pipeline completed and produced a draft pull request", "", nil); err != nil {
-		return err
-	}
+	completionErr := r.event(ctx, "run.completed", "info", "Pipeline completed and produced a draft pull request", "", nil)
 	// Preview startup is best effort and may wait for an application healthcheck.
 	// Publish the terminal run event first so preview readiness cannot hold the
-	// completed pipeline lease open or block dependency-gated work.
-	r.startPreview(ctx)
-	return nil
+	// completed pipeline lease open or block dependency-gated work. Still attempt
+	// startup when completion reporting returns an error: the control plane may
+	// have durably accepted the event before an external lifecycle sync failed.
+	r.startPreview(context.WithoutCancel(ctx))
+	return completionErr
 }
 
 func (r *Runner) executeStageWithRetries(ctx context.Context, stage Stage) error {

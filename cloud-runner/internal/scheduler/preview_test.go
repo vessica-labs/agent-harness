@@ -94,6 +94,25 @@ func TestPublishedPreviewRetainsSandboxAndHeartbeats(t *testing.T) {
 	}
 }
 
+func TestStartingPreviewRetainsSandboxThroughHealthcheckWindow(t *testing.T) {
+	ctx := context.Background()
+	memory := store.NewMemory()
+	run := seedCompletedRun(t, memory)
+	if err := memory.SetPreview(ctx, run.ID, "starting", "", 3000, nil); err != nil {
+		t.Fatal(err)
+	}
+	provider := &fakeProvider{}
+	scheduler := newTestScheduler(memory, provider)
+	current, _ := memory.GetRun(ctx, run.ID)
+	if !scheduler.previewAlive(ctx, current) {
+		t.Fatal("sandbox must be retained while preview healthcheck is pending")
+	}
+	scheduler.cleanupTerminal(ctx)
+	if len(provider.destroyed) != 0 {
+		t.Fatal("starting preview sandbox must not be destroyed")
+	}
+}
+
 func TestExpiredPreviewIsTornDownAndSandboxDestroyed(t *testing.T) {
 	ctx := context.Background()
 	memory := store.NewMemory()
