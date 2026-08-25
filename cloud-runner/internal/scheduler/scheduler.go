@@ -348,6 +348,12 @@ func (s *Scheduler) cleanupTerminal(ctx context.Context) {
 		}
 		for _, run := range runs {
 			grace := time.Minute
+			if state == "completed" {
+				// Preview health checks may take up to two minutes after the terminal
+				// event. Keep the sandbox beyond that window even before the worker
+				// reports preview.starting.
+				grace = 3 * time.Minute
+			}
 			if state == "awaiting_input" {
 				grace = 15 * time.Second
 			}
@@ -381,6 +387,9 @@ func (s *Scheduler) cleanupTerminal(ctx context.Context) {
 // below proceeds on this same pass.
 func (s *Scheduler) previewAlive(ctx context.Context, run model.Run) bool {
 	switch run.PreviewState {
+	case "starting":
+		// The worker may spend up to two minutes waiting for application health.
+		return time.Since(run.UpdatedAt) < 3*time.Minute
 	case "ready":
 		// The worker reported a preview but the control plane has not published
 		// it yet; give publication a chance before destroying the sandbox.

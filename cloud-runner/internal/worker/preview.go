@@ -49,6 +49,9 @@ func (r *Runner) startPreview(ctx context.Context) {
 	if config == nil {
 		return
 	}
+	_ = r.event(ctx, "preview.starting", "info", "Preview application is starting inside the sandbox", "", map[string]any{
+		"port": config.Port,
+	})
 	logPath := filepath.Join(r.config.Workspace, ".harness-preview.log")
 	launch := fmt.Sprintf("cd %s && PORT=%d setsid nohup bash -c %s >>%s 2>&1 & disown",
 		shellQuoteWorker(r.repo), config.Port, shellQuoteWorker(config.Command), shellQuoteWorker(logPath))

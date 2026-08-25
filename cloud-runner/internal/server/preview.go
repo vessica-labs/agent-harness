@@ -59,25 +59,39 @@ func (s *Server) previewRoutes(w http.ResponseWriter, r *http.Request) {
 	manager.Broker.ServeHTTP(w, r)
 }
 
-// publishPreview runs after run.completed when the worker reported a healthy
-// preview port. It forwards the sandbox port, mints the capability link,
-// records the published event, and posts the link to the Linear parent issue.
+// publishPreview may be triggered by either run.completed or preview.ready.
+// It publishes only after both states have converged, regardless of event order.
 func (s *Server) publishPreview(runID string) {
+	s.publishPreviewWithTimeout(runID, 2*time.Minute)
+}
+
+func (s *Server) publishPreviewWithTimeout(runID string, timeout time.Duration) {
 	manager := s.previewManager()
 	if manager == nil || !manager.Enabled() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	run, err := s.store.GetRun(ctx, runID)
-	if err != nil || run.PreviewState != "ready" || run.PreviewPort <= 0 || run.SandboxID == "" {
+	if err != nil || !previewPublishable(run) {
 		return
 	}
 	url, err := manager.Publish(ctx, run)
 	if err != nil {
 		s.logger.Error("publish run preview", "run_id", runID, "error", err)
-		s.appendEvent(ctx, model.Event{RunID: runID, SourceIssueID: run.SourceIssueID, Type: "preview.failed",
-			Level: "warning", Message: "Preview could not be published: " + err.Error()})
+		// Publication can consume its entire deadline after an ambiguous durable
+		// write. Reconciliation must not inherit that expired context or it cannot
+		// replace a capability whose broker target was removed on the error path.
+		failureCtx, cancelFailure := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancelFailure()
+		failed, recordErr := manager.RecordFailure(failureCtx, runID, run.PreviewPort)
+		if recordErr != nil {
+			s.logger.Error("record preview publication failure", "run_id", runID, "error", recordErr)
+		}
+		if failed {
+			s.appendEvent(failureCtx, model.Event{RunID: runID, SourceIssueID: run.SourceIssueID, Type: "preview.failed",
+				Level: "warning", Message: "Preview could not be published: " + err.Error()})
+		}
 		return
 	}
 	s.appendEvent(ctx, model.Event{RunID: runID, SourceIssueID: run.SourceIssueID, Type: "preview.published",
@@ -86,6 +100,10 @@ func (s *Server) publishPreview(runID string) {
 		s.logger.Error("post preview link to Linear", "run_id", runID, "error", err)
 	}
 	s.broker.Notify()
+}
+
+func previewPublishable(run model.Run) bool {
+	return run.State == "completed" && run.PreviewState == "ready" && run.PreviewPort > 0 && run.SandboxID != ""
 }
 
 // syncLinearPreview upserts a marker-keyed preview comment on the run's

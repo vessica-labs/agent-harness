@@ -27,8 +27,15 @@ type Manager struct {
 	MaxAge    time.Duration
 	Logger    *slog.Logger
 
-	mu          sync.Mutex
-	lastPersist map[string]time.Time
+	publishMu    sync.Mutex
+	publishLocks map[string]*publicationLock
+	mu           sync.Mutex
+	lastPersist  map[string]time.Time
+}
+
+type publicationLock struct {
+	mu    sync.Mutex
+	users int
 }
 
 func NewManager(st store.Store, forwarder sandbox.Forwarder, broker *Broker, publicURL string, ttl, maxAge time.Duration, logger *slog.Logger) *Manager {
@@ -40,7 +47,7 @@ func NewManager(st store.Store, forwarder sandbox.Forwarder, broker *Broker, pub
 	}
 	manager := &Manager{Store: st, Forwarder: forwarder, Broker: broker,
 		PublicURL: strings.TrimRight(strings.TrimSpace(publicURL), "/"),
-		TTL:       ttl, MaxAge: maxAge, Logger: logger, lastPersist: map[string]time.Time{}}
+		TTL:       ttl, MaxAge: maxAge, Logger: logger, publishLocks: map[string]*publicationLock{}, lastPersist: map[string]time.Time{}}
 	broker.SetActivityCallback(manager.recordActivity)
 	return manager
 }
@@ -54,9 +61,20 @@ func (m *Manager) Enabled() bool {
 // persists the published preview on the run. The run must already carry the
 // preview port reported by the worker.
 func (m *Manager) Publish(ctx context.Context, run model.Run) (string, error) {
+	unlock := m.lockPublication(run.ID)
+	defer unlock()
+
 	if !m.Enabled() {
 		return "", fmt.Errorf("previews are not configured on this control plane")
 	}
+	stored, err := m.Store.GetRun(ctx, run.ID)
+	if err != nil {
+		return "", err
+	}
+	if stored.PreviewState == "published" && stored.PreviewURL != "" && m.Broker.Registered(run.ID) {
+		return stored.PreviewURL, nil
+	}
+	run = stored
 	if run.SandboxID == "" || run.PreviewPort <= 0 {
 		return "", fmt.Errorf("run has no sandbox preview to publish")
 	}
@@ -85,6 +103,50 @@ func (m *Manager) Publish(ctx context.Context, run model.Run) (string, error) {
 		return "", err
 	}
 	return publicURL, nil
+}
+
+// RecordFailure projects a publication failure without overwriting a preview
+// that a concurrent trigger already published successfully.
+func (m *Manager) RecordFailure(ctx context.Context, runID string, port int) (bool, error) {
+	unlock := m.lockPublication(runID)
+	defer unlock()
+
+	stored, err := m.Store.GetRun(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	if stored.PreviewState == "published" && m.Broker.Registered(runID) {
+		return false, nil
+	}
+	if stored.PreviewPort > 0 {
+		port = stored.PreviewPort
+	}
+	if err := m.Store.SetPreview(ctx, runID, "failed", "", port, nil); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (m *Manager) lockPublication(runID string) func() {
+	m.publishMu.Lock()
+	lock := m.publishLocks[runID]
+	if lock == nil {
+		lock = &publicationLock{}
+		m.publishLocks[runID] = lock
+	}
+	lock.users++
+	m.publishMu.Unlock()
+
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		m.publishMu.Lock()
+		lock.users--
+		if lock.users == 0 && m.publishLocks[runID] == lock {
+			delete(m.publishLocks, runID)
+		}
+		m.publishMu.Unlock()
+	}
 }
 
 // Expire removes the broker target, stops the forward, and marks the run's

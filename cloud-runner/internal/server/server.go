@@ -871,10 +871,13 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 	} else if value.Type == "pipeline.stage" || value.Type == "stage.started" || value.Type == "stage.completed" || value.Type == "stage.retrying" {
 		state := map[string]string{"pipeline.stage": "pending", "stage.started": "running", "stage.completed": "completed", "stage.retrying": "pending"}[value.Type]
 		details := value.Payload
-		if value.Type != "pipeline.stage" {
-			details = s.mergeStageDetails(r.Context(), runID, value.Stage, value.Payload)
-		}
 		stage := model.StageState{RunID: runID, Stage: value.Stage, State: state, Details: details}
+		if value.Type == "pipeline.stage" {
+			stage = preserveRegisteredStage(r.Context(), s.store, stage)
+		} else {
+			details = s.mergeStageDetails(r.Context(), runID, value.Stage, value.Payload)
+			stage.Details = details
+		}
 		if value.Type == "stage.started" {
 			stage.StartedAt = &stored.CreatedAt
 			_ = s.store.SetRunState(r.Context(), runID, "running", value.Stage, "")
@@ -903,12 +906,23 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 		if json.Unmarshal(value.Payload, &payload) == nil {
 			_ = s.store.SetDelivery(r.Context(), runID, payload.Branch, payload.URL)
 		}
-	} else if value.Type == "preview.ready" {
+	} else if value.Type == "preview.starting" || value.Type == "preview.ready" {
 		var payload struct {
 			Port int `json:"port"`
 		}
 		if json.Unmarshal(value.Payload, &payload) == nil && payload.Port > 0 {
-			_ = s.store.SetPreview(r.Context(), runID, "ready", "", payload.Port, nil)
+			previewState := "starting"
+			if value.Type == "preview.ready" {
+				previewState = "ready"
+			}
+			_ = s.store.SetPreview(r.Context(), runID, previewState, "", payload.Port, nil)
+			if previewState == "ready" {
+				go s.publishPreview(runID)
+			}
+		}
+	} else if value.Type == "preview.failed" {
+		if run, getErr := s.store.GetRun(r.Context(), runID); getErr == nil {
+			_ = s.store.SetPreview(r.Context(), runID, "failed", "", run.PreviewPort, nil)
 		}
 	}
 	if shouldSyncLinearLifecycleEvent(value.Type) {
@@ -918,6 +932,23 @@ func (s *Server) internalEvent(w http.ResponseWriter, r *http.Request, runID str
 		}
 	}
 	writeJSON(w, http.StatusCreated, stored)
+}
+
+func preserveRegisteredStage(ctx context.Context, values store.Store, registered model.StageState) model.StageState {
+	stages, err := values.ListStages(ctx, registered.RunID)
+	if err != nil {
+		return registered
+	}
+	for _, existing := range stages {
+		if existing.Stage != registered.Stage {
+			continue
+		}
+		// pipeline.stage declares repository-owned structure. Replaying that
+		// declaration after journal restore must not downgrade durable execution
+		// state or discard its timestamps and attempt counter.
+		return existing
+	}
+	return registered
 }
 
 func (s *Server) mergeStageDetails(ctx context.Context, runID, stage string, incoming json.RawMessage) json.RawMessage {

@@ -37,6 +37,42 @@ func testTeamToken(t *testing.T, memory *store.Memory, box *secure.Box, role str
 	return token
 }
 
+func TestPipelineStageRegistrationPreservesDurableExecutionState(t *testing.T) {
+	ctx := context.Background()
+	memory := store.NewMemory()
+	started := time.Now().UTC().Add(-time.Minute)
+	completed := time.Now().UTC()
+	existing := model.StageState{
+		RunID:       "run-resumed",
+		Stage:       "product",
+		State:       "completed",
+		Attempt:     2,
+		Details:     json.RawMessage(`{"summary":"validated"}`),
+		StartedAt:   &started,
+		CompletedAt: &completed,
+	}
+	if err := memory.PutStage(ctx, existing); err != nil {
+		t.Fatal(err)
+	}
+
+	registered := model.StageState{
+		RunID:   existing.RunID,
+		Stage:   existing.Stage,
+		State:   "pending",
+		Details: json.RawMessage(`{"order":0}`),
+	}
+	got := preserveRegisteredStage(ctx, memory, registered)
+	if got.State != "completed" || got.Attempt != 2 || got.StartedAt == nil || got.CompletedAt == nil ||
+		string(got.Details) != string(existing.Details) {
+		t.Fatalf("replayed registration downgraded stage: %+v", got)
+	}
+
+	newStage := preserveRegisteredStage(ctx, memory, model.StageState{RunID: existing.RunID, Stage: "arch", State: "pending"})
+	if newStage.State != "pending" || newStage.Stage != "arch" {
+		t.Fatalf("new registration was not preserved: %+v", newStage)
+	}
+}
+
 func TestDelegatedAgentSessionDispatchesAndAcknowledgesNatively(t *testing.T) {
 	ctx := context.Background()
 	memory := store.NewMemory()
@@ -192,6 +228,22 @@ func TestIssueWebhookDoesNotDispatchAndManagementIsProtected(t *testing.T) {
 	measured, _ := memory.GetRun(ctx, runs[0].ID)
 	if measured.CodexModel != "gpt-5.3-codex" || measured.InputTokens != 120 || measured.EstimatedCostUSD != 0.001 {
 		t.Fatalf("usage event was not projected: %+v", measured)
+	}
+	if err := memory.SetPreview(ctx, runs[0].ID, "starting", "", 4173, nil); err != nil {
+		t.Fatal(err)
+	}
+	previewFailedBody := bytes.NewBufferString(`{"type":"preview.failed","level":"warning","message":"health check timed out","payload":{"error":"timeout"}}`)
+	previewFailedRequest, _ := http.NewRequest(http.MethodPost, host.URL+"/internal/v1/runs/"+runs[0].ID+"/events", previewFailedBody)
+	previewFailedRequest.Header.Set("Authorization", "Bearer "+capability)
+	previewFailedRequest.Header.Set("Content-Type", "application/json")
+	previewFailedResponse, err := http.DefaultClient.Do(previewFailedRequest)
+	if err != nil || previewFailedResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("preview failure projection failed: %v status=%v", err, previewFailedResponse.StatusCode)
+	}
+	previewFailedResponse.Body.Close()
+	failedPreview, _ := memory.GetRun(ctx, runs[0].ID)
+	if failedPreview.PreviewState != "failed" || failedPreview.PreviewPort != 4173 {
+		t.Fatalf("preview failure was not durably projected: %+v", failedPreview)
 	}
 	pausedBody := bytes.NewBufferString(`{"stage":"coder","type":"run.paused","level":"error","message":"dependency contract failed"}`)
 	pausedRequest, _ := http.NewRequest(http.MethodPost, host.URL+"/internal/v1/runs/"+runs[0].ID+"/events", pausedBody)
