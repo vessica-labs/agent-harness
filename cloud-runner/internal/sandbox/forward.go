@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -20,10 +21,19 @@ type Forwarder interface {
 
 const forwardOutputLimit = 64 << 10
 
+var railwaySSHIdentityMu sync.Mutex
+
 // Forward runs Railway's native loopback forward. The Railway CLI handles
 // ordinary relay reconnects internally; if that process eventually exits, the
 // supervisor restarts it on the same local port with bounded backoff.
 func (r RailwayCLI) Forward(ctx context.Context, id string, remotePort int) (string, func(), error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", nil, fmt.Errorf("locate home for Railway sandbox SSH identity: %w", err)
+	}
+	if err := ensureRailwaySSHIdentity(ctx, home, "ssh-keygen"); err != nil {
+		return "", nil, err
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", nil, fmt.Errorf("reserve Railway forward port: %w", err)
@@ -51,6 +61,43 @@ func (r RailwayCLI) Forward(ctx context.Context, id string, remotePort int) (str
 		return "", nil, fmt.Errorf("railway sandbox forward: %w: %s", err, output.String())
 	}
 	return localURL, stop, nil
+}
+
+// ensureRailwaySSHIdentity creates an ephemeral, per-control-plane SSH key on
+// first use. Railway's sandbox forward command requires a local identity even
+// when the CLI itself is authenticated with an API token. Generating it at
+// runtime keeps private key material out of the container image and source.
+func ensureRailwaySSHIdentity(ctx context.Context, home, binary string) error {
+	railwaySSHIdentityMu.Lock()
+	defer railwaySSHIdentityMu.Unlock()
+
+	sshDir := filepath.Join(home, ".ssh")
+	identity := filepath.Join(sshDir, "id_ed25519")
+	if info, err := os.Stat(identity); err == nil {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("Railway sandbox SSH identity is not a regular file: %s", identity)
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect Railway sandbox SSH identity: %w", err)
+	}
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		return fmt.Errorf("create Railway sandbox SSH directory: %w", err)
+	}
+	if err := os.Chmod(sshDir, 0o700); err != nil {
+		return fmt.Errorf("secure Railway sandbox SSH directory: %w", err)
+	}
+	if binary == "" {
+		binary = "ssh-keygen"
+	}
+	output, err := exec.CommandContext(ctx, binary, "-q", "-t", "ed25519", "-N", "", "-f", identity).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("generate Railway sandbox SSH identity: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	if err := os.Chmod(identity, 0o600); err != nil {
+		return fmt.Errorf("secure Railway sandbox SSH identity: %w", err)
+	}
+	return nil
 }
 
 func (r RailwayCLI) superviseForward(ctx context.Context, done chan<- struct{}, output *boundedTailBuffer, id string, args []string) {
