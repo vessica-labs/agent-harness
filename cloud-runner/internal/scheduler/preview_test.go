@@ -113,6 +113,60 @@ func TestStartingPreviewRetainsSandboxThroughHealthcheckWindow(t *testing.T) {
 	}
 }
 
+func TestStaleStartingPreviewIsMarkedFailed(t *testing.T) {
+	ctx := context.Background()
+	memory := store.NewMemory()
+	run := seedCompletedRun(t, memory)
+	if err := memory.SetPreview(ctx, run.ID, "starting", "", 3000, nil); err != nil {
+		t.Fatal(err)
+	}
+	provider := &fakeProvider{}
+	scheduler := newTestScheduler(memory, provider)
+	current, _ := memory.GetRun(ctx, run.ID)
+	if scheduler.previewAliveAt(ctx, current, current.UpdatedAt.Add(4*time.Minute)) {
+		t.Fatal("stale starting preview must not retain its sandbox")
+	}
+	stored, _ := memory.GetRun(ctx, run.ID)
+	if stored.PreviewState != "failed" {
+		t.Fatalf("stale preview state = %q, want failed", stored.PreviewState)
+	}
+}
+
+func TestCompletedRunWithoutSandboxQuarantinesOrphanedAuthSlot(t *testing.T) {
+	ctx := context.Background()
+	memory := store.NewMemory()
+	run := seedCompletedRun(t, memory)
+	if err := memory.SetPreview(ctx, run.ID, "starting", "", 3000, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.SetSandbox(ctx, run.ID, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.PutAuthSlot(ctx, model.AuthSlot{ID: "codex-orphan", State: "available", Ciphertext: []byte("auth")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.LeaseAuthSlots(ctx, run.ID, 1, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.SetAuthSlot(ctx, run.ID, "codex-orphan"); err != nil {
+		t.Fatal(err)
+	}
+
+	scheduler := newTestScheduler(memory, &fakeProvider{})
+	scheduler.cleanupTerminal(ctx)
+	slots, err := memory.ListAuthSlots(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(slots) != 1 || slots[0].State != "quarantined" || slots[0].LeaseRunID != "" {
+		t.Fatalf("orphaned auth slot = %+v", slots)
+	}
+	stored, _ := memory.GetRun(ctx, run.ID)
+	if stored.PreviewState != "failed" {
+		t.Fatalf("orphaned preview state = %q, want failed", stored.PreviewState)
+	}
+}
+
 func TestExpiredPreviewIsTornDownAndSandboxDestroyed(t *testing.T) {
 	ctx := context.Background()
 	memory := store.NewMemory()

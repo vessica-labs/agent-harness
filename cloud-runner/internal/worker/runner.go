@@ -86,15 +86,7 @@ func (r *Runner) Run(ctx context.Context) (runErr error) {
 		}
 		returnCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		for _, session := range r.codexSessions {
-			auth, err := os.ReadFile(filepath.Join(session.home, "auth.json"))
-			if err != nil {
-				auth = session.auth
-			}
-			if err := r.client.returnAuth(returnCtx, session.id, auth, authError); err != nil {
-				r.logger.Error("return Codex auth slot", "slot", session.id, "error", err)
-			}
-		}
+		r.returnCodexSessions(returnCtx, authError)
 	}()
 	heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)
 	defer stopHeartbeat()
@@ -189,6 +181,12 @@ func (r *Runner) Run(ctx context.Context) (runErr error) {
 		return err
 	}
 	completionErr := r.event(ctx, "run.completed", "info", "Pipeline completed and produced a draft pull request", "", nil)
+	// A completed pipeline no longer needs its Codex credential. Return it before
+	// best-effort preview startup so a stuck application launch cannot strand the
+	// slot when terminal sandbox cleanup eventually destroys the worker.
+	returnCtx, cancelReturn := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	r.returnCodexSessions(returnCtx, "")
+	cancelReturn()
 	// Preview startup is best effort and may wait for an application healthcheck.
 	// Publish the terminal run event first so preview readiness cannot hold the
 	// completed pipeline lease open or block dependency-gated work. Still attempt
@@ -196,6 +194,23 @@ func (r *Runner) Run(ctx context.Context) (runErr error) {
 	// have durably accepted the event before an external lifecycle sync failed.
 	r.startPreview(context.WithoutCancel(ctx))
 	return completionErr
+}
+
+// returnCodexSessions returns every credential it can and retains only failed
+// sessions for the deferred retry at worker shutdown.
+func (r *Runner) returnCodexSessions(ctx context.Context, authError string) {
+	remaining := make([]runtimeCodexSession, 0, len(r.codexSessions))
+	for _, session := range r.codexSessions {
+		auth, err := os.ReadFile(filepath.Join(session.home, "auth.json"))
+		if err != nil {
+			auth = session.auth
+		}
+		if err := r.client.returnAuth(ctx, session.id, auth, authError); err != nil {
+			r.logger.Error("return Codex auth slot", "slot", session.id, "error", err)
+			remaining = append(remaining, session)
+		}
+	}
+	r.codexSessions = remaining
 }
 
 func (r *Runner) executeStageWithRetries(ctx context.Context, stage Stage) error {

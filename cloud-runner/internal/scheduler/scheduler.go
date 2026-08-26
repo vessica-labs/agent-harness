@@ -347,6 +347,13 @@ func (s *Scheduler) cleanupTerminal(ctx context.Context) {
 			continue
 		}
 		for _, run := range runs {
+			if run.SandboxID == "" {
+				if run.PreviewState == "starting" || run.PreviewState == "ready" {
+					s.failStalePreview(ctx, run, "Preview sandbox ended before publication completed")
+				}
+				s.quarantineOrphanedAuthSlots(ctx, run, "terminal run has no sandbox and Codex auth was not returned")
+				continue
+			}
 			grace := time.Minute
 			if state == "completed" {
 				// Preview health checks may take up to two minutes after the terminal
@@ -357,7 +364,7 @@ func (s *Scheduler) cleanupTerminal(ctx context.Context) {
 			if state == "awaiting_input" {
 				grace = 15 * time.Second
 			}
-			if run.SandboxID == "" || (state != "cancelled" && time.Since(run.UpdatedAt) < grace) {
+			if state != "cancelled" && time.Since(run.UpdatedAt) < grace {
 				continue
 			}
 			if state == "completed" && s.previewAlive(ctx, run) {
@@ -367,11 +374,11 @@ func (s *Scheduler) cleanupTerminal(ctx context.Context) {
 				s.logger.Warn("destroy terminal sandbox", "run_id", run.ID, "error", err)
 				continue
 			}
+			authReason := "terminal sandbox destroyed before Codex auth return"
 			if state == "cancelled" {
-				for _, slotID := range splitSlotIDs(run.AuthSlotID) {
-					_ = s.store.QuarantineAuthSlot(ctx, slotID, run.ID, "run cancelled before auth return")
-				}
+				authReason = "run cancelled before auth return"
 			}
+			s.quarantineOrphanedAuthSlots(ctx, run, authReason)
 			_ = s.store.SetSandbox(ctx, run.ID, "", "")
 			message := "Terminal run sandbox destroyed"
 			if state == "awaiting_input" {
@@ -386,16 +393,28 @@ func (s *Scheduler) cleanupTerminal(ctx context.Context) {
 // not expired. Expired previews are torn down here so the sandbox destroy
 // below proceeds on this same pass.
 func (s *Scheduler) previewAlive(ctx context.Context, run model.Run) bool {
+	return s.previewAliveAt(ctx, run, time.Now())
+}
+
+func (s *Scheduler) previewAliveAt(ctx context.Context, run model.Run, now time.Time) bool {
 	switch run.PreviewState {
 	case "starting":
 		// The worker may spend up to two minutes waiting for application health.
-		return time.Since(run.UpdatedAt) < 3*time.Minute
+		if now.Sub(run.UpdatedAt) < 3*time.Minute {
+			return true
+		}
+		s.failStalePreview(ctx, run, "Preview startup exceeded the terminal cleanup grace period")
+		return false
 	case "ready":
 		// The worker reported a preview but the control plane has not published
 		// it yet; give publication a chance before destroying the sandbox.
-		return time.Since(run.UpdatedAt) < 5*time.Minute
+		if now.Sub(run.UpdatedAt) < 5*time.Minute {
+			return true
+		}
+		s.failStalePreview(ctx, run, "Preview publication exceeded the terminal cleanup grace period")
+		return false
 	case "published":
-		if run.PreviewExpiresAt != nil && time.Now().Before(*run.PreviewExpiresAt) {
+		if run.PreviewExpiresAt != nil && now.Before(*run.PreviewExpiresAt) {
 			if err := s.sandbox.Heartbeat(ctx, run.SandboxID); err != nil {
 				s.logger.Warn("preview sandbox heartbeat failed", "run_id", run.ID, "sandbox_id", run.SandboxID, "error", err)
 			}
@@ -409,6 +428,23 @@ func (s *Scheduler) previewAlive(ctx context.Context, run model.Run) bool {
 		return false
 	}
 	return false
+}
+
+func (s *Scheduler) failStalePreview(ctx context.Context, run model.Run, message string) {
+	if err := s.store.SetPreview(ctx, run.ID, "failed", "", run.PreviewPort, nil); err != nil {
+		s.logger.Warn("mark stale preview failed", "run_id", run.ID, "error", err)
+		return
+	}
+	s.event(ctx, model.Event{RunID: run.ID, SourceIssueID: run.SourceIssueID, SandboxID: run.SandboxID,
+		Type: "preview.failed", Level: "warning", Message: message})
+}
+
+func (s *Scheduler) quarantineOrphanedAuthSlots(ctx context.Context, run model.Run, reason string) {
+	for _, slotID := range splitSlotIDs(run.AuthSlotID) {
+		if err := s.store.QuarantineAuthSlot(ctx, slotID, run.ID, reason); err != nil && !errors.Is(err, store.ErrNotFound) {
+			s.logger.Warn("quarantine orphaned auth slot", "run_id", run.ID, "slot_id", slotID, "error", err)
+		}
+	}
 }
 
 func (s *Scheduler) pause(ctx context.Context, run model.Run, eventType, message string) {

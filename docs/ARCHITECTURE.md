@@ -107,7 +107,7 @@ Loop: `ClaimNextRun` → for each claim, `launch()`:
 6. pick toolchain or repo-specific checkpoint (`HARNESS_SANDBOX_CHECKPOINT`, `HARNESS_REPOSITORY_CHECKPOINTS`);
 7. create Railway sandbox, start worker detached, record sandbox identity.
 
-Recovery: reconcile running runs, heartbeat sandbox + lease, detect startup timeout, requeue when the sandbox is lost, quarantine auth slots lost before return, destroy terminal sandboxes after a grace period and awaiting-input sandboxes after 15s.
+Recovery: reconcile running runs, heartbeat sandbox + lease, detect startup timeout, requeue when the sandbox is lost, quarantine auth slots lost before return, destroy terminal sandboxes after a grace period and awaiting-input sandboxes after 15s. Terminal cleanup also quarantines any credential still leased after its sandbox disappears and marks stale `starting`/`ready` preview projections failed before teardown.
 
 ## 7. Sandbox bootstrap (`internal/sandbox/railway.go`)
 
@@ -115,7 +115,7 @@ Writes a 0600 env file, `railway sandbox create --json` (optionally with a check
 
 ## 8. Worker (`internal/worker`)
 
-`runner.go Run()`: emit `worker.starting` → prepare filesystem → get just-in-time GitHub token → checkout (with public fallback) → load `.harness/pipeline.yaml` → `restoreOrInitialize` (download journal tarball, restore branch) → register stages → `run.started` → execute stages in order (skipping already-completed ones, refusing to run when dependencies are unmet) → `run.completed` → best-effort preview startup. Replayed `pipeline.stage` declarations preserve durable stage execution state, and terminal completion is published before preview health checks so a preview cannot hold dependency-gated work open. Preview publication is convergence-safe: both `run.completed` and `preview.ready` retry the same marker-based publication, which proceeds only after the run is completed and a healthy sandbox port is recorded.
+`runner.go Run()`: emit `worker.starting` → prepare filesystem → get just-in-time GitHub token → checkout (with public fallback) → load `.harness/pipeline.yaml` → `restoreOrInitialize` (download journal tarball, restore branch) → register stages → `run.started` → execute stages in order (skipping already-completed ones, refusing to run when dependencies are unmet) → `run.completed` → return the Codex auth slot → bounded best-effort preview startup. Replayed `pipeline.stage` declarations preserve durable stage execution state, and terminal completion plus credential return happen before preview health checks so a preview cannot hold dependency-gated work or an auth slot open. Preview publication is convergence-safe: both `run.completed` and `preview.ready` retry the same marker-based publication, which proceeds only after the run is completed and a healthy sandbox port is recorded.
 
 - **Retries**: single stages receive up to 3 attempts; repair/input/policy errors and cancellation are not retried. Ticket-parallel stages instead retry only failed logical tickets from durable per-ticket results. An agent-declared blocker is terminal, and an identical blocker on the same failed tickets stops after the second attempt; other transient failures may use up to 3 ticket attempts. Retry and stop events include the failed keys and preserved blockers.
 - **Repair loops** (`repair.go`) honor `max_reentries` from YAML (default: qa → coder through qa, 2) and recover a validated QA `requeue` result from a blocked checkpoint before starting a new QA invocation.
