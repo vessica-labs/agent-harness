@@ -16,6 +16,11 @@ type previewConfig struct {
 	Healthcheck string `json:"healthcheck"`
 }
 
+const (
+	previewHealthcheckTimeout = 2 * time.Minute
+	previewStartupTimeout     = previewHealthcheckTimeout + 30*time.Second
+)
+
 // previewFromConfig reads the optional preview section of the repository's
 // .harness/config.yaml through harnessctl. A nil result means the repository
 // does not opt into previews.
@@ -41,6 +46,8 @@ func (r *Runner) previewFromConfig(ctx context.Context) (*previewConfig, error) 
 // Preview startup is best effort: failures are reported but never fail a run
 // that already produced its draft pull request.
 func (r *Runner) startPreview(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, previewStartupTimeout)
+	defer cancel()
 	config, err := r.previewFromConfig(ctx)
 	if err != nil {
 		_ = r.event(ctx, "preview.failed", "warning", "Could not read preview configuration", "", map[string]any{"error": err.Error()})
@@ -63,7 +70,7 @@ func (r *Runner) startPreview(ctx context.Context) {
 	if healthcheck == "" {
 		healthcheck = "/"
 	}
-	if err := waitForPreview(ctx, fmt.Sprintf("http://127.0.0.1:%d%s", config.Port, healthcheck), 2*time.Minute); err != nil {
+	if err := waitForPreview(ctx, fmt.Sprintf("http://127.0.0.1:%d%s", config.Port, healthcheck), previewHealthcheckTimeout); err != nil {
 		_ = r.event(ctx, "preview.failed", "warning", "Preview application did not become healthy", "", map[string]any{"error": err.Error(), "port": config.Port})
 		return
 	}

@@ -4,11 +4,52 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestReturnCodexSessionsRetainsOnlyFailedReturns(t *testing.T) {
+	var returned []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		var input struct {
+			SlotID string `json:"slot_id"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+			t.Fatal(err)
+		}
+		if input.SlotID == "codex-failed" {
+			http.Error(w, "try again", http.StatusServiceUnavailable)
+			return
+		}
+		returned = append(returned, input.SlotID)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	runner := &Runner{
+		client: newControlClient(Config{ControlURL: server.URL, RunID: "run-1", Capability: "capability"}),
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		codexSessions: []runtimeCodexSession{
+			{id: "codex-returned", home: t.TempDir(), auth: []byte(`{"slot":"returned"}`)},
+			{id: "codex-failed", home: t.TempDir(), auth: []byte(`{"slot":"failed"}`)},
+		},
+	}
+	runner.returnCodexSessions(context.Background(), "")
+
+	if len(returned) != 1 || returned[0] != "codex-returned" {
+		t.Fatalf("returned sessions = %v", returned)
+	}
+	if len(runner.codexSessions) != 1 || runner.codexSessions[0].id != "codex-failed" {
+		t.Fatalf("remaining sessions = %+v", runner.codexSessions)
+	}
+}
 
 func TestGitCommitAlreadyIntegrated(t *testing.T) {
 	repo := t.TempDir()
