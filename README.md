@@ -14,6 +14,14 @@ For the complete product, setup, workflow, operations, security, recovery, and C
 
 The checked-in `.harness/pipeline.yaml` is always the workflow authority. The cloud runner does not hard-code the product, architecture, coding, lint, QA, documentation, or pull-request stages.
 
+New installations start with a seven-stage pipeline:
+
+```text
+product -> arch -> coder -> lint -> qa -> docs -> pr
+```
+
+The documentation stage runs after QA, updates repository documentation and the accepted-ADR index from the verified implementation, and must complete before the draft pull request is prepared. Existing repositories continue to run their own checked-in pipeline.
+
 ## Quick start with Codex
 
 ### 1. Install the required CLIs
@@ -58,7 +66,7 @@ Download a release binary from [GitHub Releases](https://github.com/vessica-labs
 mkdir -p "$HOME/.local/bin"
 
 # Apple Silicon macOS
-curl -fL https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.37/agent-harness-darwin-arm64 \
+curl -fL https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.45/agent-harness-darwin-arm64 \
   -o "$HOME/.local/bin/agent-harness"
 
 # Intel macOS: use agent-harness-darwin-amd64
@@ -193,7 +201,7 @@ export RAILWAY_API_TOKEN='<enter privately>'
 agent-harness railway upgrade \
   --project <railway-project-id> \
   --environment production \
-  --version v0.1.0-rc.37
+  --version v0.1.0-rc.45
 
 agent-harness railway init \
   --project <railway-project-id> \
@@ -201,7 +209,7 @@ agent-harness railway init \
   --service control-plane \
   --postgres-service Postgres \
   --url https://<control-plane-domain> \
-  --checkpoint agent-harness-worker-0.1.0-rc.37 \
+  --checkpoint agent-harness-worker-0.1.0-rc.45 \
   --profile <repository-profile>
 
 agent-harness railway deploy \
@@ -235,7 +243,7 @@ Run the guided GitHub App manifest flow:
 agent-harness cloud auth github --manifest-owner <github-owner>
 ```
 
-Approve the app and install it only on repositories the runner is allowed to modify. The app requests Metadata read, Contents write, and Pull Requests write, and configures a signed pull-request webhook at `/webhooks/github`. Record the installation ID for repository registration.
+Approve the app and install it only on repositories the runner is allowed to modify. The app requests Metadata read plus Contents, Pull Requests, and Workflows write, and configures a signed pull-request webhook at `/webhooks/github`. The Workflows permission is required when a run adds or updates files under `.github/workflows/`. Record the installation ID for repository registration.
 
 To add merge tracking to an existing Agent Harness GitHub App without replacing its App ID, private key, or installations, deploy the current control plane and run:
 
@@ -392,7 +400,7 @@ agent-harness ui
 ```
 
 The UI binds to `127.0.0.1` and streams authenticated events without exposing device credentials to browser JavaScript. Its top-level **Inbox** lists open Product and Architecture questions; operators can select the recommended or alternate choice, provide free text, and atomically queue the checkpointed run. The remaining **Runs** surface is read-only. For owners and administrators, the **Team** view can issue one-time invitation links, change non-owner roles, revoke members, invitations, or devices, and inspect authentication history.
-Selecting a pipeline run filters the event stream to that run. Run details include duration, model, token counts, and estimated API-equivalent token cost; Playwright execution in Railway sandboxes is resource-capped without reducing the number of independent ticket pipelines.
+Selecting a pipeline run filters the event stream to that run. Run details include duration, model, token counts, estimated API-equivalent token cost, and live-preview state when configured; Playwright execution in Railway sandboxes is resource-capped without reducing the number of independent ticket pipelines.
 
 Only Product and Architecture may request human input, and each may do so once. The runner uploads the journal, records the request, exits the disposable sandbox without retrying, moves Linear to **Needs Input**, and accepts the first answer from either the Inbox or a reply to the exact question thread. Answers accepted through the web UI or another non-Linear channel such as Slack are recorded in one idempotent Linear comment; an answer posted in Linear is already present there and is not copied. All later stages are prompt- and runtime-constrained from waiting for a user.
 
@@ -405,6 +413,19 @@ agent-harness cloud runs export <run-id> --repo /path/to/repository
 ```
 
 `resume` accepts paused runs and never-started cancelled runs that still carry a `dependencies_pending` queue reason. It does not reopen completed runs or ordinary operator cancellations.
+
+### Optional live previews
+
+A repository can opt into a live preview after its draft pull request is created:
+
+```yaml
+preview:
+  command: npm run dev
+  port: 3000
+  healthcheck: /health
+```
+
+The control plane also needs a deployed `preview-edge` service configured by `agent-harness railway init --preview-url https://<preview-edge-domain>`. A published capability link appears in Run Detail and on the Linear parent issue. Agent Harness marks the run complete and returns its Codex authentication slot before starting the preview, so a failed preview does not fail an otherwise completed pipeline. Published previews keep their sandbox only for the configured sliding inactivity window (one hour by default, with a four-hour absolute maximum); expiry or terminal cleanup removes the forward and sandbox.
 
 ### Local execution from Codex
 
@@ -453,7 +474,7 @@ make release
 ```
 
 Both commands inspect the release-candidate tags on `origin` and select the next
-RC on the newest version line, such as `v0.1.0-rc.38` after `v0.1.0-rc.37`.
+RC on the newest version line, such as `v0.1.0-rc.46` after `v0.1.0-rc.45`.
 `release-check` is read-only with respect to GitHub and Railway. `release` reruns
 verification, pushes `main` and the selected version tag, waits for GitHub
 Actions to publish all release assets and the GHCR image, creates the matching
@@ -470,9 +491,9 @@ make release VERSION=v0.2.0-rc.1
 Each external stage is also independently resumable:
 
 ```sh
-make publish VERSION=v0.1.0-rc.27
-make checkpoint VERSION=v0.1.0-rc.27
-make deploy-production VERSION=v0.1.0-rc.27
+make publish VERSION=v0.1.0-rc.45
+make checkpoint VERSION=v0.1.0-rc.45
+make deploy-production VERSION=v0.1.0-rc.45
 make production-status
 ```
 

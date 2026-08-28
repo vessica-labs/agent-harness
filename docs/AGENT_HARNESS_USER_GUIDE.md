@@ -2,9 +2,9 @@
 title: Agent Harness User Guide
 description: Install, configure, run, customize, monitor, and recover Agent Harness issue-to-pull-request workflows.
 product: Agent Harness
-product_version: v0.1.0-rc.37
+product_version: v0.1.0-rc.45
 release_status: Release candidate
-last_verified: 2026-08-22
+last_verified: 2026-08-28
 ---
 
 # Agent Harness User Guide
@@ -13,7 +13,7 @@ Agent Harness is an editable, issue-to-pull-request software-development workflo
 
 This guide covers the complete user-facing Agent Harness platform: the Codex plugin, repository harness, local execution, Railway cloud runner, command-line interface, localhost dashboard, Linear, GitHub and Notion integrations, workflow customization, security, and recovery.
 
-> **Release status:** Agent Harness is currently a release candidate. These instructions were verified against `v0.1.0-rc.37`. Jira integration is coming soon and is not part of the supported workflow documented here.
+> **Release status:** Agent Harness is currently a release candidate. These instructions were verified against `v0.1.0-rc.45`. Jira integration is coming soon and is not part of the supported workflow documented here.
 
 ## Quickstart
 
@@ -39,7 +39,7 @@ Download Agent Harness for Apple Silicon macOS:
 ```sh
 mkdir -p "$HOME/.local/bin"
 curl -fL \
-  https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.37/agent-harness-darwin-arm64 \
+  https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.45/agent-harness-darwin-arm64 \
   -o "$HOME/.local/bin/agent-harness"
 chmod 0755 "$HOME/.local/bin/agent-harness"
 export PATH="$HOME/.local/bin:$PATH"
@@ -131,7 +131,7 @@ Local execution supports full or selected stages and remains under direct Codex 
 
 ## 1. What Agent Harness does
 
-Agent Harness combines flexible agent work with deterministic engineering controls. Codex agents perform product, architecture, coding, lint, QA, and delivery work. The orchestration layer determines what may run, which inputs are available, how parallel work is isolated, which outputs are valid, when remote systems may be updated, and where recovery resumes.
+Agent Harness combines flexible agent work with deterministic engineering controls. Codex agents perform product, architecture, coding, lint, QA, documentation, and delivery work. The orchestration layer determines what may run, which inputs are available, how parallel work is isolated, which outputs are valid, when remote systems may be updated, and where recovery resumes.
 
 The platform provides:
 
@@ -145,6 +145,7 @@ The platform provides:
 - GitHub App authentication, integration branches, and draft pull requests.
 - A Railway control plane and disposable sandbox workers.
 - A localhost dashboard with live activity, run details, ticket state, artifacts, and usage telemetry.
+- Optional capability-gated live previews for completed runs.
 - Explicit pause, clarification, resume, cancellation, reconciliation, export, and recovery operations.
 
 ### Core principles
@@ -245,7 +246,8 @@ For each runnable cloud issue, the scheduler creates a disposable Railway sandbo
 6. Uploads checkpoints throughout the run.
 7. Synchronizes Linear and Notion through the control plane.
 8. Returns updated Codex authentication material to its encrypted slot.
-9. Ends after completion, a durable input checkpoint, or pause; the control plane then destroys the sandbox.
+9. Marks terminal completion and returns the Codex authentication slot before any best-effort preview startup.
+10. Ends after a durable input checkpoint, pause, or non-preview terminal run; a published preview retains the sandbox only until its configured expiry.
 
 Sandboxes are disposable. The journal, pushed branch, and control-plane records are the recovery authorities.
 
@@ -283,7 +285,7 @@ In **cloud execution**, Agent Harness uses the configured Linear team's real wor
 - New child tickets are created directly in the team's Todo state.
 - A coder claim moves that child to In Progress.
 - A child moves to Done after its commit is integrated.
-- A failed child and a paused parent move to Needs Input so a stopped run cannot remain visually active.
+- Execution failures keep the failed child and paused parent in In Progress so unresolved work remains visible without misrepresenting it as a human question. Needs Input is reserved for a durable Product or Architecture request.
 - A completed pipeline with its pull request moves the parent to For Review.
 - A signed GitHub pull-request merge webhook moves the parent to Done.
 
@@ -344,13 +346,13 @@ GitHub, Linear, Notion, and Codex credentials are scoped to a control-plane inst
 
 ### Install a release binary
 
-Release assets are published for macOS and Linux on AMD64 and ARM64. This example installs `v0.1.0-rc.37` on Apple Silicon macOS:
+Release assets are published for macOS and Linux on AMD64 and ARM64. This example installs `v0.1.0-rc.45` on Apple Silicon macOS:
 
 ```sh
 mkdir -p "$HOME/.local/bin"
 
 curl -fL \
-  https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.37/agent-harness-darwin-arm64 \
+  https://github.com/vessica-labs/agent-harness/releases/download/v0.1.0-rc.45/agent-harness-darwin-arm64 \
   -o "$HOME/.local/bin/agent-harness"
 
 chmod 0755 "$HOME/.local/bin/agent-harness"
@@ -404,7 +406,7 @@ make release
 
 These commands read the RC tags from `origin` and automatically select the next
 number on the newest release-candidate version line. For example, an existing
-`v0.1.0-rc.37` produces `v0.1.0-rc.38`. Pass an explicit version to override the
+`v0.1.0-rc.45` produces `v0.1.0-rc.46`. Pass an explicit version to override the
 selection or start a new version line:
 
 ```sh
@@ -433,7 +435,7 @@ export RAILWAY_API_TOKEN='<enter privately>'
 agent-harness railway upgrade \
   --project <railway-project-id> \
   --environment production \
-  --version v0.1.0-rc.37
+  --version v0.1.0-rc.45
 
 agent-harness railway deploy \
   --project <railway-project-id> \
@@ -572,7 +574,7 @@ Create the worker checkpoint, configure the control plane, and deploy:
 agent-harness railway upgrade \
   --project <project-id> \
   --environment production \
-  --version v0.1.0-rc.37
+  --version v0.1.0-rc.45
 
 agent-harness railway init \
   --project <project-id> \
@@ -580,7 +582,7 @@ agent-harness railway init \
   --service control-plane \
   --postgres-service Postgres \
   --url https://<control-plane-domain> \
-  --checkpoint agent-harness-worker-0.1.0-rc.37 \
+  --checkpoint agent-harness-worker-0.1.0-rc.45 \
   --profile <repository-profile> \
   --preview-url https://<preview-edge-domain>
 
@@ -775,7 +777,7 @@ Archival requires explicit confirmation. Agent Harness refuses to archive a cano
 The current default pipeline is:
 
 ```text
-product -> arch -> coder -> lint -> qa -> pr
+product -> arch -> coder -> lint -> qa -> docs -> pr
 ```
 
 The pipeline is copied into the target repository during setup and is intended to be edited. The checked-in repository copy is authoritative for both local and cloud runs.
@@ -845,9 +847,15 @@ Safe, contained defects may be repaired and committed during QA. If the required
 
 Cloud workers preinstall the Playwright CLI and system Chromium, then cap Playwright at two workers by default to avoid exhausting sandbox process and thread limits. Repositories should declare their Playwright test dependency, read `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` and `HARNESS_PLAYWRIGHT_WORKERS` in Playwright configuration, or pass the worker value as `--workers`.
 
+### Documentation
+
+The default documentation stage runs after QA. It inspects the verified implementation, ticket commits, lint report, and criterion-level QA evidence; updates affected user, operator, contributor, API, security, deployment, and architecture documentation; copies the accepted run ADR into `.harness/adrs/accepted/`; and updates `.harness/adrs/INDEX.md` without rewriting historical records. It runs configured documentation checks, commits coherent documentation changes, and must leave a clean worktree.
+
+The stage does not generate a standalone human evidence pack or external Notion document by default. Teams may edit their checked-in pipeline and documentation contract, but the repository copy remains authoritative and any changed dependencies or file contracts must pass pipeline validation.
+
 ### Pull request
 
-The PR stage requires the declared PRD, ADR, ticket results, lint report, and QA evidence. It verifies that the integration worktree is clean, prepares the title and body, pushes the delivery branch, and creates or resolves the canonical draft GitHub pull request.
+The PR stage requires the declared PRD, ADR, ticket results, lint report, QA evidence, and documentation result. It verifies that the integration worktree is clean, prepares the title and body, pushes the delivery branch, and creates or resolves the canonical draft GitHub pull request.
 
 If a recovery run finds an already published base run branch, Agent Harness creates a distinct delivery branch rather than force-pushing over the existing remote branch.
 
@@ -863,12 +871,6 @@ The pull-request body summarizes:
 - Risks and follow-ups.
 
 Agent Harness never merges the pull request.
-
-### Optional documentation agent
-
-The repository includes a stable `.agents/docs.md` documentation-agent contract, but the documentation stage is **optional and is not included in the default pipeline**.
-
-Teams that want a dedicated documentation pass can add a stage to `.harness/pipeline.yaml`, declare its dependencies and file contracts, and reference `.agents/docs.md`. The custom pipeline must pass validation before use. The documentation agent should update repository documentation and return structured publishable documents without duplicating execution state owned by the journal.
 
 ## 10. Tickets, parallelism, and Git behavior
 
@@ -918,7 +920,7 @@ After the final failed attempt, the run pauses.
 
 ### QA repair loop
 
-The default pipeline allows QA to re-enter coder, continue through lint, and return to QA up to two times. Repair counts, new tickets, and completed work are persisted. If a run paused after QA produced a valid `requeue` result but before the loop was available, resuming after adding the matching loop consumes that checkpointed repair request without rerunning QA. QA runs normally after the coders finish so the repaired acceptance criteria are verified. Exceeding the configured limit pauses the run instead of looping indefinitely.
+The default pipeline allows QA to re-enter coder, continue through lint, and return to QA up to two times. Repair counts, new tickets, compact ticket contexts, provider child identities, and completed work are persisted. New repair tickets are synchronized to Linear before execution; interrupted progress synchronization is retried from durable state, and recovery rebuilds missing repair contexts without rerunning completed tickets. If a run paused after QA produced a valid `requeue` result but before the loop was available, resuming after adding the matching loop consumes that checkpointed repair request without rerunning QA. QA runs normally after the coders finish so the repaired acceptance criteria are verified. Exceeding the configured limit pauses the run instead of looping indefinitely.
 
 ## 12. Monitor runs
 
@@ -967,9 +969,9 @@ Inspection reports authoritative journal facts first, then differences in Linear
 
 ### Live previews
 
-When previews are configured (a repository `preview` block plus a deployed preview edge), a completed run keeps its sandbox alive and serves the application behind a capability link. The link appears on the Run Detail page and is upserted into the Linear parent issue next to the draft pull request. Opening the link exchanges the one-time `?cap=` token for an HTTP-only cookie and shows the application with an overlay badge identifying the run and pull request; the badge expands into a panel reserved for future interactive editing.
+When previews are configured (a repository `preview` block plus a deployed preview edge), the worker marks the run complete and returns its Codex authentication slot before starting the application with a bounded best-effort health check. A healthy preview keeps its sandbox alive and serves the application behind a capability link. The link appears on the Run Detail page and is upserted into the Linear parent issue next to the draft pull request. Opening the link exchanges the one-time `?cap=` token for an HTTP-only cookie and shows the application with an overlay badge identifying the run and pull request; the badge expands into a panel reserved for future interactive editing.
 
-Preview access uses a sliding one-hour inactivity window (each authorized request extends it) with an absolute cap, after which the forward is stopped and the sandbox is destroyed. The control plane restores live previews after a restart.
+Preview publication is convergence-safe across completion and readiness events, and the sandbox forward creates a runtime SSH identity only when one is absent while preserving an existing regular key. A preview startup or publication failure records `preview_state: failed` but does not change the completed pipeline result. Preview access uses a sliding one-hour inactivity window (each authorized request extends it) with a four-hour absolute cap, after which the forward is stopped and the sandbox is destroyed. The control plane restores published previews after a restart and terminal cleanup marks stale starting or ready projections failed before teardown.
 
 ## 13. Use the localhost dashboard
 
@@ -1076,7 +1078,7 @@ Cancellation is explicit and terminal. The scheduler destroys the sandbox and ma
 agent-harness cloud runs reconcile <run-id>
 ```
 
-Reconciliation re-applies Linear child and parent workflow states and stage activity from durable ticket/run truth. It also restores known Notion hub and artifact pages that were archived. It does not rerun agent stages or create a new source claim.
+Reconciliation re-applies Linear child and parent workflow states and stage activity from durable ticket/run truth, including QA repair tickets whose provider projection was interrupted. It also restores known Notion hub and artifact pages that were archived. It does not rerun agent stages or create a new source claim.
 
 ### Export the run journal
 
@@ -1186,7 +1188,7 @@ Safe customization may add repository-specific expectations, but should not tran
 - Lint must deduplicate and report every configured lint-owned pipeline gate.
 - QA must deduplicate QA-owned pipeline gates, report every acceptance criterion, and emit structured repair tickets when necessary.
 - PR prepares delivery content; the orchestrator owns credentials, push, and canonical PR creation.
-- Documentation is optional and must be explicitly added to the pipeline.
+- Documentation runs after QA in the shipped default and must report every affected document and check before PR preparation. Repositories may customize or remove the stage only by updating their checked-in pipeline dependencies and file contracts coherently.
 
 Agent JSON is validated before outputs are materialized or a stage can complete.
 
@@ -1667,7 +1669,7 @@ Add `--apply` only after reviewing the preview. Add `--force` only when replacem
 | `run-hook` | `--repo DIR --spec-json OBJECT --env-json OBJECT` | Execute one validated hook in the fixed environment |
 | `release-lease` | `--repo DIR --issue-key KEY --session-token TOKEN` | Release the matching local issue lease |
 
-The helper also recognizes agent-result contracts for the optional `docs` role and the coming-soon Jira provider, but the supported user workflow in this release is Linear.
+The helper recognizes the default `docs` result contract and the coming-soon Jira provider, but the supported user workflow in this release is Linear.
 
 ## 23. Configuration reference
 
@@ -1684,7 +1686,7 @@ The helper also recognizes agent-result contracts for the optional `docs` role a
 | `HARNESS_SANDBOX_CHECKPOINT` | With scheduler | Versioned worker checkpoint |
 | `RAILWAY_API_TOKEN` | With scheduler | Workspace-scoped Sandbox-management token |
 | `HARNESS_MAX_ACTIVE_RUNS` | No | Maximum concurrent source runs; default `3` |
-| `HARNESS_CODEX_MODEL` | No | Explicit worker model |
+| `HARNESS_CODEX_MODEL` | No | Explicit worker model; default `gpt-5.6-sol` |
 | `HARNESS_PLAYWRIGHT_WORKERS` | No | Browser-test workers per sandbox; default `2` |
 | `HARNESS_SCHEDULER_ENABLED` | No | Set `false` for local control-plane verification |
 | `HARNESS_LISTEN_ADDRESS` | No | Server bind address; defaults from `PORT` |
