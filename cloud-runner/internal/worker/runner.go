@@ -625,6 +625,9 @@ func (r *Runner) runTicketStage(ctx context.Context, stage Stage) error {
 
 func (r *Runner) runTicketStageAttempt(ctx context.Context, stage Stage) error {
 	pipelinePath := filepath.Join(r.repo, ".harness", "pipeline.yaml")
+	if err := r.reconcileWorkspaceDependencyOwnership(ctx); err != nil {
+		return err
+	}
 	if _, err := r.harness(ctx, r.repo, "materialize-generated-inputs", "--pipeline", pipelinePath,
 		"--run-dir", r.runDir, "--stage", stage.ID); err != nil {
 		return err

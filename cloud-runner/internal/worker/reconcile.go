@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -159,6 +160,404 @@ func applyArchitectureConstraints(productBody, architectureBody []byte) ([]byte,
 		return nil, nil, false, err
 	}
 	return append(updatedProduct, '\n'), append(ticketPlan, '\n'), changed, nil
+}
+
+type workspacePackageManifest struct {
+	Name                 string                     `json:"name"`
+	Scripts              map[string]json.RawMessage `json:"scripts"`
+	Dependencies         map[string]json.RawMessage `json:"dependencies"`
+	DevDependencies      map[string]json.RawMessage `json:"devDependencies"`
+	PeerDependencies     map[string]json.RawMessage `json:"peerDependencies"`
+	OptionalDependencies map[string]json.RawMessage `json:"optionalDependencies"`
+}
+
+type workspacePackage struct {
+	root     string
+	manifest workspacePackageManifest
+}
+
+var packageDependencyDirective = regexp.MustCompile(`(?i)\b((?:do|must)\s+not\s+)?depends?\s+on\s+(@[a-z0-9._-]+/[a-z0-9._-]+)\b`)
+var playwrightCommand = regexp.MustCompile(`(?i)(?:\bplaywright\s+test\b|\btest:e2e\b)`)
+var playwrightConfigArgument = regexp.MustCompile(`\s+--config(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s]+))`)
+var pnpmFilterArgument = regexp.MustCompile(`(?:^|\s)(?:--filter|-F)(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s]+))`)
+
+func ensureWorkspaceDependencyOwnership(repo string, plan []ticket) ([]ticket, bool, error) {
+	packages, err := discoverWorkspacePackages(repo)
+	if err != nil {
+		return nil, false, err
+	}
+	byName := make(map[string]workspacePackage, len(packages))
+	for _, item := range packages {
+		if item.manifest.Name != "" {
+			byName[item.manifest.Name] = item
+		}
+	}
+	lockfiles := existingWorkspaceLockfiles(repo)
+	changed := false
+	for index := range plan {
+		requested := map[string]bool{}
+		for _, constraint := range plan[index].ArchitectureConstraints {
+			for _, match := range packageDependencyDirective.FindAllStringSubmatch(constraint, -1) {
+				if match[1] == "" {
+					requested[match[2]] = true
+				}
+			}
+		}
+		if len(requested) == 0 {
+			continue
+		}
+		owners := owningWorkspacePackages(plan[index].OwnedPaths, packages)
+		for _, owner := range owners {
+			for dependency := range requested {
+				if _, workspaceDependency := byName[dependency]; !workspaceDependency || manifestDeclares(owner.manifest, dependency) {
+					continue
+				}
+				var added bool
+				plan[index].OwnedPaths, added = appendUnique(plan[index].OwnedPaths, filepath.ToSlash(filepath.Join(owner.root, "package.json")))
+				changed = changed || added
+				for _, lockfile := range lockfiles {
+					plan[index].OwnedPaths, added = appendUnique(plan[index].OwnedPaths, lockfile)
+					changed = changed || added
+				}
+			}
+		}
+	}
+	return plan, changed, nil
+}
+
+func ensurePlaywrightUsesPlaywrightConfig(repo string, plan []ticket) ([]ticket, bool, error) {
+	packages, err := discoverWorkspacePackages(repo)
+	if err != nil {
+		return nil, false, err
+	}
+	byName := make(map[string]string, len(packages))
+	for _, item := range packages {
+		byName[item.manifest.Name] = item.root
+	}
+	changed := false
+	for index := range plan {
+		if plan[index].Verification == nil {
+			continue
+		}
+		for _, checks := range [][]string{plan[index].Verification.IterationChecks, plan[index].Verification.TicketGate} {
+			for checkIndex, command := range checks {
+				updated, corrected, err := removeViteConfigFromPlaywrightCommand(repo, byName, command)
+				if err != nil {
+					return nil, false, fmt.Errorf("ticket %s verification command: %w", plan[index].Key, err)
+				}
+				if corrected {
+					checks[checkIndex], changed = updated, true
+				}
+			}
+		}
+	}
+	return plan, changed, nil
+}
+
+func ensureRequiredFixtureOwnership(repo string, plan []ticket) ([]ticket, bool, error) {
+	packages, err := discoverWorkspacePackages(repo)
+	if err != nil {
+		return nil, false, err
+	}
+	changed := false
+	for index := range plan {
+		requiresFixture := false
+		for _, constraint := range plan[index].ArchitectureConstraints {
+			normalized := strings.ToLower(constraint)
+			if strings.Contains(normalized, "full-stack fixture") || strings.Contains(normalized, "full stack fixture") {
+				requiresFixture = true
+				break
+			}
+		}
+		if !requiresFixture {
+			continue
+		}
+		for _, owner := range owningWorkspacePackages(plan[index].OwnedPaths, packages) {
+			for _, relative := range []string{"e2e/full-stack-fixture.mjs", "e2e/full-stack-fixture.ts"} {
+				candidate := filepath.ToSlash(filepath.Join(owner.root, filepath.FromSlash(relative)))
+				if info, statErr := os.Stat(filepath.Join(repo, filepath.FromSlash(candidate))); statErr == nil && !info.IsDir() {
+					var added bool
+					plan[index].OwnedPaths, added = appendUnique(plan[index].OwnedPaths, candidate)
+					changed = changed || added
+					break
+				} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+					return nil, false, statErr
+				}
+			}
+		}
+	}
+	return plan, changed, nil
+}
+
+func ensureBackgroundServiceEntrypointOwnership(repo string, plan []ticket) ([]ticket, bool, error) {
+	packages, err := discoverWorkspacePackages(repo)
+	if err != nil {
+		return nil, false, err
+	}
+	changed := false
+	for index := range plan {
+		for _, owned := range plan[index].OwnedPaths {
+			cleaned := filepath.ToSlash(filepath.Clean(filepath.FromSlash(owned)))
+			if filepath.ToSlash(filepath.Dir(cleaned)) != ".railway" || filepath.Ext(cleaned) != ".json" {
+				continue
+			}
+			service := strings.TrimSuffix(filepath.Base(cleaned), filepath.Ext(cleaned))
+			if service != "worker" {
+				continue
+			}
+			for _, candidate := range packages {
+				packageName := candidate.manifest.Name
+				if slash := strings.LastIndex(packageName, "/"); slash >= 0 {
+					packageName = packageName[slash+1:]
+				}
+				if filepath.Base(candidate.root) != service && packageName != service {
+					continue
+				}
+				if _, hasStart := candidate.manifest.Scripts["start"]; hasStart {
+					continue
+				}
+				var added bool
+				plan[index].OwnedPaths, added = appendUnique(plan[index].OwnedPaths, filepath.ToSlash(filepath.Join(candidate.root, "package.json")))
+				changed = changed || added
+				plan[index].OwnedPaths, added = appendUnique(plan[index].OwnedPaths, filepath.ToSlash(filepath.Join(candidate.root, "src", "server.ts")))
+				changed = changed || added
+			}
+		}
+	}
+	return plan, changed, nil
+}
+
+func removeViteConfigFromPlaywrightCommand(repo string, packageRoots map[string]string, command string) (string, bool, error) {
+	if !playwrightCommand.MatchString(command) {
+		return command, false, nil
+	}
+	match := playwrightConfigArgument.FindStringSubmatchIndex(command)
+	if match == nil {
+		return command, false, nil
+	}
+	configPath := firstRegexpGroup(command, match, 1, 2, 3)
+	if configPath == "" || filepath.IsAbs(configPath) {
+		return command, false, nil
+	}
+	root := repo
+	if filter := pnpmFilterArgument.FindStringSubmatch(command); len(filter) > 0 {
+		if packageRoot := packageRoots[firstNonEmpty(filter[1:]...)]; packageRoot != "" {
+			root = filepath.Join(repo, filepath.FromSlash(packageRoot))
+		}
+	}
+	resolved := filepath.Join(root, filepath.FromSlash(configPath))
+	body, err := os.ReadFile(resolved)
+	if errors.Is(err, os.ErrNotExist) && root != repo {
+		resolved = filepath.Join(repo, filepath.FromSlash(configPath))
+		body, err = os.ReadFile(resolved)
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return command, false, nil
+	}
+	if err != nil {
+		return command, false, err
+	}
+	text := string(body)
+	if !strings.Contains(text, `from "vite"`) && !strings.Contains(text, `from 'vite'`) {
+		return command, false, nil
+	}
+	return strings.TrimSpace(command[:match[0]] + command[match[1]:]), true, nil
+}
+
+func firstRegexpGroup(value string, indexes []int, groups ...int) string {
+	for _, group := range groups {
+		start, end := indexes[group*2], indexes[group*2+1]
+		if start >= 0 && end >= start {
+			return value[start:end]
+		}
+	}
+	return ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func discoverWorkspacePackages(repo string) ([]workspacePackage, error) {
+	var result []workspacePackage
+	err := filepath.WalkDir(repo, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", ".harness", "node_modules":
+				if path != repo {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		if entry.Name() != "package.json" {
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var manifest workspacePackageManifest
+		if err := json.Unmarshal(body, &manifest); err != nil {
+			return fmt.Errorf("decode workspace manifest %s: %w", path, err)
+		}
+		if manifest.Name == "" {
+			return nil
+		}
+		root, err := filepath.Rel(repo, filepath.Dir(path))
+		if err != nil {
+			return err
+		}
+		result = append(result, workspacePackage{root: filepath.ToSlash(root), manifest: manifest})
+		return nil
+	})
+	sort.Slice(result, func(i, j int) bool { return result[i].root < result[j].root })
+	return result, err
+}
+
+func existingWorkspaceLockfiles(repo string) []string {
+	var result []string
+	for _, name := range []string{"pnpm-lock.yaml", "package-lock.json", "yarn.lock", "bun.lock", "bun.lockb"} {
+		if info, err := os.Stat(filepath.Join(repo, name)); err == nil && !info.IsDir() {
+			result = append(result, name)
+		}
+	}
+	return result
+}
+
+func owningWorkspacePackages(paths []string, packages []workspacePackage) []workspacePackage {
+	owners := map[string]workspacePackage{}
+	for _, owned := range paths {
+		owned = filepath.ToSlash(filepath.Clean(filepath.FromSlash(owned)))
+		best := workspacePackage{}
+		for _, candidate := range packages {
+			if candidate.root == "." || owned == candidate.root || strings.HasPrefix(owned, candidate.root+"/") {
+				if len(candidate.root) > len(best.root) {
+					best = candidate
+				}
+			}
+		}
+		if best.manifest.Name != "" {
+			owners[best.root] = best
+		}
+	}
+	keys := make([]string, 0, len(owners))
+	for root := range owners {
+		keys = append(keys, root)
+	}
+	sort.Strings(keys)
+	result := make([]workspacePackage, 0, len(keys))
+	for _, root := range keys {
+		result = append(result, owners[root])
+	}
+	return result
+}
+
+func manifestDeclares(manifest workspacePackageManifest, dependency string) bool {
+	for _, group := range []map[string]json.RawMessage{
+		manifest.Dependencies,
+		manifest.DevDependencies,
+		manifest.PeerDependencies,
+		manifest.OptionalDependencies,
+	} {
+		if _, ok := group[dependency]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func appendUnique(values []string, addition string) ([]string, bool) {
+	for _, value := range values {
+		if value == addition {
+			return values, false
+		}
+	}
+	return append(values, addition), true
+}
+
+func (r *Runner) reconcileWorkspaceDependencyOwnership(ctx context.Context) error {
+	planPath := filepath.Join(r.runDir, "artifacts", "ticket-plan.json")
+	body, err := os.ReadFile(planPath)
+	if err != nil {
+		return err
+	}
+	var plan []ticket
+	if err := json.Unmarshal(body, &plan); err != nil {
+		return fmt.Errorf("decode ticket plan for package ownership: %w", err)
+	}
+	plan, changed, err := ensureWorkspaceDependencyOwnership(r.repo, plan)
+	if err != nil {
+		return err
+	}
+	plan, verificationChanged, err := ensurePlaywrightUsesPlaywrightConfig(r.repo, plan)
+	if err != nil {
+		return err
+	}
+	plan, fixtureChanged, err := ensureRequiredFixtureOwnership(r.repo, plan)
+	if err != nil {
+		return err
+	}
+	plan, entrypointChanged, err := ensureBackgroundServiceEntrypointOwnership(r.repo, plan)
+	if err != nil {
+		return err
+	}
+	if !changed && !verificationChanged && !fixtureChanged && !entrypointChanged {
+		return nil
+	}
+	body, err = json.MarshalIndent(plan, "", "  ")
+	if err != nil {
+		return err
+	}
+	productPath := filepath.Join(r.runDir, "agent-output", "product.json")
+	productBody, err := os.ReadFile(productPath)
+	if err != nil {
+		return err
+	}
+	var product map[string]any
+	if err := json.Unmarshal(productBody, &product); err != nil {
+		return fmt.Errorf("decode product output for package ownership: %w", err)
+	}
+	var ticketValues []any
+	if err := json.Unmarshal(body, &ticketValues); err != nil {
+		return err
+	}
+	product["tickets"] = ticketValues
+	productBody, err = json.MarshalIndent(product, "", "  ")
+	if err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(r.runDir, "product-package-ownership-*.json")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if _, err := temporary.Write(append(productBody, '\n')); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if _, err := r.harness(ctx, r.repo, "validate-agent-output", "--agent", "product", "--input", temporaryPath); err != nil {
+		return fmt.Errorf("validate package ownership reconciliation: %w", err)
+	}
+	if err := os.WriteFile(productPath, append(productBody, '\n'), 0o600); err != nil {
+		return err
+	}
+	if err := os.WriteFile(planPath, append(body, '\n'), 0o600); err != nil {
+		return err
+	}
+	return r.refreshTicketContextsForPlan(plan)
 }
 
 type productContextSource struct {

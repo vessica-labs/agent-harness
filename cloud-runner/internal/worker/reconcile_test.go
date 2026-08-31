@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -78,6 +79,63 @@ func TestApplyArchitectureConstraintsPreservesLegacyChecksWhenIntroducingTiers(t
 	}
 	if got := output.Tickets[0].Verification.TicketGate; len(got) != 2 || got[0] != "test legacy" || got[1] != "test package" {
 		t.Fatalf("legacy focused checks were not preserved in ticket gate: %v", got)
+	}
+}
+
+func TestEnsureWorkspaceDependencyOwnershipAddsManifestAndLockfile(t *testing.T) {
+	repo := t.TempDir()
+	writeFile := func(path, body string) {
+		t.Helper()
+		path = filepath.Join(repo, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile("packages/contracts/package.json", `{"name":"@vessica/contracts"}`)
+	writeFile("packages/db/package.json", `{"name":"@vessica/db","dependencies":{}}`)
+	writeFile("pnpm-lock.yaml", "lockfileVersion: '9.0'\n")
+	plan := []ticket{{
+		Key: "VES-14-T02", OwnedPaths: []string{"packages/db/src/schema.ts"},
+		ArchitectureConstraints: []string{"Depend on @vessica/contracts and reuse its schemas."},
+	}}
+	updated, changed, err := ensureWorkspaceDependencyOwnership(repo, plan)
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	got := updated[0].OwnedPaths
+	if len(got) != 3 || got[1] != "packages/db/package.json" || got[2] != "pnpm-lock.yaml" {
+		t.Fatalf("package ownership not reconciled: %v", got)
+	}
+}
+
+func TestEnsureWorkspaceDependencyOwnershipLeavesDeclaredAndNegativeDependenciesAlone(t *testing.T) {
+	repo := t.TempDir()
+	writeFile := func(path, body string) {
+		t.Helper()
+		path = filepath.Join(repo, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile("packages/contracts/package.json", `{"name":"@vessica/contracts"}`)
+	writeFile("packages/db/package.json", `{"name":"@vessica/db","dependencies":{"@vessica/contracts":"workspace:*"}}`)
+	writeFile("packages/other/package.json", `{"name":"@vessica/other","dependencies":{}}`)
+	plan := []ticket{{
+		Key: "T01", OwnedPaths: []string{"packages/db/src/schema.ts"},
+		ArchitectureConstraints: []string{"Depend on @vessica/contracts."},
+	}, {
+		Key: "T02", OwnedPaths: []string{"packages/other/src/other.ts"},
+		ArchitectureConstraints: []string{"Do not depend on @vessica/contracts."},
+	}}
+	updated, changed, err := ensureWorkspaceDependencyOwnership(repo, plan)
+	if err != nil || changed {
+		t.Fatalf("changed=%v err=%v plan=%+v", changed, err, updated)
 	}
 }
 
@@ -244,5 +302,89 @@ func TestApplyArchitectureConstraintsRejectsUnknownTicket(t *testing.T) {
 	architecture := []byte(`{"status":"ready","ticket_constraints":[{"ticket_key":"T99"}]}`)
 	if _, _, _, err := applyArchitectureConstraints(product, architecture); err == nil {
 		t.Fatal("unknown architectural ticket constraint accepted")
+	}
+}
+
+func TestEnsurePlaywrightUsesPlaywrightConfigRemovesViteConfigOverride(t *testing.T) {
+	repo := t.TempDir()
+	webRoot := filepath.Join(repo, "apps", "web")
+	if err := os.MkdirAll(filepath.Join(webRoot, "e2e"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(webRoot, "package.json"), []byte(`{"name":"@vessica/web"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(webRoot, "e2e", "playwright-vite.config.ts"), []byte(`import { defineConfig } from "vite";`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan := []ticket{{Key: "VES-15-T01", Verification: &ticketVerification{
+		IterationChecks: []string{"pnpm --filter @vessica/web exec playwright test --config e2e/playwright-vite.config.ts e2e/launch.spec.ts"},
+		TicketGate:      []string{"pnpm --filter @vessica/web test:e2e -- --config e2e/playwright-vite.config.ts e2e/launch.spec.ts"},
+	}}}
+	updated, changed, err := ensurePlaywrightUsesPlaywrightConfig(repo, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("expected mismatched Vite config override to be removed")
+	}
+	for _, command := range append(updated[0].Verification.IterationChecks, updated[0].Verification.TicketGate...) {
+		if strings.Contains(command, "playwright-vite.config.ts") || strings.Contains(command, "--config") {
+			t.Fatalf("Playwright command retained Vite config override: %s", command)
+		}
+	}
+}
+
+func TestEnsureRequiredFixtureOwnershipAddsExistingFullStackFixture(t *testing.T) {
+	repo := t.TempDir()
+	webRoot := filepath.Join(repo, "apps", "web")
+	if err := os.MkdirAll(filepath.Join(webRoot, "e2e"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(webRoot, "package.json"), []byte(`{"name":"@vessica/web"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(webRoot, "e2e", "full-stack-fixture.mjs"), []byte("export {};\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan := []ticket{{
+		Key:                     "VES-15-T01",
+		OwnedPaths:              []string{"apps/web/e2e/launch-journeys.spec.ts"},
+		ArchitectureConstraints: []string{"Drive built services through the existing full-stack fixture."},
+	}}
+	updated, changed, err := ensureRequiredFixtureOwnership(repo, plan)
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	if got := updated[0].OwnedPaths; len(got) != 2 || got[1] != "apps/web/e2e/full-stack-fixture.mjs" {
+		t.Fatalf("fixture ownership not reconciled: %v", got)
+	}
+}
+
+func TestEnsureBackgroundServiceEntrypointOwnershipRepairsMissingWorkerStart(t *testing.T) {
+	repo := t.TempDir()
+	for path, body := range map[string]string{
+		"apps/worker/package.json": `{"name":"@vessica/worker","scripts":{"build":"tsc"}}`,
+		"apps/web/package.json":    `{"name":"@vessica/web","scripts":{"build":"vite build"}}`,
+	} {
+		fullPath := filepath.Join(repo, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fullPath, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan := []ticket{{
+		Key:        "VES-15-T06",
+		OwnedPaths: []string{".railway/api.json", ".railway/web.json", ".railway/worker.json"},
+	}}
+	updated, changed, err := ensureBackgroundServiceEntrypointOwnership(repo, plan)
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	got := updated[0].OwnedPaths
+	if len(got) != 5 || got[3] != "apps/worker/package.json" || got[4] != "apps/worker/src/server.ts" {
+		t.Fatalf("worker entrypoint ownership not reconciled: %v", got)
 	}
 }
