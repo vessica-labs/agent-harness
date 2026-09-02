@@ -1938,7 +1938,7 @@ Fix the underlying issue, submit clarified input if appropriate, reconcile provi
 
 ### Codex auth slots are unavailable or quarantined
 
-An auth slot is exclusively leased while in use. If a sandbox is lost or cancelled before returning updated authentication safely, the slot may be quarantined with an error. Inspect `cloud auth status`; re-add independent sessions rather than copying unknown active refresh material.
+An auth slot is exclusively leased while in use. If a sandbox is lost or cancelled before returning updated authentication safely, or the Codex process reports a recognizable credential failure, the slot may be quarantined with an error. Application feature failures that merely mention authentication return the slot normally. Inspect `cloud auth status`; re-add independent sessions rather than copying unknown active refresh material.
 
 ### Playwright exhausts sandbox resources
 

@@ -107,7 +107,7 @@ Loop: `ClaimNextRun` → for each claim, `launch()`:
 6. pick toolchain or repo-specific checkpoint (`HARNESS_SANDBOX_CHECKPOINT`, `HARNESS_REPOSITORY_CHECKPOINTS`);
 7. create Railway sandbox, start worker detached, record sandbox identity.
 
-Recovery: reconcile running runs, heartbeat sandbox + lease, detect startup timeout, requeue when the sandbox is lost, quarantine auth slots lost before return, destroy terminal sandboxes after a grace period and awaiting-input sandboxes after 15s. Terminal cleanup also quarantines any credential still leased after its sandbox disappears and marks stale `starting`/`ready` preview projections failed before teardown.
+Recovery: reconcile running runs, heartbeat sandbox + lease, detect startup timeout, requeue when the sandbox is lost, quarantine auth slots lost before return or rejected by an actual Codex-process authentication failure, destroy terminal sandboxes after a grace period and awaiting-input sandboxes after 15s. Application-domain errors that merely mention authentication return their Codex slot normally. Terminal cleanup also quarantines any credential still leased after its sandbox disappears and marks stale `starting`/`ready` preview projections failed before teardown.
 
 ## 7. Sandbox bootstrap (`internal/sandbox/railway.go`)
 
