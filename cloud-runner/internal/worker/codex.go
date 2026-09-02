@@ -86,6 +86,10 @@ func (r *Runner) runCodexTicketWave(ctx context.Context, stage Stage, waveNumber
 	if err != nil {
 		return err
 	}
+	runGuidance := strings.TrimSpace(r.config.FeatureRequest)
+	if runGuidance == "" {
+		runGuidance = "(none)"
+	}
 	summaryPath := filepath.Join(r.runDir, "agent-output", fmt.Sprintf("coder-wave-%02d.json", waveNumber))
 	prompt := fmt.Sprintf(`You are the Agent Harness %s stage coordinator. You orchestrate coder subagents and never implement a ticket yourself.
 
@@ -97,11 +101,13 @@ Execution context:
 - Integration repository: %s
 - Integration run journal: %s
 - Maximum simultaneously active coder subagents: %d
+- Current source request or operator recovery guidance (authoritative when it explicitly refines or overrides a restored ticket packet):
+%s
 - Ready ticket assignments (absolute paths):
 %s
 - Required coordinator result JSON file: %s
 
-Use Codex native subagent delegation for every ticket assignment, including a one-ticket wave. Give each coder subagent exactly one assignment, the coder role above, and its isolated worktree, inputs, and result path. Never implement ticket code in the coordinator. Keep no more than the declared maximum active at once and wait for every subagent. Every subagent must write the coder role's exact ticket JSON contract to its assigned result path. Do not push, merge, cherry-pick, edit pipeline state, or access provider credentials. This stage may not request human input or wait for a user.
+Use Codex native subagent delegation for every ticket assignment, including a one-ticket wave. Give each coder subagent exactly one assignment, the coder role above, its isolated worktree, inputs, result path, and the complete current run guidance above. When explicit operator recovery guidance refines or expands a restored ticket's owned paths, treat that guidance as authoritative for the resumed attempt and tell the subagent to do the same. Never implement ticket code in the coordinator. Keep no more than the declared maximum active at once and wait for every subagent. Every subagent must write the coder role's exact ticket JSON contract to its assigned result path. Do not push, merge, cherry-pick, edit pipeline state, or access provider credentials. This stage may not request human input or wait for a user.
 
 After every subagent reaches a terminal state, write exactly this coordinator JSON shape to the required coordinator result file and return it without a Markdown fence:
 {
@@ -114,7 +120,7 @@ After every subagent reaches a terminal state, write exactly this coordinator JS
 }
 
 Set coordinator status to completed only when every assignment completed and wrote its result. Only when a ticket explicitly owns a Playwright ticket gate, use the preinstalled Chromium and cap Playwright at %d workers.`,
-		stage.ID, string(role), r.repo, r.runDir, stage.Parallelism, string(assignmentJSON), summaryPath, r.config.PlaywrightWorkers)
+		stage.ID, string(role), r.repo, r.runDir, stage.Parallelism, runGuidance, string(assignmentJSON), summaryPath, r.config.PlaywrightWorkers)
 	if err := r.runCodexPrompt(ctx, r.repo, stage.ID, "", summaryPath, prompt, true, fmt.Sprintf("%s-wave-%02d", stage.ID, waveNumber), r.stageModel(stage)); err != nil {
 		return err
 	}
