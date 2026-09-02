@@ -51,6 +51,18 @@ func TestReturnCodexSessionsRetainsOnlyFailedReturns(t *testing.T) {
 	}
 }
 
+func TestCodexAuthenticationFailureDoesNotQuarantineApplicationAuthBlockers(t *testing.T) {
+	applicationBlocker := errors.New("stage coder failed: authenticated session routing requires src/index.ts")
+	if got := codexAuthenticationFailure(applicationBlocker); got != "" {
+		t.Fatalf("application authentication blocker classified as credential failure: %q", got)
+	}
+
+	credentialFailure := errors.New("Codex coder failed: authentication failed; please run codex login")
+	if got := codexAuthenticationFailure(credentialFailure); got != credentialFailure.Error() {
+		t.Fatalf("Codex credential failure not classified: %q", got)
+	}
+}
+
 func TestGitCommitAlreadyIntegrated(t *testing.T) {
 	repo := t.TempDir()
 	ctx := context.Background()

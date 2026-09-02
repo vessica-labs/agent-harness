@@ -80,10 +80,7 @@ func (r *Runner) Run(ctx context.Context) (runErr error) {
 	r.startupTiming(ctx, "filesystem_prepare", phaseStarted, map[string]any{"status": "completed"})
 	r.remoteStartupTimings(ctx)
 	defer func() {
-		authError := ""
-		if runErr != nil && strings.Contains(strings.ToLower(runErr.Error()), "auth") {
-			authError = runErr.Error()
-		}
+		authError := codexAuthenticationFailure(runErr)
 		returnCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
 		r.returnCodexSessions(returnCtx, authError)
@@ -194,6 +191,33 @@ func (r *Runner) Run(ctx context.Context) (runErr error) {
 	// have durably accepted the event before an external lifecycle sync failed.
 	r.startPreview(context.WithoutCancel(ctx))
 	return completionErr
+}
+
+func codexAuthenticationFailure(runErr error) string {
+	if runErr == nil {
+		return ""
+	}
+	message := strings.ToLower(runErr.Error())
+	if !strings.Contains(message, "codex ") {
+		return ""
+	}
+	for _, signature := range []string{
+		"not logged in",
+		"not authenticated",
+		"authentication required",
+		"authentication failed",
+		"invalid_grant",
+		"invalid refresh token",
+		"refresh token expired",
+		"token refresh failed",
+		"please run codex login",
+		"401 unauthorized",
+	} {
+		if strings.Contains(message, signature) {
+			return runErr.Error()
+		}
+	}
+	return ""
 }
 
 // returnCodexSessions returns every credential it can and retains only failed
