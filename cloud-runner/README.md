@@ -128,6 +128,8 @@ agent-harness cloud runs export <run-id> --repo /path/to/repo
 agent-harness ui
 ```
 
+For a paused implementation ticket, `runs input` replaces the run's current guidance. A recovered coder wave receives that guidance alongside the restored compact ticket packet, so explicit operator corrections such as a narrowly expanded owned-path contract apply to the resumed attempt without rerunning completed stages.
+
 The issue commands use the control plane's encrypted Linear app credential; provider tokens never enter the local process. `issue create` delegates the new issue to the configured Vessica app actor so Linear creates the native AgentSession whose signed webhook is the only run-claim path. `issue archive` refuses to archive a source issue or canonical child already mapped to a durable run.
 
 The UI binds only to `127.0.0.1`. Its backend refreshes and injects the current device access token into proxied REST and SSE calls; browser JavaScript never receives either device credential. The Team view manages invitations, roles, members, devices, and the authentication audit history.

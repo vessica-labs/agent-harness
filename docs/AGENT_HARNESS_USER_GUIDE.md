@@ -1934,7 +1934,7 @@ Use `cloud runs show`, `cloud runs watch`, or `$inspect-harness`. Identify:
 - Test or architecture-lint failure.
 - Product, architecture, migration, or secret ambiguity.
 
-Fix the underlying issue, submit clarified input if appropriate, reconcile provider state when necessary, and only then resume.
+Fix the underlying issue, submit clarified input if appropriate, reconcile provider state when necessary, and only then resume. Clarified input replaces the run's current guidance and is delivered to recovered coder waves alongside their restored compact ticket packets. Explicit, narrowly scoped corrections such as an owned-path expansion are therefore authoritative for the resumed attempt; completed ticket results remain checkpointed and are not rerun.
 
 ### Codex auth slots are unavailable or quarantined
 

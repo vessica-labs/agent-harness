@@ -112,7 +112,8 @@ func TestCoderWaveUsesOneMultiAgentCoordinatorForMultipleTickets(t *testing.T) {
 	}
 
 	runner := &Runner{
-		config: Config{RunID: "run_test", Workspace: repo, CodexBinary: fakeCodex, CodexModel: "gpt-5.6-sol", PlaywrightWorkers: 2},
+		config: Config{RunID: "run_test", Workspace: repo, CodexBinary: fakeCodex, CodexModel: "gpt-5.6-sol", PlaywrightWorkers: 2,
+			FeatureRequest: "Operator recovery: ISS-1-T01 also owns apps/shared/router.ts."},
 		client: &controlClient{baseURL: server.URL, token: "test", runID: "run_test", http: server.Client()},
 		repo:   repo, runDir: runDir, pipeline: Pipeline{RunRoot: ".harness/runs/{run_id}"},
 	}
@@ -136,7 +137,12 @@ func TestCoderWaveUsesOneMultiAgentCoordinatorForMultipleTickets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"ISS-1-T01", "ISS-1-T02", worktreeA, worktreeB, "Maximum simultaneously active coder subagents: 3"} {
+	for _, expected := range []string{
+		"ISS-1-T01", "ISS-1-T02", worktreeA, worktreeB,
+		"Maximum simultaneously active coder subagents: 3",
+		"Operator recovery: ISS-1-T01 also owns apps/shared/router.ts.",
+		"treat that guidance as authoritative for the resumed attempt",
+	} {
 		if !strings.Contains(string(prompt), expected) {
 			t.Fatalf("coordinator prompt missing %q: %s", expected, prompt)
 		}
