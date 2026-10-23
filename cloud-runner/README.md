@@ -50,6 +50,19 @@ Commands run inside that repository, including nested worktrees, automatically u
 
 `railway init` first checks that the target environment can list Sandboxes. It stops with an enablement instruction when the feature is unavailable. The Railway CLI and Codex CLI versions are pinned in the image and checkpoint builder.
 
+## Runtime security baseline
+
+The control-plane container pins Node 22.23.4 and its Go 1.26.10 builder to
+immutable official image digests. Rebuild the container to adopt runtime fixes;
+restarting an existing image does not update its runtimes. The Go module pins
+1.26.10 so local verification and CI use the same minimum security baseline.
+Debian security updates are applied while building the image. Record the final
+image digest and verify its runtime versions after deployment.
+
+Worker sandbox checkpoints are separate from the control-plane image. Rebuild
+and verify affected checkpoints before making quarantined login slots available;
+a control-plane redeployment does not patch existing checkpoint images.
+
 ## Maintainer release
 
 Run the release workflow from the repository root, not this directory:

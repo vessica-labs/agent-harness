@@ -32,6 +32,28 @@ jobs:
       - run: python -m unittest discover -s tests -v
       - run: make verify
         working-directory: cloud-runner
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+        working-directory: cloud-runner
+
+  container-smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the deployment image
+        run: docker build --tag agent-harness:verify --build-arg VERSION=security-check cloud-runner
+      - name: Verify runtime tools without network access
+        run: >-
+          docker run --rm --network none --entrypoint sh agent-harness:verify -ec
+          'test "$(node --version)" = v22.23.4;
+          test "$(id -u)" = 10001;
+          agent-harness --version;
+          railway --version;
+          codex --version;
+          chromium --version;
+          python3 --version'
 
   container:
     if: github.event_name == 'push'

@@ -1,5 +1,4 @@
-ARG GO_VERSION=1.26
-FROM golang:${GO_VERSION}-bookworm AS build
+FROM golang:1.26.10-bookworm@sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af AS build
 ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -9,10 +8,11 @@ RUN CGO_ENABLED=0 go build -trimpath \
     -ldflags="-s -w -X github.com/vessica-labs/agent-harness/cloud-runner/internal/cli.Version=${VERSION}" \
     -o /out/agent-harness ./cmd/agent-harness
 
-FROM node:22-bookworm-slim
+FROM node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
 ARG RAILWAY_CLI_VERSION=5.41.2
 ARG CODEX_CLI_VERSION=0.144.1
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates chromium git gh openssh-client python3 \
     && npm install --global "@railway/cli@${RAILWAY_CLI_VERSION}" \
     && npm install --global "@openai/codex@${CODEX_CLI_VERSION}" \
