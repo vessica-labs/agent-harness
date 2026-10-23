@@ -55,6 +55,29 @@ jobs:
           chromium --version;
           python3 --version'
 
+      - name: Scan deployment image
+        run: |
+          curl --fail --location --silent --show-error --output trivy.tar.gz \
+            https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz
+          printf '%s  trivy.tar.gz\n' 2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a | sha256sum --check
+          tar -xzf trivy.tar.gz trivy
+          ./trivy image --scanners vuln --format json --output harness-image-scan.json agent-harness:verify
+          python3 - <<'PYSCAN'
+          import json
+          data = json.load(open("harness-image-scan.json"))
+          failures = [v for r in data.get("Results", []) for v in r.get("Vulnerabilities", [])
+                      if v.get("Severity") in ("HIGH", "CRITICAL") and v.get("FixedVersion")]
+          for v in failures:
+              print(v["VulnerabilityID"], v["PkgName"], v["InstalledVersion"], "->", v["FixedVersion"])
+          raise SystemExit(bool(failures))
+          PYSCAN
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: harness-image-scan
+          path: harness-image-scan.json
+          if-no-files-found: ignore
+
   container:
     if: github.event_name == 'push'
     needs: verify
