@@ -56,6 +56,9 @@ The control-plane container pins Node 22.23.4 and its Go 1.26.10 builder to
 immutable official image digests. Rebuild the container to adopt runtime fixes;
 restarting an existing image does not update its runtimes. The Go module pins
 1.26.10 so local verification and CI use the same minimum security baseline.
+npm is pinned to 12.2.1. Railway CLI stays at 5.41.2 and is installed from its
+checksum-verified native release, avoiding the vulnerable npm installer wrapper.
+Changing that CLI version requires updating its amd64/arm64 release checksums.
 Debian security updates are applied while building the image. Record the final
 image digest and verify its runtime versions after deployment.
 
