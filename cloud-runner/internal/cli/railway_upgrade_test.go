@@ -30,7 +30,7 @@ func TestRailwayUpgradeCommandsUseBaseImageGitHubCLI(t *testing.T) {
 		t.Fatal("upgrade commands did not use the requested release version")
 	}
 	joined := strings.Join(commands, "\n")
-	for _, required := range []string{"setup_24.x", "pnpm@11.21.0", "@playwright/test@1.62.1"} {
+	for _, required := range []string{"node-v24.22.1-linux-x64.tar.xz", "npm@12.2.1", "pnpm@11.21.0", "@playwright/test@1.62.1"} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("worker checkpoint omitted %q", required)
 		}
@@ -52,7 +52,7 @@ func TestRailwayUpgradeFinishesWithToolchainSmokeAndResolvedManifest(t *testing.
 		}
 	}
 	for _, required := range []string{
-		"python3 -m pip --version", "python3 -m venv --help", "shutil.which", "'schema':2",
+		"python3 -m pip --version", "python3 -m venv --help", "v24.22.1", "12.2.1", "shutil.which", "'schema':2",
 		"'binaries':paths", "/opt/agent-harness/runtime-manifest.json", "jq -e",
 	} {
 		if !strings.Contains(last, required) {

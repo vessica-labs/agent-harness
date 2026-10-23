@@ -72,6 +72,12 @@ mean the image has no reported vulnerabilities.
 Worker sandbox checkpoints are separate from the control-plane image. Rebuild
 and verify affected checkpoints before making quarantined login slots available;
 a control-plane redeployment does not patch existing checkpoint images.
+The checkpoint builder pins Node 24.22.1 to the official Linux x64 archive and
+SHA-256 checksum, then installs npm 12.2.1. It refuses other architectures,
+rejects a changed archive before extraction, and checks exact Node/npm versions
+before recording them in the runtime manifest. Updating Node requires changing
+the version, archive checksum and CI archive smoke together. Existing named
+checkpoints must be rebuilt; editing this installer cannot update their bytes.
 
 ## Maintainer release
 

@@ -32,6 +32,14 @@ jobs:
       - run: python -m unittest discover -s tests -v
       - run: make verify
         working-directory: cloud-runner
+      - name: Verify the pinned worker Node archive
+        working-directory: cloud-runner
+        run: |
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-x64.tar.xz \
+            --output "$RUNNER_TEMP/worker-node.tar.xz"
+          HARNESS_TEST_NODE_ARCHIVE="$RUNNER_TEMP/worker-node.tar.xz" \
+            go test ./internal/cli -run '^TestWorkerNodeInstallOfficialArchive$' -count=1
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
         working-directory: cloud-runner
 
