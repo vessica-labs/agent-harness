@@ -52,6 +52,7 @@ jobs:
           test "$(npm --version)" = 12.2.1;
           agent-harness --version;
           railway --version;
+          gh --version | grep -F "gh version 2.103.0 ";
           codex --version;
           chromium --version;
           python3 --version'

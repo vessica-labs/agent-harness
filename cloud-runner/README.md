@@ -59,8 +59,15 @@ restarting an existing image does not update its runtimes. The Go module pins
 npm is pinned to 12.2.1. Railway CLI stays at 5.41.2 and is installed from its
 checksum-verified native release, avoiding the vulnerable npm installer wrapper.
 Changing that CLI version requires updating its amd64/arm64 release checksums.
+The runtime uses Debian 13 (trixie). GitHub CLI 2.103.0 is installed from its
+checksum-verified upstream release because Debian's packaged CLI lags security
+fixes. Changing its version also requires updating both architecture checksums.
 Debian security updates are applied while building the image. Record the final
 image digest and verify its runtime versions after deployment.
+
+The image scan blocks high/critical findings with available fixes and retains the
+full report, including unfixed findings, for review. Passing this gate does not
+mean the image has no reported vulnerabilities.
 
 Worker sandbox checkpoints are separate from the control-plane image. Rebuild
 and verify affected checkpoints before making quarantined login slots available;
