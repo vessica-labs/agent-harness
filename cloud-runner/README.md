@@ -50,6 +50,35 @@ Commands run inside that repository, including nested worktrees, automatically u
 
 `railway init` first checks that the target environment can list Sandboxes. It stops with an enablement instruction when the feature is unavailable. The Railway CLI and Codex CLI versions are pinned in the image and checkpoint builder.
 
+## Runtime security baseline
+
+The control-plane container pins Node 22.23.4 and its Go 1.26.10 builder to
+immutable official image digests. Rebuild the container to adopt runtime fixes;
+restarting an existing image does not update its runtimes. The Go module pins
+1.26.10 so local verification and CI use the same minimum security baseline.
+npm is pinned to 12.2.1. Railway CLI stays at 5.41.2 and is installed from its
+checksum-verified native release, avoiding the vulnerable npm installer wrapper.
+Changing that CLI version requires updating its amd64/arm64 release checksums.
+The runtime uses Debian 13 (trixie). GitHub CLI 2.103.0 is installed from its
+checksum-verified upstream release because Debian's packaged CLI lags security
+fixes. Changing its version also requires updating both architecture checksums.
+Debian security updates are applied while building the image. Record the final
+image digest and verify its runtime versions after deployment.
+
+The image scan blocks high/critical findings with available fixes and retains the
+full report, including unfixed findings, for review. Passing this gate does not
+mean the image has no reported vulnerabilities.
+
+Worker sandbox checkpoints are separate from the control-plane image. Rebuild
+and verify affected checkpoints before making quarantined login slots available;
+a control-plane redeployment does not patch existing checkpoint images.
+The checkpoint builder pins Node 24.22.1 to the official Linux x64 archive and
+SHA-256 checksum, then installs npm 12.2.1. It refuses other architectures,
+rejects a changed archive before extraction, and checks exact Node/npm versions
+before recording them in the runtime manifest. Updating Node requires changing
+the version, archive checksum and CI archive smoke together. Existing named
+checkpoints must be rebuilt; editing this installer cannot update their bytes.
+
 ## Maintainer release
 
 Run the release workflow from the repository root, not this directory:
