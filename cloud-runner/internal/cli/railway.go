@@ -206,8 +206,8 @@ func railwayUpgradeCommands(version string) []string {
 		"git --version >/dev/null",
 		"jq --version >/dev/null",
 		"make --version >/dev/null",
-		"node --version >/dev/null",
-		"npm --version >/dev/null",
+		"test \"$(node --version)\" = v" + workerNodeVersion,
+		"test \"$(npm --version)\" = 12.2.1",
 		"patch --version >/dev/null",
 		"pip3 --version >/dev/null",
 		"playwright --version >/dev/null",
@@ -219,14 +219,15 @@ func railwayUpgradeCommands(version string) []string {
 		"rg --version >/dev/null",
 		"unzip -v >/dev/null",
 		"zip -h >/dev/null",
-		"python3 -c \"import json,shutil; names='" + runtimeBinaries + "'.split(); paths={name:shutil.which(name) for name in names}; assert all(paths.values()); manifest={'schema':2,'kind':'agent-harness-toolchain','versions':{'codex':'0.144.1','node':'24','pnpm':'11.21.0','playwright':'1.62.1'},'binaries':paths,'capabilities':{'python_pip':'python3 -m pip','python_venv':'python3 -m venv'}}; json.dump(manifest,open('/opt/agent-harness/runtime-manifest.json','w'),indent=2,sort_keys=True)\"",
+		"python3 -c \"import json,shutil; names='" + runtimeBinaries + "'.split(); paths={name:shutil.which(name) for name in names}; assert all(paths.values()); manifest={'schema':2,'kind':'agent-harness-toolchain','versions':{'codex':'0.144.1','node':'" + workerNodeVersion + "','npm':'12.2.1','pnpm':'11.21.0','playwright':'1.62.1'},'binaries':paths,'capabilities':{'python_pip':'python3 -m pip','python_venv':'python3 -m venv'}}; json.dump(manifest,open('/opt/agent-harness/runtime-manifest.json','w'),indent=2,sort_keys=True)\"",
 		"jq -e '.schema == 2 and (.binaries | length == 20)' /opt/agent-harness/runtime-manifest.json >/dev/null",
 	}, " && ")
 	return []string{
 		// Railway's sandbox base already includes gh. Reinstalling it can fail when dpkg
 		// tries to create a backup hard link across overlay filesystem boundaries.
-		"apt-get update && apt-get install -y --no-install-recommends bash build-essential ca-certificates chromium curl file git jq make openssh-client patch procps python3 python3-pip python3-venv ripgrep unzip zip",
-		"curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource.sh && bash /tmp/nodesource.sh && apt-get install -y --no-install-recommends nodejs && rm -rf /var/lib/apt/lists/* /tmp/nodesource.sh",
+		"apt-get update && apt-get install -y --no-install-recommends bash build-essential ca-certificates chromium curl file git jq make openssh-client patch procps python3 python3-pip python3-venv ripgrep unzip xz-utils zip",
+		workerNodeInstallCommand(workerNodeVersion, workerNodeSHA256, "/usr/local"),
+		"npm install --global npm@12.2.1 && test \"$(npm --version)\" = 12.2.1",
 		"curl -fsSL " + base + "/agent-harness-linux-amd64 -o /usr/local/bin/agent-harness && chmod 0755 /usr/local/bin/agent-harness",
 		"mkdir -p /opt/agent-harness && curl -fsSL " + base + "/harnessctl.py -o /opt/agent-harness/harnessctl.py && chmod 0755 /opt/agent-harness/harnessctl.py",
 		"npm install --global @openai/codex@0.144.1 pnpm@11.21.0 @playwright/test@1.62.1",

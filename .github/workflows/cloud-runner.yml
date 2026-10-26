@@ -32,6 +32,61 @@ jobs:
       - run: python -m unittest discover -s tests -v
       - run: make verify
         working-directory: cloud-runner
+      - name: Verify the pinned worker Node archive
+        working-directory: cloud-runner
+        run: |
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-x64.tar.xz \
+            --output "$RUNNER_TEMP/worker-node.tar.xz"
+          HARNESS_TEST_NODE_ARCHIVE="$RUNNER_TEMP/worker-node.tar.xz" \
+            go test ./internal/cli -run '^TestWorkerNodeInstallOfficialArchive$' -count=1
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+        working-directory: cloud-runner
+
+  container-smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the deployment image
+        run: docker build --tag agent-harness:verify --build-arg VERSION=security-check cloud-runner
+      - name: Verify runtime tools without network access
+        run: >-
+          docker run --rm --network none --entrypoint sh agent-harness:verify -ec
+          'test "$(node --version)" = v22.23.4;
+          test "$(id -u)" = 10001;
+          test "$(npm --version)" = 12.2.1;
+          agent-harness --version;
+          railway --version;
+          gh --version | grep -F "gh version 2.103.0 ";
+          codex --version;
+          chromium --version;
+          python3 --version'
+
+      - name: Scan deployment image
+        run: |
+          curl --fail --location --silent --show-error --output trivy.tar.gz \
+            https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz
+          printf '%s  trivy.tar.gz\n' 2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a | sha256sum --check
+          tar -xzf trivy.tar.gz trivy
+          ./trivy image --scanners vuln --format json --output harness-image-scan.json agent-harness:verify
+          python3 - <<'PYSCAN'
+          import json
+          data = json.load(open("harness-image-scan.json"))
+          failures = [v for r in data.get("Results", []) for v in r.get("Vulnerabilities", [])
+                      if v.get("Severity") in ("HIGH", "CRITICAL") and v.get("FixedVersion")]
+          for v in failures:
+              print(v["VulnerabilityID"], v["PkgName"], v["InstalledVersion"], "->", v["FixedVersion"])
+          raise SystemExit(bool(failures))
+          PYSCAN
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: harness-image-scan
+          path: harness-image-scan.json
+          if-no-files-found: ignore
 
   container:
     if: github.event_name == 'push'
